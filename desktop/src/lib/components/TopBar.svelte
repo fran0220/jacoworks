@@ -15,7 +15,7 @@
 	</div>
 	<div class="right">
 		{#if user}
-			<span class="username">{user.username}</span>
+			<span class="username">{user.name || user.email}</span>
 		{/if}
 		<button class="btn-logout" onclick={logout}>退出</button>
 	</div>
@@ -23,11 +23,11 @@
 
 <style>
 	.topbar {
-		height: var(--topbar-height);
+		height: var(--titlebar-height);
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0 24px;
+		padding: 0 var(--space-10);
 		border-bottom: 1px solid var(--border);
 		background: var(--bg-primary);
 		flex-shrink: 0;
@@ -36,13 +36,13 @@
 	.left {
 		display: flex;
 		align-items: center;
-		gap: 10px;
+		gap: var(--space-5);
 		min-width: 0;
 	}
 
 	.title {
-		font-size: 15px;
-		font-weight: 600;
+		font-size: var(--text-md);
+		font-weight: var(--font-semibold);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -50,32 +50,32 @@
 
 	.model-badge {
 		flex-shrink: 0;
-		padding: 2px 8px;
-		font-size: 11px;
+		padding: var(--space-1) var(--space-4);
+		font-size: var(--text-2xs);
 		color: var(--accent);
-		background: rgba(108, 108, 240, 0.12);
-		border-radius: 10px;
+		background: var(--bg-badge);
+		border-radius: var(--radius-md);
 		white-space: nowrap;
 	}
 
 	.right {
 		display: flex;
 		align-items: center;
-		gap: 12px;
+		gap: var(--space-6);
 	}
 
 	.username {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--text-secondary);
 	}
 
 	.btn-logout {
-		padding: 6px 14px;
-		font-size: 13px;
+		padding: var(--space-3) var(--space-7);
+		font-size: var(--text-sm);
 		color: var(--text-secondary);
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
-		transition: all 0.2s;
+		transition: all var(--duration-slow);
 	}
 
 	.btn-logout:hover {

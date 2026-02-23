@@ -1,46 +1,126 @@
 :root {
-	--bg-primary: #1a1a2a;
-	--bg-secondary: #1e1e30;
-	--bg-tertiary: #252540;
-	--bg-input: #2a2a45;
-	--bg-user-bubble: #3a3a6a;
-	--bg-assistant-bubble: #252540;
-	--bg-hover: #2e2e4a;
-	--bg-active: #35355a;
-	--text-primary: #e8e8f0;
-	--text-secondary: #a0a0b8;
-	--text-muted: #6a6a80;
-	--accent: #6c6cf0;
-	--accent-hover: #5a5ae0;
-	--danger: #e05050;
-	--danger-hover: #c04040;
-	--border: #2e2e48;
-	--shadow: rgba(0, 0, 0, 0.3);
-	--radius: 8px;
-	--radius-lg: 12px;
-	--sidebar-width: 260px;
-	--topbar-height: 52px;
-	--font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-}
+	/* ===== Colors — 暖色奶油基调 ===== */
+	--bg-primary: #F5F0EB;
+	--bg-secondary: #FFFFFF;
+	--bg-tertiary: #EDE8E3;
+	--bg-input: #FFFFFF;
+	--bg-user-bubble: #E8E3DD;
+	--bg-assistant-bubble: #FFFFFF;
+	--bg-hover: #EDE8E3;
+	--bg-active: #E5E0DA;
+	--bg-error: rgba(224, 80, 80, 0.15);
+	--bg-badge: rgba(196, 114, 74, 0.12);
+	--bg-code: #0d1117;
 
-@media (prefers-color-scheme: light) {
-	:root {
-		--bg-primary: #f5f5fa;
-		--bg-secondary: #eeeef4;
-		--bg-tertiary: #ffffff;
-		--bg-input: #ffffff;
-		--bg-user-bubble: #6c6cf0;
-		--bg-assistant-bubble: #ffffff;
-		--bg-hover: #e8e8f0;
-		--bg-active: #dddde8;
-		--text-primary: #1a1a2a;
-		--text-secondary: #5a5a70;
-		--text-muted: #9090a0;
-		--accent: #5a5ae0;
-		--accent-hover: #4a4ad0;
-		--border: #d8d8e8;
-		--shadow: rgba(0, 0, 0, 0.08);
-	}
+	/* 文字 */
+	--text-primary: #1A1A1A;
+	--text-secondary: #5A5248;
+	--text-muted: #8B7E74;
+	--text-on-accent: #FFFFFF;
+
+	/* 强调色 - 暖色珊瑚/陶土色 */
+	--accent: #C4724A;
+	--accent-hover: #B06540;
+	--accent-light: rgba(196, 114, 74, 0.1);
+
+	--danger: #D94040;
+	--danger-hover: #C03030;
+
+	/* 边框 */
+	--border: #E0D8D0;
+	--border-light: rgba(0, 0, 0, 0.06);
+
+	/* 滚动条 */
+	--scrollbar-thumb: #C8C0B8;
+	--scrollbar-thumb-hover: #B0A89F;
+
+	/* 阴影 */
+	--shadow-color: rgba(0, 0, 0, 0.04);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+	--shadow-md: 0 2px 12px rgba(0, 0, 0, 0.06);
+
+	/* ===== Spacing Scale (2px increments, dense desktop UI) ===== */
+	--space-1: 2px;
+	--space-2: 4px;
+	--space-3: 6px;
+	--space-4: 8px;
+	--space-5: 10px;
+	--space-6: 12px;
+	--space-7: 14px;
+	--space-8: 16px;
+	--space-9: 20px;
+	--space-10: 24px;
+	--space-11: 32px;
+	--space-12: 40px;
+	--space-13: 48px;
+	--space-14: 60px;
+	--space-15: 80px;
+
+	/* ===== Typography Scale ===== */
+	--text-2xs: 11px;
+	--text-xs: 12px;
+	--text-sm: 13px;
+	--text-base: 14px;
+	--text-md: 15px;
+	--text-lg: 16px;
+	--text-xl: 20px;
+	--text-2xl: 24px;
+	--text-3xl: 28px;
+	--text-4xl: 36px;
+
+	--font-normal: 400;
+	--font-medium: 500;
+	--font-semibold: 600;
+	--font-bold: 700;
+
+	--leading-none: 1;
+	--leading-normal: 1.5;
+	--leading-relaxed: 1.6;
+	--leading-loose: 1.7;
+
+	--font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+	--font-serif: Georgia, 'Noto Serif SC', serif;
+
+	/* ===== Border Radius ===== */
+	--radius-xs: 6px;
+	--radius-sm: 4px;
+	--radius: 8px;
+	--radius-md: 10px;
+	--radius-lg: 12px;
+	--radius-xl: 16px;
+	--radius-2xl: 20px;
+	--radius-full: 9999px;
+
+	/* ===== Component Sizes ===== */
+	--size-icon-sm: 16px;
+	--size-icon: 18px;
+	--size-icon-lg: 24px;
+	--size-btn-sm: 28px;
+	--size-btn: 32px;
+	--size-btn-lg: 38px;
+	--size-avatar-sm: 24px;
+	--size-avatar: 28px;
+	--size-spinner-sm: 10px;
+	--size-spinner: 14px;
+	--size-delete-btn: 18px;
+
+	/* ===== Layout ===== */
+	--sidebar-width: 280px;
+	--titlebar-height: 44px;
+	--content-width: 680px;
+	--login-width: 380px;
+
+	/* ===== Z-Index ===== */
+	--z-backdrop: 40;
+	--z-drawer: 50;
+	--z-titlebar: 100;
+	--z-overlay: 150;
+	--z-dropdown: 200;
+
+	/* ===== Transitions ===== */
+	--duration-fast: 0.12s;
+	--duration-normal: 0.15s;
+	--duration-slow: 0.2s;
 }
 
 * {
@@ -56,8 +136,8 @@ body {
 	font-family:
 		-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
 		'Microsoft YaHei', sans-serif;
-	font-size: 14px;
-	line-height: 1.6;
+	font-size: var(--text-base);
+	line-height: var(--leading-relaxed);
 	color: var(--text-primary);
 	background-color: var(--bg-primary);
 	-webkit-font-smoothing: antialiased;
@@ -65,7 +145,7 @@ body {
 }
 
 ::-webkit-scrollbar {
-	width: 6px;
+	width: var(--space-3);
 }
 
 ::-webkit-scrollbar-track {
@@ -73,12 +153,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-	background: var(--text-muted);
+	background: var(--scrollbar-thumb);
 	border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-	background: var(--text-secondary);
+	background: var(--scrollbar-thumb-hover);
 }
 
 button {

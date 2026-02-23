@@ -168,7 +168,7 @@
 	.input-bar {
 		display: flex;
 		flex-direction: column;
-		padding: 12px 24px 16px;
+		padding: var(--space-6) var(--space-10) var(--space-8);
 		border-top: 1px solid var(--border);
 		background: var(--bg-primary);
 	}
@@ -176,7 +176,7 @@
 	.input-row {
 		display: flex;
 		align-items: flex-end;
-		gap: 8px;
+		gap: var(--space-4);
 	}
 
 	.file-input-hidden {
@@ -186,19 +186,19 @@
 	.attachments-preview {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 6px;
-		margin-bottom: 8px;
+		gap: var(--space-3);
+		margin-bottom: var(--space-4);
 	}
 
 	.attachment-chip {
 		display: flex;
 		align-items: center;
-		gap: 4px;
-		padding: 4px 8px;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-4);
 		background: var(--bg-tertiary);
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
-		font-size: 12px;
+		font-size: var(--text-xs);
 		color: var(--text-secondary);
 		max-width: 200px;
 	}
@@ -216,20 +216,20 @@
 	.attachment-size {
 		flex-shrink: 0;
 		color: var(--text-muted);
-		font-size: 11px;
+		font-size: var(--text-2xs);
 	}
 
 	.attachment-remove {
 		flex-shrink: 0;
-		width: 16px;
-		height: 16px;
+		width: var(--size-icon-sm);
+		height: var(--size-icon-sm);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border-radius: 50%;
-		font-size: 14px;
+		border-radius: var(--radius-full);
+		font-size: var(--text-base);
 		color: var(--text-muted);
-		transition: color 0.2s;
+		transition: color var(--duration-slow);
 	}
 
 	.attachment-remove:hover {
@@ -237,14 +237,14 @@
 	}
 
 	.btn-attach {
-		width: 38px;
-		height: 38px;
+		width: var(--size-btn-lg);
+		height: var(--size-btn-lg);
 		border-radius: var(--radius);
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		color: var(--text-secondary);
-		transition: color 0.2s, background 0.2s;
+		transition: color var(--duration-slow), background var(--duration-slow);
 	}
 
 	.btn-attach:hover:not(:disabled) {
@@ -260,14 +260,14 @@
 	textarea {
 		flex: 1;
 		resize: none;
-		padding: 10px 14px;
+		padding: var(--space-5) var(--space-7);
 		background: var(--bg-input);
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		color: var(--text-primary);
-		line-height: 1.5;
+		line-height: var(--leading-normal);
 		max-height: 200px;
-		transition: border-color 0.2s;
+		transition: border-color var(--duration-slow);
 	}
 
 	textarea:focus {
@@ -284,24 +284,24 @@
 
 	.actions {
 		display: flex;
-		gap: 4px;
-		padding-bottom: 2px;
+		gap: var(--space-2);
+		padding-bottom: var(--space-1);
 	}
 
 	.btn-send,
 	.btn-stop {
-		width: 38px;
-		height: 38px;
+		width: var(--size-btn-lg);
+		height: var(--size-btn-lg);
 		border-radius: var(--radius);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: background 0.2s;
+		transition: background var(--duration-slow);
 	}
 
 	.btn-send {
 		background: var(--accent);
-		color: #fff;
+		color: var(--text-on-accent);
 	}
 
 	.btn-send:hover:not(:disabled) {
@@ -315,7 +315,7 @@
 
 	.btn-stop {
 		background: var(--danger);
-		color: #fff;
+		color: var(--text-on-accent);
 	}
 
 	.btn-stop:hover {

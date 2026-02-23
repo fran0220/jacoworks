@@ -29,19 +29,19 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 8px;
-		padding: 6px 16px;
-		margin: 4px 24px;
+		gap: var(--space-4);
+		padding: var(--space-3) var(--space-8);
+		margin: var(--space-2) var(--space-10);
 		background: var(--bg-tertiary);
 		opacity: 0.85;
 		border-radius: var(--radius);
-		font-size: 12px;
+		font-size: var(--text-xs);
 		color: var(--text-secondary);
 	}
 
 	.spinner {
-		width: 14px;
-		height: 14px;
+		width: var(--size-spinner);
+		height: var(--size-spinner);
 		border: 2px solid var(--border);
 		border-top-color: var(--accent);
 		border-radius: 50%;

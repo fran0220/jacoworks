@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -17,7 +16,7 @@ import (
 
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
 	"github.com/fran0220/jacoworks/gateway/internal/lxd"
-	"github.com/fran0220/jacoworks/gateway/internal/user"
+	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
 const (
@@ -27,20 +26,18 @@ const (
 )
 
 type Handler struct {
-	store     *user.Store
+	store     *store.Store
 	lxdClient *lxd.SSHClient
 }
 
-func NewHandler(store *user.Store, lxdClient *lxd.SSHClient) *Handler {
-	return &Handler{store: store, lxdClient: lxdClient}
+func NewHandler(s *store.Store, lxdClient *lxd.SSHClient) *Handler {
+	return &Handler{store: s, lxdClient: lxdClient}
 }
 
-// hostPath returns /data/cowork/{user_id}/{session_id}
-func hostPath(userID int64, sessionID string) string {
-	return filepath.Join(CoworkBaseDir, fmt.Sprintf("%d", userID), sessionID)
+func hostPath(userID string, sessionID string) string {
+	return filepath.Join(CoworkBaseDir, userID, sessionID)
 }
 
-// deviceName returns a short LXD device name for the session.
 func deviceName(sessionID string) string {
 	if len(sessionID) > 12 {
 		return "cw-" + sessionID[:12]
@@ -48,18 +45,16 @@ func deviceName(sessionID string) string {
 	return "cw-" + sessionID
 }
 
-// Upload handles POST /api/cowork/{sid}/upload
-// Accepts multipart/form-data with a "file" field containing tar.gz.
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
-	claims := auth.GetUser(r.Context())
-	if claims == nil {
+	user := auth.GetUser(r.Context())
+	if user == nil {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
 
 	sid := r.PathValue("sid")
 
-	sess, err := h.store.GetSession(claims.UserID, sid)
+	sess, err := h.store.GetSession(r.Context(), user.ID, sid)
 	if err != nil || sess.Type != "cowork" {
 		http.Error(w, `{"error":"session not found or not cowork"}`, http.StatusNotFound)
 		return
@@ -79,7 +74,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	dir := hostPath(claims.UserID, sid)
+	dir := hostPath(user.ID, sid)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Error().Err(err).Msg("create cowork dir")
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -93,8 +88,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mount into container (ignore error if already mounted)
-	info, err := h.store.GetContainerInfo(claims.UserID)
+	info, err := h.store.GetContainerInfo(r.Context(), user.ID)
 	if err == nil && info.ContainerName != "" {
 		device := deviceName(sid)
 		_ = h.lxdClient.MountDisk(info.ContainerName, device, dir, ContainerMountPath)
@@ -110,17 +104,15 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Changes handles GET /api/cowork/{sid}/changes
-// Returns files that changed since last manifest snapshot.
 func (h *Handler) Changes(w http.ResponseWriter, r *http.Request) {
-	claims := auth.GetUser(r.Context())
-	if claims == nil {
+	user := auth.GetUser(r.Context())
+	if user == nil {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
 
 	sid := r.PathValue("sid")
-	dir := hostPath(claims.UserID, sid)
+	dir := hostPath(user.ID, sid)
 
 	changes, err := detectChanges(dir)
 	if err != nil {
@@ -131,17 +123,15 @@ func (h *Handler) Changes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"files": changes})
 }
 
-// Download handles GET /api/cowork/{sid}/download
-// Returns tar.gz of changed files only, then updates manifest.
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
-	claims := auth.GetUser(r.Context())
-	if claims == nil {
+	user := auth.GetUser(r.Context())
+	if user == nil {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
 
 	sid := r.PathValue("sid")
-	dir := hostPath(claims.UserID, sid)
+	dir := hostPath(user.ID, sid)
 
 	changes, err := detectChanges(dir)
 	if err != nil {
@@ -191,7 +181,7 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 
 type FileChange struct {
 	Path   string `json:"path"`
-	Action string `json:"action"` // "created", "modified", "deleted"
+	Action string `json:"action"`
 	Size   int64  `json:"size"`
 }
 
@@ -213,7 +203,6 @@ func extractTarGz(r io.Reader, destDir string) (count int, totalSize int64, err 
 		}
 
 		target := filepath.Join(destDir, header.Name)
-		// Security: prevent path traversal
 		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)) {
 			continue
 		}
@@ -237,7 +226,7 @@ func extractTarGz(r io.Reader, destDir string) (count int, totalSize int64, err 
 }
 
 func saveManifest(dir string) error {
-	manifest := make(map[string]string) // path → sha256
+	manifest := make(map[string]string)
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || info.Name() == ".manifest.json" {
 			return nil

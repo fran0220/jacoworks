@@ -6,29 +6,30 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/zerolog/log"
+
+	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
 type contextKey string
 
 const UserContextKey contextKey = "user"
 
-type UserClaims struct {
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	jwt.RegisteredClaims
+type UserInfo struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
 }
 
 type Middleware struct {
-	jwtSecret  []byte
+	store      *store.Store
 	adminToken string
 }
 
-func NewMiddleware(jwtSecret, adminToken string) *Middleware {
+func NewMiddleware(s *store.Store, adminToken string) *Middleware {
 	return &Middleware{
-		jwtSecret:  []byte(jwtSecret),
+		store:      s,
 		adminToken: adminToken,
 	}
 }
@@ -37,51 +38,51 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := extractBearerToken(r)
 		if token == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization token"})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing auth"})
 			return
 		}
 
 		// Admin token passthrough
-		if token == m.adminToken {
-			claims := &UserClaims{
-				UserID:   0,
-				Username: "admin",
-				Role:     "admin",
-			}
-			ctx := context.WithValue(r.Context(), UserContextKey, claims)
+		if m.adminToken != "" && token == m.adminToken {
+			ctx := context.WithValue(r.Context(), UserContextKey, &UserInfo{
+				ID: "admin", Name: "admin", Email: "admin@jacoworks.local", Role: "admin",
+			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
-		claims := &UserClaims{}
-		parsed, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {
-			return m.jwtSecret, nil
-		})
-		if err != nil || !parsed.Valid {
-			log.Warn().Err(err).Str("remote", r.RemoteAddr).Msg("invalid JWT")
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		// Validate session token via store
+		user, err := m.store.ValidateAuthSession(r.Context(), token)
+		if err != nil {
+			log.Debug().Err(err).Msg("session validation failed")
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), UserContextKey, claims)
+		ctx := context.WithValue(r.Context(), UserContextKey, &UserInfo{
+			ID:    user.ID,
+			Name:  user.Name,
+			Email: user.Email,
+			Role:  user.Role,
+		})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := GetUser(r.Context())
-		if claims == nil || claims.Role != "admin" {
+		user := GetUser(r.Context())
+		if user == nil || user.Role != "admin" {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin access required"})
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(r.Context()))
+		next.ServeHTTP(w, r)
 	})
 }
 
-func GetUser(ctx context.Context) *UserClaims {
-	claims, _ := ctx.Value(UserContextKey).(*UserClaims)
-	return claims
+func GetUser(ctx context.Context) *UserInfo {
+	info, _ := ctx.Value(UserContextKey).(*UserInfo)
+	return info
 }
 
 func extractBearerToken(r *http.Request) string {

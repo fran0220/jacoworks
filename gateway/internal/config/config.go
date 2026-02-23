@@ -9,11 +9,17 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Auth     AuthConfig     `yaml:"auth"`
-	LXD      LXDConfig      `yaml:"lxd"`
-	LLM      LLMConfig      `yaml:"llm"`
-	Database DatabaseConfig `yaml:"database"`
+	Server    ServerConfig    `yaml:"server"`
+	Auth      AuthConfig      `yaml:"auth"`
+	LXD       LXDConfig       `yaml:"lxd"`
+	LLM       LLMConfig       `yaml:"llm"`
+	Database  DatabaseConfig  `yaml:"database"`
+	ChatAgent ChatAgentConfig `yaml:"chat_agent"`
+}
+
+type ChatAgentConfig struct {
+	URL   string `yaml:"url"`
+	Token string `yaml:"token"`
 }
 
 type LLMConfig struct {
@@ -22,13 +28,16 @@ type LLMConfig struct {
 }
 
 type ServerConfig struct {
-	Port int    `yaml:"port"`
-	Host string `yaml:"host"`
+	Port      int    `yaml:"port"`
+	Host      string `yaml:"host"`
+	PublicURL string `yaml:"public_url"`
 }
 
 type AuthConfig struct {
-	JWTSecret  string `yaml:"jwt_secret"`
-	AdminToken string `yaml:"admin_token"`
+	AdminToken         string `yaml:"admin_token"`
+	FeishuClientID     string `yaml:"feishu_client_id"`
+	FeishuClientSecret string `yaml:"feishu_client_secret"`
+	SessionTTLHours    int    `yaml:"session_ttl_hours"`
 }
 
 type LXDConfig struct {
@@ -40,7 +49,7 @@ type LXDConfig struct {
 }
 
 type DatabaseConfig struct {
-	Path string `yaml:"path"`
+	URL string `yaml:"url"`
 }
 
 func Load(path string) (*Config, error) {
@@ -68,11 +77,22 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("GATEWAY_SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
 	}
-	if v := os.Getenv("GATEWAY_AUTH_JWT_SECRET"); v != "" {
-		cfg.Auth.JWTSecret = v
+	if v := os.Getenv("GATEWAY_SERVER_PUBLIC_URL"); v != "" {
+		cfg.Server.PublicURL = v
 	}
 	if v := os.Getenv("GATEWAY_AUTH_ADMIN_TOKEN"); v != "" {
 		cfg.Auth.AdminToken = v
+	}
+	if v := os.Getenv("GATEWAY_AUTH_FEISHU_CLIENT_ID"); v != "" {
+		cfg.Auth.FeishuClientID = v
+	}
+	if v := os.Getenv("GATEWAY_AUTH_FEISHU_CLIENT_SECRET"); v != "" {
+		cfg.Auth.FeishuClientSecret = v
+	}
+	if v := os.Getenv("GATEWAY_AUTH_SESSION_TTL_HOURS"); v != "" {
+		if ttl, err := strconv.Atoi(v); err == nil {
+			cfg.Auth.SessionTTLHours = ttl
+		}
 	}
 	if v := os.Getenv("GATEWAY_LXD_SSH_TARGET"); v != "" {
 		cfg.LXD.SSHTarget = v
@@ -88,14 +108,20 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.LXD.OpenClawPort = port
 		}
 	}
-	if v := os.Getenv("GATEWAY_DATABASE_PATH"); v != "" {
-		cfg.Database.Path = v
+	if v := os.Getenv("GATEWAY_DATABASE_URL"); v != "" {
+		cfg.Database.URL = v
 	}
 	if v := os.Getenv("GATEWAY_LLM_PROXY_URL"); v != "" {
 		cfg.LLM.ProxyURL = v
 	}
 	if v := os.Getenv("GATEWAY_LLM_PROXY_KEY"); v != "" {
 		cfg.LLM.ProxyKey = v
+	}
+	if v := os.Getenv("GATEWAY_CHAT_AGENT_URL"); v != "" {
+		cfg.ChatAgent.URL = v
+	}
+	if v := os.Getenv("GATEWAY_CHAT_AGENT_TOKEN"); v != "" {
+		cfg.ChatAgent.Token = v
 	}
 }
 

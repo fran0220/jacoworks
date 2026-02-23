@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { isAuthenticated } from '$lib/auth.svelte';
+	import { isAuthenticated, handleOAuthCallback } from '$lib/auth.svelte';
+	import { onMount } from 'svelte';
 	import LoginPage from '$lib/components/LoginPage.svelte';
 	import SessionList from '$lib/components/SessionList.svelte';
 	import ChatView from '$lib/components/ChatView.svelte';
@@ -9,7 +10,10 @@
 		getCurrentSessionId,
 		setCurrentSessionId,
 		getSessions,
-		setSessions
+		setSessions,
+		getActiveTab,
+		setActiveTab,
+		type AppTab
 	} from '$lib/stores/app.svelte';
 	import {
 		listSessions,
@@ -22,9 +26,19 @@
 	let currentSession = $state<ChatSession | null>(null);
 	let pendingMessage = $state<string | null>(null);
 
+	// Handle OAuth callback (Feishu SSO redirect with token in URL)
+	onMount(async () => {
+		try {
+			await handleOAuthCallback();
+		} catch (err: any) {
+			console.error('OAuth callback error:', err.message);
+		}
+	});
+
 	let sessionId = $derived(getCurrentSessionId());
 	let sessions = $derived(getSessions());
-	let sessionTitle = $derived(currentSession?.title ?? '新对话');
+	let activeTab = $derived(getActiveTab());
+	let sessionTitle = $derived(currentSession?.title ?? (activeTab === 'chat' ? '新对话' : '新任务'));
 	let currentModel = $derived(currentSession?.model || DEFAULT_MODEL);
 	let currentModelLabel = $derived(MODEL_OPTIONS.find(m => m.value === currentModel)?.label ?? '');
 
@@ -65,7 +79,9 @@
 		const remaining = getSessions().filter((s) => s.id !== id);
 		setSessions(remaining);
 		if (getCurrentSessionId() === id) {
-			setCurrentSessionId(remaining.length > 0 ? remaining[0].id : null);
+			// Select next session of same type, or clear
+			const sameType = remaining.filter((s) => s.type === getActiveTab());
+			setCurrentSessionId(sameType.length > 0 ? sameType[0].id : null);
 		}
 	}
 
@@ -81,6 +97,12 @@
 		setCurrentSessionId(session.id);
 		pendingMessage = firstMessage;
 	}
+
+	function handleTabChange(tab: AppTab) {
+		setActiveTab(tab);
+		// Clear selection when switching tabs
+		setCurrentSessionId(null);
+	}
 </script>
 
 {#if !isAuthenticated()}
@@ -90,9 +112,11 @@
 		<SessionList
 			sessions={sessions}
 			currentSessionId={sessionId}
+			{activeTab}
 			onSelect={handleSelect}
 			onNew={handleNew}
 			onDelete={handleDelete}
+			onTabChange={handleTabChange}
 		/>
 		<div class="main-area">
 			<TopBar title={sessionTitle} modelLabel={currentSession ? currentModelLabel : ''} />
@@ -104,7 +128,7 @@
 					onPendingMessageSent={() => pendingMessage = null}
 				/>
 			{:else}
-				<NewSession onSessionCreated={handleSessionCreated} />
+				<NewSession mode={activeTab} onSessionCreated={handleSessionCreated} />
 			{/if}
 		</div>
 	</div>

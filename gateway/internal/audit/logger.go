@@ -1,58 +1,27 @@
 package audit
 
 import (
-	"database/sql"
-	"fmt"
-	"time"
+	"context"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
-type Entry struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"user_id"`
-	Action    string    `json:"action"`
-	Detail    string    `json:"detail"`
-	IP        string    `json:"ip"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type Logger struct {
-	db *sql.DB
+	pool *pgxpool.Pool
 }
 
-func NewLogger(db *sql.DB) (*Logger, error) {
-	l := &Logger{db: db}
-	if err := l.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate audit: %w", err)
-	}
-	return l, nil
+func NewLogger(pool *pgxpool.Pool) *Logger {
+	return &Logger{pool: pool}
 }
 
-func (l *Logger) migrate() error {
-	_, err := l.db.Exec(`
-		CREATE TABLE IF NOT EXISTS audit_logs (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id    INTEGER NOT NULL,
-			action     TEXT    NOT NULL,
-			detail     TEXT    NOT NULL DEFAULT '',
-			ip         TEXT    NOT NULL DEFAULT '',
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	return err
-}
-
-func (l *Logger) Log(userID int64, action, detail, ip string) {
-	_, err := l.db.Exec(
-		`INSERT INTO audit_logs (user_id, action, detail, ip) VALUES (?, ?, ?, ?)`,
-		userID, action, detail, ip,
+func (l *Logger) Log(userID, action, resourceType, resourceID, ip string) {
+	_, err := l.pool.Exec(context.Background(),
+		`INSERT INTO audit_logs (user_id, action, resource_type, resource_id, ip_address)
+		 VALUES ($1, $2, $3, $4, $5::inet)`,
+		userID, action, resourceType, resourceID, ip,
 	)
 	if err != nil {
-		log.Error().Err(err).Int64("user_id", userID).Str("action", action).Msg("audit log write failed")
+		log.Error().Err(err).Str("user_id", userID).Str("action", action).Msg("audit log write failed")
 	}
-}
-
-func (l *Logger) DB() *sql.DB {
-	return l.db
 }

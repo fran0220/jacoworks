@@ -48,7 +48,7 @@
 <style>
 	.bubble-row {
 		display: flex;
-		padding: 4px 24px;
+		padding: var(--space-2) var(--space-10);
 	}
 
 	.bubble-row.user {
@@ -57,18 +57,18 @@
 
 	.bubble {
 		max-width: 75%;
-		padding: 10px 16px;
+		padding: var(--space-5) var(--space-8);
 		border-radius: var(--radius-lg);
 	}
 
 	.user-bubble {
 		background: var(--bg-user-bubble);
-		border-bottom-right-radius: 4px;
+		border-bottom-right-radius: var(--radius-sm);
 	}
 
 	.assistant-bubble {
 		background: var(--bg-assistant-bubble);
-		border-bottom-left-radius: 4px;
+		border-bottom-left-radius: var(--radius-sm);
 	}
 
 	.user-text {
@@ -79,8 +79,8 @@
 	.attached-images {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 6px;
-		margin-bottom: 8px;
+		gap: var(--space-3);
+		margin-bottom: var(--space-4);
 	}
 
 	.attached-img {

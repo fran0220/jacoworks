@@ -34,21 +34,22 @@ interface SessionSummary {
 	id: string;
 	title: string;
 	message_count: number;
-	created_at: number;
-	updated_at: number;
+	created_at: string | number;
+	updated_at: string | number;
 	type?: string;
 	workspace_path?: string;
 }
 
 interface ServerSession {
 	id: string;
-	user_id: number;
+	user_id: string;
 	title: string;
-	messages: string; // JSON string
-	created_at: number;
-	updated_at: number;
+	messages: string | any[];
+	created_at: string | number;
+	updated_at: string | number;
 	type?: string;
 	workspace_path?: string;
+	model?: string;
 }
 
 function isTauri(): boolean {
@@ -80,20 +81,30 @@ async function apiFetch(path: string, options: { method?: string; body?: string 
 	return { status: res.status, body: await res.text() };
 }
 
+function parseTime(v: string | number | undefined): number {
+	if (typeof v === 'number') return v;
+	if (typeof v === 'string') return new Date(v).getTime();
+	return Date.now();
+}
+
 function toSession(s: ServerSession): ChatSession {
 	let messages: ChatMessage[] = [];
 	try {
-		messages = JSON.parse(s.messages);
+		if (typeof s.messages === 'string') {
+			messages = JSON.parse(s.messages);
+		} else if (Array.isArray(s.messages)) {
+			messages = s.messages;
+		}
 	} catch {}
 	return {
 		id: s.id,
 		title: s.title,
 		messages,
-		createdAt: s.created_at,
-		updatedAt: s.updated_at,
+		createdAt: parseTime(s.created_at),
+		updatedAt: parseTime(s.updated_at),
 		type: (s.type as ChatSession['type']) || 'chat',
 		workspacePath: s.workspace_path || '',
-		model: ''
+		model: s.model || ''
 	};
 }
 
@@ -138,12 +149,42 @@ export async function listSessions(): Promise<ChatSession[]> {
 		id: s.id,
 		title: s.title,
 		messages: [],
-		createdAt: s.created_at,
-		updatedAt: s.updated_at,
+		createdAt: parseTime(s.created_at),
+		updatedAt: parseTime(s.updated_at),
 		type: (s.type as ChatSession['type']) || 'chat',
 		workspacePath: s.workspace_path || '',
 		model: ''
 	}));
+}
+
+// Cowork container APIs
+
+export interface ContainerStatus {
+	provisioned: boolean;
+	container_name?: string;
+	container_ip?: string;
+}
+
+export interface ProvisionResult {
+	status: 'ready' | 'provisioning';
+	container_name: string;
+	ip?: string;
+	warning?: string;
+}
+
+export async function getContainerStatus(): Promise<ContainerStatus> {
+	const resp = await apiFetch('/api/cowork/container-status');
+	if (resp.status !== 200) return { provisioned: false };
+	return JSON.parse(resp.body);
+}
+
+export async function provisionContainer(): Promise<ProvisionResult> {
+	const resp = await apiFetch('/api/cowork/provision', { method: 'POST' });
+	if (resp.status >= 400) {
+		const data = JSON.parse(resp.body);
+		throw new Error(data.error || '容器分配失败');
+	}
+	return JSON.parse(resp.body);
 }
 
 export function generateTitle(firstAssistantMsg: string): string {

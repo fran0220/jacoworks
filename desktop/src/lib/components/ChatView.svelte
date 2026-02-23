@@ -250,17 +250,17 @@
 		flex: 1;
 		display: flex;
 		flex-direction: column;
-		height: calc(100vh - var(--topbar-height));
+		height: calc(100vh - var(--titlebar-height));
 		min-width: 0;
 	}
 
 	.messages {
 		flex: 1;
 		overflow-y: auto;
-		padding: 16px 0;
+		padding: var(--space-8) 0;
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: var(--space-4);
 	}
 
 	.empty {
@@ -270,16 +270,16 @@
 		align-items: center;
 		justify-content: center;
 		color: var(--text-muted);
-		gap: 8px;
+		gap: var(--space-4);
 	}
 
 	.empty-icon {
-		font-size: 48px;
+		font-size: var(--space-13);
 	}
 
 	.sync-status {
-		padding: 6px 16px;
-		font-size: 12px;
+		padding: var(--space-3) var(--space-8);
+		font-size: var(--text-xs);
 		color: var(--text-secondary);
 		text-align: center;
 		background: var(--bg-tertiary);
@@ -290,19 +290,19 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 6px;
-		padding: 4px 16px;
-		margin: 2px 24px;
-		font-size: 11px;
+		gap: var(--space-3);
+		padding: var(--space-2) var(--space-8);
+		margin: var(--space-1) var(--space-10);
+		font-size: var(--text-2xs);
 		color: var(--text-muted);
 	}
 
 	.spinner-sm {
-		width: 10px;
-		height: 10px;
+		width: var(--size-spinner-sm);
+		height: var(--size-spinner-sm);
 		border: 1.5px solid var(--border);
 		border-top-color: var(--accent);
-		border-radius: 50%;
+		border-radius: var(--radius-full);
 		animation: spin 0.8s linear infinite;
 	}
 

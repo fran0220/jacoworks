@@ -1,0 +1,19 @@
+[Unit]
+Description=JAcoworks Shared Chat Agent (vm-agent restricted mode)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/jacoworks/shared-agent
+ExecStart=/usr/bin/node --enable-source-maps dist/index.js
+Restart=on-failure
+RestartSec=5
+Environment=PORT=18790
+Environment=TOOL_DENY_LIST=bash,edit,write,read,grep,find,ls
+Environment=MEMORY_ENABLED=false
+Environment=HEARTBEAT_ENABLED=false
+Environment=CRON_ENABLED=false
+
+[Install]
+WantedBy=multi-user.target

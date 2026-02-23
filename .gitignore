@@ -24,16 +24,16 @@ gateway/jacoworks-gateway
 desktop/src-tauri/target/
 
 # === Node / Svelte ===
-desktop/node_modules/
+node_modules/
 desktop/.svelte-kit/
 desktop/build/
 desktop/package/
 
-# === VM Agent ===
-vm-agent/node_modules/
+# === TypeScript / Build ===
+auth-service/dist/
 vm-agent/dist/
-vm-agent/.env
 
 # === Vite ===
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+desktop/.env

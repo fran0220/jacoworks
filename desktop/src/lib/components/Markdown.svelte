@@ -58,7 +58,7 @@
 
 <style>
 	.markdown-body {
-		line-height: 1.7;
+		line-height: var(--leading-loose);
 		word-break: break-word;
 	}
 
@@ -82,7 +82,7 @@
 
 	.markdown-body :global(blockquote) {
 		border-left: 3px solid var(--accent);
-		padding-left: 12px;
+		padding-left: var(--space-6);
 		margin: 0.5em 0;
 		color: var(--text-secondary);
 	}
@@ -91,8 +91,8 @@
 		font-family: var(--font-mono);
 		font-size: 0.9em;
 		background: var(--bg-tertiary);
-		padding: 2px 6px;
-		border-radius: 4px;
+		padding: var(--space-1) var(--space-3);
+		border-radius: var(--radius-sm);
 	}
 
 	.markdown-body :global(.code-block) {
@@ -106,9 +106,9 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		padding: 6px 12px;
+		padding: var(--space-3) var(--space-6);
 		background: var(--bg-tertiary);
-		font-size: 12px;
+		font-size: var(--text-xs);
 	}
 
 	.markdown-body :global(.code-lang) {
@@ -116,14 +116,14 @@
 	}
 
 	.markdown-body :global(.copy-btn) {
-		padding: 2px 8px;
-		border-radius: 4px;
-		font-size: 12px;
+		padding: var(--space-1) var(--space-4);
+		border-radius: var(--radius-sm);
+		font-size: var(--text-xs);
 		color: var(--text-secondary);
 		cursor: pointer;
 		background: none;
 		border: none;
-		transition: color 0.2s;
+		transition: color var(--duration-slow);
 	}
 
 	.markdown-body :global(.copy-btn:hover) {
@@ -132,16 +132,16 @@
 
 	.markdown-body :global(pre) {
 		margin: 0;
-		padding: 12px 16px;
+		padding: var(--space-6) var(--space-8);
 		overflow-x: auto;
-		background: #0d1117;
+		background: var(--bg-code);
 	}
 
 	.markdown-body :global(pre code) {
 		background: none;
 		padding: 0;
-		font-size: 13px;
-		line-height: 1.5;
+		font-size: var(--text-sm);
+		line-height: var(--leading-normal);
 	}
 
 	.markdown-body :global(table) {
@@ -153,13 +153,13 @@
 	.markdown-body :global(th),
 	.markdown-body :global(td) {
 		border: 1px solid var(--border);
-		padding: 6px 12px;
+		padding: var(--space-3) var(--space-6);
 		text-align: left;
 	}
 
 	.markdown-body :global(th) {
 		background: var(--bg-tertiary);
-		font-weight: 600;
+		font-weight: var(--font-semibold);
 	}
 
 	.markdown-body :global(hr) {
@@ -181,6 +181,6 @@
 	}
 
 	.markdown-body :global(strong) {
-		font-weight: 600;
+		font-weight: var(--font-semibold);
 	}
 </style>
