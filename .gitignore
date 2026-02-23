@@ -1,0 +1,34 @@
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Secrets / Config with credentials ===
+.env
+.env.*
+!.env.template
+!.env.example
+gateway/gateway.yaml
+gateway/gateway-prod.yaml
+gateway/data/
+
+# === Go ===
+gateway/jacoworks-gateway
+
+# === Rust / Tauri ===
+desktop/src-tauri/target/
+
+# === Node / Svelte ===
+desktop/node_modules/
+desktop/.svelte-kit/
+desktop/build/
+desktop/package/
+
+# === Vite ===
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

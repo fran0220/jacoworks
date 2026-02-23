@@ -1,0 +1,20 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+auth:
+  jwt_secret: "change-me-in-production"
+  admin_token: "change-me-admin-token"
+
+lxd:
+  ssh_target: "local"
+  template: "tpl-openclaw"
+  network: "jaconet"
+  openclaw_port: 18789
+
+llm:
+  proxy_url: "http://your-llm-proxy:8317"
+  proxy_key: "your-api-key"
+
+database:
+  path: "./data/gateway.db"
