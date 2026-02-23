@@ -50,7 +50,7 @@
 				class:active={session.id === currentSessionId}
 				onclick={() => onSelect(session.id)}
 			>
-				<span class="session-title">{session.title}</span>
+				<span class="session-title">{#if session.type === 'cowork'}📂 {/if}{session.title}</span>
 				<span class="session-meta">
 					<span class="session-date">{formatDate(session.updatedAt)}</span>
 					<button

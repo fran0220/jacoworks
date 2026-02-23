@@ -51,6 +51,26 @@ func NewStore(dbPath string) (*Store, error) {
 	return s, nil
 }
 
+type Session struct {
+	ID            string `json:"id"`
+	UserID        int64  `json:"user_id"`
+	Title         string `json:"title"`
+	Messages      string `json:"messages"`
+	Type          string `json:"type"`
+	WorkspacePath string `json:"workspace_path"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
+}
+
+type SessionSummary struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Type         string `json:"type"`
+	MessageCount int    `json:"message_count"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
+}
+
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
@@ -62,9 +82,28 @@ func (s *Store) migrate() error {
 			container_token TEXT    NOT NULL DEFAULT '',
 			role            TEXT    NOT NULL DEFAULT 'user',
 			created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
+		);
+		CREATE TABLE IF NOT EXISTS sessions (
+			id             TEXT PRIMARY KEY,
+			user_id        INTEGER NOT NULL REFERENCES users(id),
+			title          TEXT NOT NULL DEFAULT '新对话',
+			messages       TEXT NOT NULL DEFAULT '[]',
+			type           TEXT NOT NULL DEFAULT 'chat',
+			workspace_path TEXT NOT NULL DEFAULT '',
+			created_at     INTEGER NOT NULL,
+			updated_at     INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migrate existing sessions table: add columns if missing
+	s.db.Exec(`ALTER TABLE sessions ADD COLUMN type TEXT NOT NULL DEFAULT 'chat'`)
+	s.db.Exec(`ALTER TABLE sessions ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''`)
+
+	return nil
 }
 
 func (s *Store) CreateUser(username, password, role string) (*User, error) {
@@ -166,6 +205,105 @@ func (s *Store) ListUsers() ([]User, error) {
 
 func (s *Store) CheckPassword(u *User, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) == nil
+}
+
+func (s *Store) ListSessions(userID int64) ([]SessionSummary, error) {
+	rows, err := s.db.Query(
+		`SELECT id, title, type, json_array_length(messages), created_at, updated_at FROM sessions WHERE user_id = ? ORDER BY updated_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []SessionSummary
+	for rows.Next() {
+		var ss SessionSummary
+		if err := rows.Scan(&ss.ID, &ss.Title, &ss.Type, &ss.MessageCount, &ss.CreatedAt, &ss.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		sessions = append(sessions, ss)
+	}
+	return sessions, nil
+}
+
+func (s *Store) GetSession(userID int64, sessionID string) (*Session, error) {
+	sess := &Session{}
+	err := s.db.QueryRow(
+		`SELECT id, user_id, title, messages, type, workspace_path, created_at, updated_at FROM sessions WHERE id = ? AND user_id = ?`,
+		sessionID, userID,
+	).Scan(&sess.ID, &sess.UserID, &sess.Title, &sess.Messages, &sess.Type, &sess.WorkspacePath, &sess.CreatedAt, &sess.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+	return sess, nil
+}
+
+func (s *Store) CreateSession(userID int64, sessionType, workspacePath string) (*Session, error) {
+	if sessionType == "" {
+		sessionType = "chat"
+	}
+
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return nil, fmt.Errorf("generate session id: %w", err)
+	}
+	id := hex.EncodeToString(b)
+	now := time.Now().UnixMilli()
+
+	_, err := s.db.Exec(
+		`INSERT INTO sessions (id, user_id, title, messages, type, workspace_path, created_at, updated_at) VALUES (?, ?, '新对话', '[]', ?, ?, ?, ?)`,
+		id, userID, sessionType, workspacePath, now, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create session: %w", err)
+	}
+	return &Session{
+		ID:            id,
+		UserID:        userID,
+		Title:         "新对话",
+		Messages:      "[]",
+		Type:          sessionType,
+		WorkspacePath: workspacePath,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}, nil
+}
+
+func (s *Store) UpdateSession(userID int64, sessionID, title, messages string) (*Session, error) {
+	now := time.Now().UnixMilli()
+
+	if title != "" && messages != "" {
+		_, err := s.db.Exec(`UPDATE sessions SET title = ?, messages = ?, updated_at = ? WHERE id = ? AND user_id = ?`, title, messages, now, sessionID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("update session: %w", err)
+		}
+	} else if title != "" {
+		_, err := s.db.Exec(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?`, title, now, sessionID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("update session: %w", err)
+		}
+	} else if messages != "" {
+		_, err := s.db.Exec(`UPDATE sessions SET messages = ?, updated_at = ? WHERE id = ? AND user_id = ?`, messages, now, sessionID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("update session: %w", err)
+		}
+	}
+
+	return s.GetSession(userID, sessionID)
+}
+
+func (s *Store) DeleteSession(userID int64, sessionID string) error {
+	result, err := s.db.Exec(`DELETE FROM sessions WHERE id = ? AND user_id = ?`, sessionID, userID)
+	if err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("session not found")
+	}
+	return nil
 }
 
 func (s *Store) Close() error {

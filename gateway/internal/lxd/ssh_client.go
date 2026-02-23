@@ -278,6 +278,19 @@ func (c *SSHClient) ProvisionContainer(name, containerToken string, envVars map[
 	return ip, nil
 }
 
+// MountDisk adds a disk device to a container.
+func (c *SSHClient) MountDisk(container, device, hostPath, containerPath string) error {
+	_, err := c.lxc("config", "device", "add", container, device, "disk",
+		"source="+hostPath, "path="+containerPath)
+	return err
+}
+
+// UnmountDisk removes a disk device from a container.
+func (c *SSHClient) UnmountDisk(container, device string) error {
+	_, err := c.lxc("config", "device", "remove", container, device)
+	return err
+}
+
 // autoApproveDevices approves all pending pairing requests in a container.
 func (c *SSHClient) autoApproveDevices(name string) {
 	// List pending requests

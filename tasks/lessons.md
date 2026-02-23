@@ -1,5 +1,43 @@
 # Lessons Learned
 
+## 2026-02-23: Pi SDK 审计 — 6 处与原生 API 不一致
+
+**触发**: 对 vm-agent 做 Pi SDK 合规审计，对照安装的 .d.ts 类型定义逐一检查。
+
+**发现与修复**:
+
+1. **StringEnum vs Type.Union([Type.Literal()])** — cron.ts 用 TypeBox 的 Union+Literal 定义 enum，Pi SDK 要求用 `StringEnum`（来自 `@mariozechner/pi-ai`），否则 Google Provider 无法正确解析工具参数。
+2. **session_before_compact 大量 unknown 强转** — Pi SDK 已导出 `SessionMessageEntry` 类型，`event.branchEntries` 是 `SessionEntry[]`，不需要 `as unknown as Record<string, unknown>` 这种绕行。
+3. **tool_call 事件不必要的 cast** — `ToolCallEvent` 联合类型每个成员都有 `toolName: string`，但代码写成 `(event as { toolName?: string }).toolName`，`toolName` 永远存在无需 optional。
+4. **SSE 桥接遗漏 4 种 AgentSessionEvent** — `auto_compaction_start/end` 和 `auto_retry_start/end` 未处理，客户端在压缩/重试期间无反馈可能超时。
+5. **静态合约文本每轮注入浪费 token** — MEMORY_CONTRACT 是固定文本，应放 `DefaultResourceLoaderOptions.appendSystemPrompt`，`context` 事件仅注入动态内容。
+6. **Config 死字段** — `compactionThresholdPercent` 和 `compactionCustomInstructions` 加载但从未使用，Pi SDK 的 `SettingsManager` 无百分比阈值概念。
+
+**教训**:
+- Pi SDK 的 .d.ts 是最终真理，不要凭记忆或文档猜测类型。`npm view` + `node_modules/.d.ts` 交叉验证。
+- `appendSystemPrompt` 适合静态指令，`context` 事件适合动态内容，混用浪费 token。
+- 工具参数定义要考虑多 Provider 兼容性，Google 对 enum 序列化有特殊要求。
+
+**规则**:
+- 写 Pi Extension 前，先读对应事件的 `interface XxxEvent` 和 `interface XxxResult` 类型定义
+- 工具参数 enum 字段统一用 `StringEnum` from `@mariozechner/pi-ai`
+- SSE 桥接必须处理 `AgentSessionEvent` 的全部事件类型（含 compaction/retry）
+
+---
+
+## 2026-02-23: 用户纠偏 — 任务目标是修 skill，不是改业务代码
+
+**触发**: 用户明确要求“加载 `pi-agent-sdk` skill，在线检索并补充修正 skill 信息”，我一开始偏向了仓库业务文档与代码改动。
+
+**教训**:
+1. 当用户目标是“完善某个 skill”时，交付对象应是 skill 目录（`SKILL.md` + references），不是项目业务仓库。
+2. 对“审查 SDK 使用”类请求，需要先确认用户要的是“项目集成审计”还是“skill 知识库升级”，不要自行假设。
+3. 这类任务应先做 gap analysis（现有 skill vs 官方文档/源码），再做在线补证和结构化修订。
+
+**规则**: 用户提到“完善/修正 skill”时，默认直接修改对应 skill 文件，并将业务仓库改动降级为可选附录。
+
+---
+
 ## 2026-02-22: Phase 2 完成 + Go 网关 MVP
 
 **完成内容**:

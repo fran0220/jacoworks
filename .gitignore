@@ -29,6 +29,11 @@ desktop/.svelte-kit/
 desktop/build/
 desktop/package/
 
+# === VM Agent ===
+vm-agent/node_modules/
+vm-agent/dist/
+vm-agent/.env
+
 # === Vite ===
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*

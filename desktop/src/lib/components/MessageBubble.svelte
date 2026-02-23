@@ -1,18 +1,43 @@
 <script lang="ts">
 	import Markdown from './Markdown.svelte';
-	import type { ChatMessage } from '$lib/sessions';
+	import type { ChatMessage, MessageContent } from '$lib/sessions';
 
 	let { message, streaming = false }: { message: ChatMessage; streaming?: boolean } = $props();
 
 	let isUser = $derived(message.role === 'user');
+	let isMultipart = $derived(Array.isArray(message.content));
+
+	let textContent = $derived(
+		typeof message.content === 'string'
+			? message.content
+			: (message.content as MessageContent[])
+					.filter((p) => p.type === 'text')
+					.map((p) => p.text)
+					.join('\n')
+	);
+
+	let imageUrls = $derived(
+		Array.isArray(message.content)
+			? (message.content as MessageContent[])
+					.filter((p) => p.type === 'image_url' && p.image_url?.url)
+					.map((p) => p.image_url!.url)
+			: []
+	);
 </script>
 
 <div class="bubble-row" class:user={isUser}>
 	<div class="bubble" class:user-bubble={isUser} class:assistant-bubble={!isUser}>
 		{#if isUser}
-			<p class="user-text">{message.content}</p>
+			{#if imageUrls.length > 0}
+				<div class="attached-images">
+					{#each imageUrls as url}
+						<img src={url} alt="附件图片" class="attached-img" loading="lazy" />
+					{/each}
+				</div>
+			{/if}
+			<p class="user-text">{textContent}</p>
 		{:else}
-			<Markdown content={message.content} />
+			<Markdown content={typeof message.content === 'string' ? message.content : textContent} />
 			{#if streaming}
 				<span class="cursor">▋</span>
 			{/if}
@@ -49,6 +74,20 @@
 	.user-text {
 		white-space: pre-wrap;
 		word-break: break-word;
+	}
+
+	.attached-images {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-bottom: 8px;
+	}
+
+	.attached-img {
+		max-width: 200px;
+		max-height: 200px;
+		border-radius: var(--radius);
+		object-fit: cover;
 	}
 
 	.cursor {

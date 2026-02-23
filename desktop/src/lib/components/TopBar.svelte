@@ -1,13 +1,18 @@
 <script lang="ts">
 	import { getUser, logout } from '$lib/auth.svelte';
 
-	let { title }: { title: string } = $props();
+	let { title, modelLabel = '' }: { title: string; modelLabel?: string } = $props();
 
 	let user = $derived(getUser());
 </script>
 
 <header class="topbar">
-	<h2 class="title">{title}</h2>
+	<div class="left">
+		<h2 class="title">{title}</h2>
+		{#if modelLabel}
+			<span class="model-badge">{modelLabel}</span>
+		{/if}
+	</div>
 	<div class="right">
 		{#if user}
 			<span class="username">{user.username}</span>
@@ -28,11 +33,28 @@
 		flex-shrink: 0;
 	}
 
+	.left {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
+	}
+
 	.title {
 		font-size: 15px;
 		font-weight: 600;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.model-badge {
+		flex-shrink: 0;
+		padding: 2px 8px;
+		font-size: 11px;
+		color: var(--accent);
+		background: rgba(108, 108, 240, 0.12);
+		border-radius: 10px;
 		white-space: nowrap;
 	}
 

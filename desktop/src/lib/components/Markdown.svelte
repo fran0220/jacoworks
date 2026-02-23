@@ -30,8 +30,8 @@
 	marked.use({ renderer });
 
 	let html = $derived(DOMPurify.sanitize(marked.parse(content) as string, {
-		ADD_TAGS: ['pre', 'code'],
-		ADD_ATTR: ['class', 'id', 'data-code-id'],
+		ADD_TAGS: ['pre', 'code', 'img'],
+		ADD_ATTR: ['class', 'id', 'data-code-id', 'src', 'alt', 'width', 'height', 'loading'],
 	}));
 
 	function handleClick(e: MouseEvent) {
@@ -166,6 +166,14 @@
 		border: none;
 		border-top: 1px solid var(--border);
 		margin: 1em 0;
+	}
+
+	.markdown-body :global(img) {
+		max-width: 100%;
+		height: auto;
+		border-radius: var(--radius);
+		margin: 0.5em 0;
+		cursor: pointer;
 	}
 
 	.markdown-body :global(a) {

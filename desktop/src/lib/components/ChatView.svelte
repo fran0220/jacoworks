@@ -1,15 +1,18 @@
 <script lang="ts">
 	import MessageBubble from './MessageBubble.svelte';
 	import InputBar from './InputBar.svelte';
+	import ToolStatus from './ToolStatus.svelte';
 	import { streamFetch, abortStream } from '$lib/api';
 	import { parseSSE } from '$lib/sse';
 	import { getToken } from '$lib/auth.svelte';
-	import { GATEWAY_URL, DEFAULT_SYSTEM_PROMPT } from '$lib/config';
+	import { GATEWAY_URL, DEFAULT_SYSTEM_PROMPT, DEFAULT_MODEL, MODEL_OPTIONS } from '$lib/config';
 	import {
 		updateSession,
 		generateTitle,
 		type ChatMessage,
-		type ChatSession
+		type ChatSession,
+		type MessageContent,
+		type AttachedFile
 	} from '$lib/sessions';
 	import {
 		getIsStreaming,
@@ -17,25 +20,45 @@
 		getAbortController,
 		setAbortController
 	} from '$lib/stores/app.svelte';
+	import { pullChanges } from '$lib/cowork';
 
 	let {
 		session,
-		onSessionUpdate
+		onSessionUpdate,
+		pendingMessage = null,
+		onPendingMessageSent = () => {}
 	}: {
 		session: ChatSession | null;
 		onSessionUpdate: () => void;
+		pendingMessage?: string | null;
+		onPendingMessageSent?: () => void;
 	} = $props();
 
 	let messagesEl: HTMLDivElement | undefined = $state();
 	let streamingContent = $state('');
+	let currentTool = $state<string | null>(null);
+	let statusMessage = $state<string | null>(null);
+	let syncStatus = $state<string | null>(null);
 
 	let streaming = $derived(getIsStreaming());
 	let messages = $derived(session?.messages.filter((m) => m.role !== 'system') ?? []);
+	let activeModel = $derived(session?.model || DEFAULT_MODEL);
+	let activeModelLabel = $derived(MODEL_OPTIONS.find(m => m.value === activeModel)?.label ?? activeModel);
 
 	$effect(() => {
 		messages;
 		streamingContent;
+		currentTool;
+		statusMessage;
 		scrollToBottom();
+	});
+
+	$effect(() => {
+		if (pendingMessage && session && !getIsStreaming()) {
+			const msg = pendingMessage;
+			onPendingMessageSent();
+			requestAnimationFrame(() => sendMessage(msg));
+		}
 	});
 
 	function scrollToBottom() {
@@ -46,10 +69,25 @@
 		});
 	}
 
-	async function sendMessage(text: string) {
+	async function sendMessage(text: string, attachments?: AttachedFile[]) {
 		if (!session || getIsStreaming()) return;
 
-		const userMsg: ChatMessage = { role: 'user', content: text };
+		let userMsg: ChatMessage;
+
+		if (attachments?.length) {
+			const parts: MessageContent[] = [];
+			for (const file of attachments) {
+				if (file.type === 'image') {
+					parts.push({ type: 'image_url', image_url: { url: file.data } });
+				} else {
+					parts.push({ type: 'text', text: `[文件: ${file.name}]\n${file.data}` });
+				}
+			}
+			parts.push({ type: 'text', text });
+			userMsg = { role: 'user', content: parts };
+		} else {
+			userMsg = { role: 'user', content: text };
+		}
 
 		const allMessages: ChatMessage[] = [
 			{ role: 'system', content: DEFAULT_SYSTEM_PROMPT },
@@ -63,20 +101,27 @@
 
 		setIsStreaming(true);
 		streamingContent = '';
+		currentTool = null;
 		let aborted = false;
 
 		try {
 			const token = getToken();
+			const extraHeaders: Record<string, string> = {};
+			if (session?.type === 'cowork') {
+				extraHeaders['X-Cowork-Session'] = session.id;
+			}
 			const response = await streamFetch(`${GATEWAY_URL}/v1/chat/completions`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${token}`
+					Authorization: `Bearer ${token}`,
+					...extraHeaders
 				},
 				body: JSON.stringify({
-					model: 'proxy-claude/claude-sonnet-4-6',
+					model: activeModel,
 					messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
-					stream: true
+					stream: true,
+					session_id: session.id
 				})
 			});
 
@@ -91,11 +136,20 @@
 
 			let fullContent = '';
 
-			for await (const chunk of parseSSE(response.body)) {
+			for await (const event of parseSSE(response.body)) {
 				if (aborted) break;
-				if (chunk.done) break;
-				fullContent += chunk.content;
-				streamingContent = fullContent;
+				if (event.type === 'done') break;
+				if (event.type === 'tool_start') {
+					currentTool = event.toolName ?? null;
+					statusMessage = null;
+				} else if (event.type === 'status') {
+					statusMessage = event.statusMessage ?? null;
+				} else if (event.type === 'content') {
+					currentTool = null;
+					statusMessage = null;
+					fullContent += event.content;
+					streamingContent = fullContent;
+				}
 			}
 
 			const assistantMsg: ChatMessage = { role: 'assistant', content: fullContent };
@@ -125,7 +179,25 @@
 		} finally {
 			setIsStreaming(false);
 			streamingContent = '';
+			currentTool = null;
+			statusMessage = null;
 			setAbortController(null);
+
+			if (session?.type === 'cowork' && session.workspacePath && !aborted) {
+				syncStatus = '正在同步文件...';
+				try {
+					const count = await pullChanges(session.id, session.workspacePath);
+					if (count > 0) {
+						syncStatus = `✅ 已同步 ${count} 个文件`;
+						setTimeout(() => syncStatus = null, 3000);
+					} else {
+						syncStatus = null;
+					}
+				} catch {
+					syncStatus = '⚠️ 文件同步失败';
+					setTimeout(() => syncStatus = null, 5000);
+				}
+			}
 		}
 	}
 
@@ -154,8 +226,22 @@
 				streaming={true}
 			/>
 		{/if}
+
+		{#if streaming && currentTool}
+			<ToolStatus toolName={currentTool} />
+		{/if}
+
+		{#if streaming && statusMessage}
+			<div class="status-hint">
+				<span class="spinner-sm"></span>
+				{statusMessage}
+			</div>
+		{/if}
 	</div>
 
+	{#if syncStatus}
+		<div class="sync-status">{syncStatus}</div>
+	{/if}
 	<InputBar onSend={sendMessage} onStop={handleStop} isStreaming={streaming} />
 </div>
 
@@ -189,5 +275,38 @@
 
 	.empty-icon {
 		font-size: 48px;
+	}
+
+	.sync-status {
+		padding: 6px 16px;
+		font-size: 12px;
+		color: var(--text-secondary);
+		text-align: center;
+		background: var(--bg-tertiary);
+		border-top: 1px solid var(--border);
+	}
+
+	.status-hint {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		padding: 4px 16px;
+		margin: 2px 24px;
+		font-size: 11px;
+		color: var(--text-muted);
+	}
+
+	.spinner-sm {
+		width: 10px;
+		height: 10px;
+		border: 1.5px solid var(--border);
+		border-top-color: var(--accent);
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+
+	@keyframes spin {
+		to { transform: rotate(360deg); }
 	}
 </style>

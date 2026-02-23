@@ -1,7 +1,10 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -13,6 +16,8 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/lxd"
 	"github.com/fran0220/jacoworks/gateway/internal/user"
 )
+
+const ContainerMountPath = "/home/agent/cowork"
 
 type Handler struct {
 	store        *user.Store
@@ -56,6 +61,14 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Inject cowork context if applicable
+	if sid := r.Header.Get("X-Cowork-Session"); sid != "" {
+		sess, err := h.store.GetSession(claims.UserID, sid)
+		if err == nil && sess.Type == "cowork" {
+			injectCoworkContext(r, ContainerMountPath)
+		}
+	}
+
 	target := &url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("%s:%d", info.ContainerIP, h.openclawPort),
@@ -85,6 +98,44 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Msg("proxying chat request")
 
 	proxy.ServeHTTP(w, r)
+}
+
+// injectCoworkContext prepends a cowork prompt to the first system message.
+func injectCoworkContext(r *http.Request, workspacePath string) {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		return
+	}
+	r.Body.Close()
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		return
+	}
+
+	messages, ok := body["messages"].([]interface{})
+	if !ok || len(messages) == 0 {
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		return
+	}
+
+	coworkPrompt := fmt.Sprintf(
+		"\n\n[Cowork 模式] 用户的文件已挂载到 %s 目录。请在此目录下操作文件。完成后告诉用户你修改了哪些文件。",
+		workspacePath,
+	)
+
+	if first, ok := messages[0].(map[string]interface{}); ok {
+		if role, _ := first["role"].(string); role == "system" {
+			if content, ok := first["content"].(string); ok {
+				first["content"] = content + coworkPrompt
+			}
+		}
+	}
+
+	newBody, _ := json.Marshal(body)
+	r.Body = io.NopCloser(bytes.NewReader(newBody))
+	r.ContentLength = int64(len(newBody))
 }
 
 // ensureRunning checks container status and wakes it if frozen/stopped.

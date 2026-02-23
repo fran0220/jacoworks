@@ -3,27 +3,30 @@
 	import LoginPage from '$lib/components/LoginPage.svelte';
 	import SessionList from '$lib/components/SessionList.svelte';
 	import ChatView from '$lib/components/ChatView.svelte';
+	import NewSession from '$lib/components/NewSession.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import {
 		getCurrentSessionId,
 		setCurrentSessionId,
 		getSessions,
-		setSessions,
-		getIsStreaming
+		setSessions
 	} from '$lib/stores/app.svelte';
 	import {
-		createSession,
 		listSessions,
 		deleteSession,
 		getSession,
 		type ChatSession
 	} from '$lib/sessions';
+	import { MODEL_OPTIONS, DEFAULT_MODEL } from '$lib/config';
 
 	let currentSession = $state<ChatSession | null>(null);
+	let pendingMessage = $state<string | null>(null);
 
 	let sessionId = $derived(getCurrentSessionId());
 	let sessions = $derived(getSessions());
 	let sessionTitle = $derived(currentSession?.title ?? '新对话');
+	let currentModel = $derived(currentSession?.model || DEFAULT_MODEL);
+	let currentModelLabel = $derived(MODEL_OPTIONS.find(m => m.value === currentModel)?.label ?? '');
 
 	$effect(() => {
 		if (isAuthenticated()) {
@@ -49,10 +52,8 @@
 		if (s) currentSession = s;
 	}
 
-	async function handleNew() {
-		const s = await createSession();
-		setSessions([s, ...getSessions()]);
-		setCurrentSessionId(s.id);
+	function handleNew() {
+		setCurrentSessionId(null);
 	}
 
 	async function handleSelect(id: string) {
@@ -73,6 +74,13 @@
 		const id = getCurrentSessionId();
 		if (id) await loadCurrentSession(id);
 	}
+
+	function handleSessionCreated(session: ChatSession, firstMessage: string, selectedModel: string) {
+		session.model = selectedModel;
+		setSessions([session, ...getSessions()]);
+		setCurrentSessionId(session.id);
+		pendingMessage = firstMessage;
+	}
 </script>
 
 {#if !isAuthenticated()}
@@ -87,8 +95,17 @@
 			onDelete={handleDelete}
 		/>
 		<div class="main-area">
-			<TopBar title={sessionTitle} />
-			<ChatView session={currentSession} onSessionUpdate={handleSessionUpdate} />
+			<TopBar title={sessionTitle} modelLabel={currentSession ? currentModelLabel : ''} />
+			{#if currentSession}
+				<ChatView
+					session={currentSession}
+					onSessionUpdate={handleSessionUpdate}
+					{pendingMessage}
+					onPendingMessageSent={() => pendingMessage = null}
+				/>
+			{:else}
+				<NewSession onSessionCreated={handleSessionCreated} />
+			{/if}
 		</div>
 	</div>
 {/if}

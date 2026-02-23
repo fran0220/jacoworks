@@ -1,6 +1,52 @@
+export interface SSEEvent {
+	type: 'content' | 'tool_start' | 'status' | 'done';
+	content?: string;
+	toolName?: string;
+	statusMessage?: string;
+}
+
+function parseComment(text: string): SSEEvent | null {
+	const t = text.trim();
+	const toolMatch = t.match(/^tool\s+(\S+)\s+started$/);
+	if (toolMatch) return { type: 'tool_start', toolName: toolMatch[1] };
+	if (t.startsWith('compaction ') || t.startsWith('retry ')) {
+		return { type: 'status', statusMessage: t };
+	}
+	return null;
+}
+
+function* parseLines(lines: string[]): Generator<SSEEvent> {
+	for (const line of lines) {
+		// SSE comment: vm-agent sends tool/compaction/retry status as comments
+		if (line.startsWith(': ')) {
+			const evt = parseComment(line.slice(2));
+			if (evt) yield evt;
+			continue;
+		}
+
+		if (!line.startsWith('data:')) continue;
+		const data = line.slice(5).trimStart();
+
+		if (data === '[DONE]') {
+			yield { type: 'done' };
+			return;
+		}
+
+		try {
+			const json = JSON.parse(data);
+			const delta = json.choices?.[0]?.delta;
+			if (delta?.content) {
+				yield { type: 'content', content: delta.content };
+			}
+		} catch {
+			// skip malformed JSON
+		}
+	}
+}
+
 export async function* parseSSE(
 	stream: ReadableStream<Uint8Array>
-): AsyncGenerator<{ content: string; done: boolean }> {
+): AsyncGenerator<SSEEvent> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder('utf-8', { fatal: false });
 	let buffer = '';
@@ -17,48 +63,17 @@ export async function* parseSSE(
 			buffer = parts.pop() ?? '';
 
 			for (const part of parts) {
-				const lines = part.split('\n');
-				for (const line of lines) {
-					if (!line.startsWith('data:')) continue;
-					const data = line.slice(5).trimStart();
-
-					if (data === '[DONE]') {
-						yield { content: '', done: true };
-						return;
-					}
-
-					try {
-						const json = JSON.parse(data);
-						const delta = json.choices?.[0]?.delta?.content;
-						if (delta) {
-							yield { content: delta, done: false };
-						}
-					} catch {
-						// skip malformed JSON
-					}
+				for (const evt of parseLines(part.split('\n'))) {
+					yield evt;
+					if (evt.type === 'done') return;
 				}
 			}
 		}
 
-		// flush remaining buffer
 		if (buffer.trim()) {
-			const lines = buffer.split('\n');
-			for (const line of lines) {
-				if (!line.startsWith('data:')) continue;
-				const data = line.slice(5).trimStart();
-				if (data === '[DONE]') {
-					yield { content: '', done: true };
-					return;
-				}
-				try {
-					const json = JSON.parse(data);
-					const delta = json.choices?.[0]?.delta?.content;
-					if (delta) {
-						yield { content: delta, done: false };
-					}
-				} catch {
-					// skip
-				}
+			for (const evt of parseLines(buffer.split('\n'))) {
+				yield evt;
+				if (evt.type === 'done') return;
 			}
 		}
 	} finally {
