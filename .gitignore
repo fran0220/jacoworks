@@ -23,15 +23,13 @@ gateway/jacoworks-gateway
 # === Rust / Tauri ===
 desktop/src-tauri/target/
 
-# === Node / Svelte ===
+# === Node ===
 node_modules/
-desktop/.svelte-kit/
-desktop/build/
-desktop/package/
+desktop/dist/
 
 # === TypeScript / Build ===
-auth-service/dist/
 vm-agent/dist/
+vm-agent/memory/
 
 # === Vite ===
 vite.config.js.timestamp-*

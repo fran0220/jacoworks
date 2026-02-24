@@ -53,14 +53,28 @@ type DatabaseConfig struct {
 }
 
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config file: %w", err)
-	}
-
 	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
+	}
+	// Missing file is OK — env vars provide all values on Railway
+
+	// Defaults
+	if cfg.Server.Port == 0 {
+		cfg.Server.Port = 8080
+	}
+	if cfg.Server.Host == "" {
+		cfg.Server.Host = "0.0.0.0"
+	}
+	if cfg.Auth.SessionTTLHours == 0 {
+		cfg.Auth.SessionTTLHours = 720
+	}
+	if cfg.LXD.OpenClawPort == 0 {
+		cfg.LXD.OpenClawPort = 18789
 	}
 
 	applyEnvOverrides(cfg)

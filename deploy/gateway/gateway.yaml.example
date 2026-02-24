@@ -1,0 +1,27 @@
+server:
+  host: "0.0.0.0"
+  port: 8090
+  public_url: "http://api.xiaomao.chat:8090"
+
+auth:
+  admin_token: "change-me-in-production"
+  feishu_client_id: ""
+  feishu_client_secret: ""
+  session_ttl_hours: 168
+
+database:
+  url: "postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/jacoworks"
+
+llm:
+  proxy_url: "http://67.230.171.248:8317"
+  proxy_key: "YOUR_LLM_PROXY_KEY"
+
+lxd:
+  ssh_target: "local"
+  template: "tpl-openclaw"
+  network: "jaconet"
+  openclaw_port: 18789
+
+chat_agent:
+  url: "http://127.0.0.1:18790"
+  token: ""

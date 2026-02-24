@@ -3,11 +3,15 @@ import { loadConfig } from "./config.js";
 import {
   initAgent,
   getSession,
+  abortSession,
   listSessions,
   resolveModel,
   startBackgroundServices,
   getHeartbeatService,
   getCronService,
+  destroySession,
+  destroyAllSessions,
+  cleanupStaleSessions,
 } from "./agent.js";
 
 const config = loadConfig();
@@ -46,6 +50,17 @@ interface ChatRequest {
   model?: string;   // e.g. "proxy-claude/claude-sonnet-4-6" or "claude-sonnet-4-6"
   stream?: boolean;
   session_id?: string;
+  workspace?: string;      // Project directory for cowork mode
+  restricted?: boolean;     // true = only web tools (chat mode), false = full tools (cowork)
+}
+
+interface NativeEventRequest {
+  message: string;
+  model?: string;
+  session_id?: string;
+  workspace?: string;
+  restricted?: boolean;
+  streaming_behavior?: "steer" | "followUp";
 }
 
 async function handleChat(req: IncomingMessage, res: ServerResponse) {
@@ -81,11 +96,14 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
   const isStream = body.stream !== false; // default: true
 
   try {
-    const { session } = await getSession(sessionId);
+    const { session } = await getSession(sessionId, {
+      workspace: body.workspace,
+      restricted: body.restricted,
+    });
 
     // 如果请求指定了模型，切换
     if (requestedModel) {
-      session.setModel(requestedModel);
+      await session.setModel(requestedModel);
     }
 
     if (isStream) {
@@ -123,6 +141,23 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
           res.write(`: tool ${event.toolName} started\n\n`);
         }
 
+        if (event.type === "tool_execution_end") {
+          const status = event.isError ? "error" : "completed";
+          res.write(`: tool ${event.toolName} ${status}\n\n`);
+        }
+
+        if (event.type === "tool_execution_update") {
+          res.write(`: tool ${event.toolName} progress\n\n`);
+        }
+
+        if (event.type === "turn_start") {
+          res.write(`: turn started\n\n`);
+        }
+
+        if (event.type === "turn_end") {
+          res.write(`: turn ended\n\n`);
+        }
+
         if (event.type === "auto_compaction_start") {
           res.write(`: compaction started (reason: ${event.reason})\n\n`);
         }
@@ -158,6 +193,9 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
       // Handle client disconnect
       req.on("close", () => {
         unsub();
+        if (session.isStreaming) {
+          session.abort().catch(() => {});
+        }
       });
 
       await session.prompt(lastUserMsg.content);
@@ -165,7 +203,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
       // Non-streaming: collect full response
       let fullText = "";
 
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
         const unsub = session.subscribe((event) => {
           if (
             event.type === "message_update" &&
@@ -179,7 +217,10 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
           }
         });
 
-        session.prompt(lastUserMsg.content);
+        session.prompt(lastUserMsg.content).catch((err) => {
+          unsub();
+          reject(err);
+        });
       });
 
       json(res, 200, {
@@ -207,11 +248,104 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
   }
 }
 
+async function handleNativeEventStream(req: IncomingMessage, res: ServerResponse) {
+  if (!checkAuth(req, res)) return;
+
+  let body: NativeEventRequest;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: "invalid JSON" });
+    return;
+  }
+
+  if (!body.message?.trim()) {
+    json(res, 400, { error: "message required" });
+    return;
+  }
+
+  const requestedModel = resolveModel(body.model);
+  const modelKey = requestedModel
+    ? `${requestedModel.provider}/${requestedModel.id}`
+    : `${config.primaryProvider}/${config.primaryModel}`;
+  const sessionId = body.session_id || modelKey;
+
+  try {
+    const { session } = await getSession(sessionId, {
+      workspace: body.workspace,
+      restricted: body.restricted,
+    });
+
+    if (requestedModel) {
+      await session.setModel(requestedModel);
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    let closed = false;
+    const sendEvent = (payload: unknown) => {
+      if (!closed) {
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      }
+    };
+
+    const unsub = session.subscribe((event) => {
+      sendEvent({ type: "session_event", session_id: sessionId, event });
+      if (event.type === "agent_end") {
+        sendEvent({ type: "done", session_id: sessionId });
+        closed = true;
+        res.end();
+        unsub();
+      }
+    });
+
+    req.on("close", () => {
+      if (closed) return;
+      closed = true;
+      unsub();
+      if (session.isStreaming) {
+        session.abort().catch(() => {});
+      }
+    });
+
+    const options = session.isStreaming
+      ? { streamingBehavior: body.streaming_behavior || "followUp" as const }
+      : undefined;
+    await session.prompt(body.message, options);
+  } catch (err) {
+    console.error("❌ Native stream error:", err);
+    if (!res.headersSent) {
+      json(res, 500, {
+        error: err instanceof Error ? err.message : "internal error",
+      });
+    }
+  }
+}
+
 // ─── HTTP Router ────────────────────────────────────
 
 const server = createServer(async (req, res) => {
   const method = req.method?.toUpperCase();
   const url = req.url?.split("?")[0];
+
+  // CORS headers for browser dev mode
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+  if (method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
 
   try {
     // Health check
@@ -231,10 +365,34 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // Native Pi session events (recommended)
+    if (url === "/v1/chat/events" && method === "POST") {
+      await handleNativeEventStream(req, res);
+      return;
+    }
+
     // Session list (debug)
     if (url === "/api/sessions" && method === "GET") {
       if (!checkAuth(req, res)) return;
       json(res, 200, { sessions: listSessions() });
+      return;
+    }
+
+    // DELETE /api/sessions/:id
+    if (url?.startsWith("/api/sessions/") && method === "DELETE") {
+      if (!checkAuth(req, res)) return;
+      const sessionId = url.slice("/api/sessions/".length);
+      const removed = destroySession(sessionId);
+      json(res, removed ? 200 : 404, { removed });
+      return;
+    }
+
+    // Abort a running session turn
+    if (url?.startsWith("/api/sessions/") && url.endsWith("/abort") && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const sessionId = url.slice("/api/sessions/".length, -"/abort".length);
+      const aborted = await abortSession(sessionId);
+      json(res, aborted ? 200 : 404, { aborted });
       return;
     }
 
@@ -315,13 +473,41 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(config.port, "0.0.0.0", () => {
-  console.log(`\n🚀 vm-agent running on http://0.0.0.0:${config.port}`);
-  console.log(`   POST /v1/chat/completions   — Chat (SSE)`);
+  console.log(`\n[startup] vm-agent running on http://0.0.0.0:${config.port}`);
+  console.log(`   POST /v1/chat/completions   — Chat (OpenAI SSE)`);
+  console.log(`   POST /v1/chat/events        — Chat (Native Pi events SSE)`);
   console.log(`   GET  /health                — Health check`);
   console.log(`   GET  /api/sessions          — List sessions`);
+  console.log(`   DELETE /api/sessions/:id     — Destroy session`);
+  console.log(`   POST /api/sessions/:id/abort — Abort session run`);
   console.log(`   GET  /api/heartbeat/status  — Heartbeat status`);
   console.log(`   POST /api/heartbeat/trigger — Trigger heartbeat`);
   console.log(`   GET  /api/cron              — List cron jobs`);
   console.log(`   POST /api/cron              — Add cron job`);
   console.log(`   DELETE /api/cron/:id         — Remove cron job\n`);
 });
+
+// Stale session cleanup every 10 minutes (1 hour inactivity threshold)
+setInterval(() => {
+  const cleaned = cleanupStaleSessions(3600_000);
+  if (cleaned > 0) console.log(`[cleanup] cleaned ${cleaned} stale sessions`);
+}, 600_000);
+
+// Graceful shutdown
+function shutdown() {
+  console.log("\n[shutdown] shutting down...");
+  const hb = getHeartbeatService();
+  if (hb) hb.stop();
+  const cron = getCronService();
+  if (cron) cron.stop();
+  destroyAllSessions();
+  server.close(() => {
+    console.log("[shutdown] server closed");
+    process.exit(0);
+  });
+  // Force exit after 5s
+  setTimeout(() => process.exit(1), 5000);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

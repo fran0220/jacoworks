@@ -1,4 +1,5 @@
 mod cowork;
+mod sidecar;
 mod stream;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,6 +16,9 @@ pub fn run() {
             cowork::extract_tar,
             cowork::upload_cowork,
             cowork::download_cowork,
+            sidecar::start_agent,
+            sidecar::stop_agent,
+            sidecar::agent_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

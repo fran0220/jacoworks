@@ -16,7 +16,17 @@ import { createHeartbeatService, type HeartbeatService } from "./services/heartb
 import { createCronService, type CronService } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 
+// ─── Session Metadata ───────────────────────────────
+
+export interface SessionMeta {
+  restricted: boolean;
+  workspace: string;
+  lastAccess: number;
+}
+
 const sessions = new Map<string, CreateAgentSessionResult>();
+const sessionMetas = new Map<string, SessionMeta>();
+const settingsCache = new Map<string, SettingsManager>();
 
 let authStorage: AuthStorage;
 let modelRegistry: ModelRegistry;
@@ -25,6 +35,25 @@ let config: Config;
 let heartbeatService: HeartbeatService | null = null;
 let cronService: CronService | null = null;
 let promptQueue: PromptQueue | null = null;
+
+// ─── Restricted mode tool allowlist ─────────────────
+
+const ALLOWED_RESTRICTED_TOOLS = ["web_search", "web_fetch"];
+
+// ─── Cache key helpers ──────────────────────────────
+
+function sessionCacheKey(sessionId: string, workspace: string, restricted: boolean): string {
+  return `${sessionId}::${workspace}::${restricted ? "restricted" : "full"}`;
+}
+
+function getSettingsManager(workspace: string): SettingsManager {
+  let sm = settingsCache.get(workspace);
+  if (!sm) {
+    sm = SettingsManager.create(workspace);
+    settingsCache.set(workspace, sm);
+  }
+  return sm;
+}
 
 // ─── LLM 中转站模型注册 ────────────────────────────
 // 中转站 http://67.230.171.248:8317 支持 4 种原生协议：
@@ -187,9 +216,23 @@ export function initAgent(cfg: Config) {
   }
 }
 
-export async function getSession(sessionId: string) {
-  let entry = sessions.get(sessionId);
-  if (entry) return entry;
+export interface SessionOptions {
+  workspace?: string;
+  restricted?: boolean;
+}
+
+export async function getSession(sessionId: string, opts?: SessionOptions) {
+  const workspace = opts?.workspace || config.workspaceDir;
+  const restricted = !!opts?.restricted;
+  const cacheKey = sessionCacheKey(sessionId, workspace, restricted);
+
+  let entry = sessions.get(cacheKey);
+  if (entry) {
+    // Update last access time
+    const meta = sessionMetas.get(cacheKey);
+    if (meta) meta.lastAccess = Date.now();
+    return entry;
+  }
 
   const model = modelRegistry.find(config.primaryProvider, config.primaryModel);
   if (!model) {
@@ -203,13 +246,24 @@ export async function getSession(sessionId: string) {
     );
   }
 
-  const codingTools = createCodingTools(config.workspaceDir);
+  const codingTools = createCodingTools(workspace);
   const webTools = createWebTools();
 
   const extensionFactories: ExtensionFactory[] = [];
 
+  // Restricted mode: block all tools except allowlist
+  if (opts?.restricted) {
+    extensionFactories.push((pi) => {
+      pi.on("tool_call", async (event) => {
+        if (!ALLOWED_RESTRICTED_TOOLS.includes(event.toolName)) {
+          return { block: true, reason: `Tool '${event.toolName}' is not available in chat mode` };
+        }
+      });
+    });
+  }
+
   if (config.memoryEnabled) {
-    extensionFactories.push(createMemoryExtension(config.workspaceDir));
+    extensionFactories.push(createMemoryExtension(workspace));
   }
 
   if (config.cronEnabled && cronService) {
@@ -226,10 +280,10 @@ export async function getSession(sessionId: string) {
     });
   }
 
-  const settingsManager = SettingsManager.create(config.workspaceDir);
+  const settingsManager = getSettingsManager(workspace);
 
   const resourceLoader = new DefaultResourceLoader({
-    cwd: config.workspaceDir,
+    cwd: workspace,
     settingsManager,
     extensionFactories,
     additionalSkillPaths: config.skillsPaths.filter((p) => existsSync(p)),
@@ -240,19 +294,24 @@ export async function getSession(sessionId: string) {
   await resourceLoader.reload();
 
   entry = await createAgentSession({
-    sessionManager: SessionManager.create(config.workspaceDir),
+    sessionManager: SessionManager.inMemory(workspace),
     authStorage,
     modelRegistry,
     model,
-    tools: codingTools,
+    tools: opts?.restricted ? [] : codingTools,
     customTools: webTools,
     resourceLoader,
     settingsManager,
-    cwd: config.workspaceDir,
+    cwd: workspace,
   });
 
-  sessions.set(sessionId, entry);
-  console.log(`📝 Session created: ${sessionId} → ${model.provider}/${model.id}`);
+  sessions.set(cacheKey, entry);
+  sessionMetas.set(cacheKey, {
+    restricted,
+    workspace,
+    lastAccess: Date.now(),
+  });
+  console.log(`[session] created: ${sessionId} -> ${model.provider}/${model.id} (workspace: ${workspace}, restricted: ${restricted})`);
   return entry;
 }
 
@@ -271,16 +330,79 @@ export function resolveModel(modelStr?: string) {
     return modelRegistry.find(provider, id) ?? null;
   }
 
-  // 无前缀：遍历 proxy-* provider 查找
-  for (const prefix of ["proxy-claude", "proxy-gpt", "proxy-gemini", "proxy-grok"]) {
+  // 无前缀：动态获取所有 proxy-* provider 查找
+  const proxyProviders = [
+    ...new Set(
+      modelRegistry
+        .getAll()
+        .filter((m) => m.provider.startsWith("proxy-"))
+        .map((m) => m.provider),
+    ),
+  ];
+  for (const prefix of proxyProviders) {
     const found = modelRegistry.find(prefix, modelStr);
     if (found) return found;
   }
   return null;
 }
 
-export function destroySession(sessionId: string) {
-  sessions.delete(sessionId);
+export function destroySession(sessionId: string): boolean {
+  // Find all cache keys matching this sessionId (any workspace)
+  let destroyed = false;
+  for (const [key, entry] of sessions.entries()) {
+    if (key === sessionId || key.startsWith(`${sessionId}::`)) {
+      entry.session.dispose();
+      sessions.delete(key);
+      sessionMetas.delete(key);
+      destroyed = true;
+    }
+  }
+  return destroyed;
+}
+
+export async function abortSession(sessionId: string): Promise<boolean> {
+  for (const [key, entry] of sessions.entries()) {
+    if (key === sessionId || key.startsWith(`${sessionId}::`)) {
+      if (entry.session.isStreaming) {
+        await entry.session.abort();
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+export function destroyAllSessions(): void {
+  for (const [, entry] of sessions.entries()) {
+    entry.session.dispose();
+  }
+  sessions.clear();
+  sessionMetas.clear();
+}
+
+export function cleanupStaleSessions(maxAgeMs: number = 3600_000): number {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [key, meta] of sessionMetas.entries()) {
+    if (now - meta.lastAccess > maxAgeMs) {
+      const entry = sessions.get(key);
+      if (entry) entry.session.dispose();
+      sessions.delete(key);
+      sessionMetas.delete(key);
+      cleaned++;
+    }
+  }
+  return cleaned;
+}
+
+export function getSessionMeta(sessionId: string): SessionMeta | undefined {
+  // Try exact match first, then prefix match
+  const meta = sessionMetas.get(sessionId);
+  if (meta) return meta;
+  for (const [key, m] of sessionMetas.entries()) {
+    if (key.startsWith(`${sessionId}::`)) return m;
+  }
+  return undefined;
 }
 
 export function listSessions(): string[] {
@@ -294,9 +416,27 @@ const BG_SESSION_SUFFIX = "::background";
 async function executePrompt(prompt: string): Promise<string> {
   const bgSessionId = `${config.primaryProvider}/${config.primaryModel}${BG_SESSION_SUFFIX}`;
   const { session } = await getSession(bgSessionId);
+
+  // Wait for any in-flight stream to finish
+  if (session.isStreaming) {
+    await new Promise<void>((resolve) => {
+      const unsub = session.subscribe((event) => {
+        if (event.type === "agent_end") {
+          unsub();
+          resolve();
+        }
+      });
+    });
+  }
+
   let fullText = "";
 
   return new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsub();
+      reject(new Error("Background prompt timeout (5min)"));
+    }, 300_000);
+
     const unsub = session.subscribe((event) => {
       if (
         event.type === "message_update" &&
@@ -305,12 +445,14 @@ async function executePrompt(prompt: string): Promise<string> {
         fullText += event.assistantMessageEvent.delta;
       }
       if (event.type === "agent_end") {
+        clearTimeout(timeout);
         unsub();
         resolve(fullText);
       }
     });
 
     session.prompt(prompt).catch((err) => {
+      clearTimeout(timeout);
       unsub();
       reject(err);
     });
@@ -320,7 +462,7 @@ async function executePrompt(prompt: string): Promise<string> {
 // ─── Background Services ────────────────────────────
 
 export async function startBackgroundServices() {
-  promptQueue = createPromptQueue(executePrompt);
+  promptQueue = createPromptQueue(executePrompt, { timeoutMs: 300_000 });
 
   if (config.heartbeatEnabled) {
     heartbeatService = createHeartbeatService(
@@ -343,7 +485,8 @@ export async function startBackgroundServices() {
     cronService.start();
     // Register cron_manage tool into background session
     const bgSessionId = `${config.primaryProvider}/${config.primaryModel}${BG_SESSION_SUFFIX}`;
-    const bgEntry = sessions.get(bgSessionId);
+    const bgCacheKey = sessionCacheKey(bgSessionId, config.workspaceDir, false);
+    const bgEntry = sessions.get(bgCacheKey);
     if (!bgEntry) {
       // Ensure bg session exists so cron tool gets registered on next getSession()
       console.log("⏰ Cron service started (cron_manage tool available via agent)");

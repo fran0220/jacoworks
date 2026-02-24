@@ -1,6 +1,7 @@
 # JAcoworks — 企业 AI 协同办公平台
 
-> 每人一个独立 LXD 容器，运行 Pi SDK 轻量 Agent 服务。
+> 本地优先架构：Tauri 桌面端内嵌 Pi SDK Agent sidecar，直接读写本地文件。
+> Go 网关 + PostgreSQL 部署 Railway，提供认证、会话存储和管理 API。
 > 通过公司 LLM 中转站统一接入 Claude/GPT/Gemini/Grok 四大模型。
 
 ---
@@ -10,13 +11,13 @@
 | 层级 | 选型 | 说明 |
 |------|------|------|
 | AI 引擎 | Pi SDK (`@mariozechner/pi-coding-agent` ^0.54.2) | 轻量 Agent 框架，9MB，< 50MB 内存 |
-| HTTP 桥接 | vm-agent (TypeScript) | Pi SDK → OpenAI 兼容 SSE 端点 (:18789) |
-| 认证服务 | Better Auth (TypeScript) | 独立微服务 (:3100)，飞书 SSO + 激活码 + 邮箱密码 |
-| 管理网关 | Go 自建 | 会话验证 + 用户路由 + 会话管理 + Cowork + LXD 生命周期 (宿主机运行) |
-| 前端 | Tauri v2 + Svelte 5 | 桌面优先，轻量 (~10MB)，支持 Cowork 模式 |
-| 数据库 | PostgreSQL 17 (Railway) | Better Auth + Go 网关共用，JSONB 会话存储 |
-| LLM | 公司中转站 | `http://67.230.171.248:8317`，4 Provider 11 模型 |
-| 容器 | LXD Per-User VM | 克隆自 `tpl-openclaw`，1CPU/1GB/5GB |
+| Agent 桥接 | vm-agent (TypeScript) | Pi SDK 原生事件流 + OpenAI 兼容端点，本地 sidecar (:18789) |
+| 认证 | Goth + bcrypt (Go 内置) | 飞书 SSO + 激活码 + 邮箱密码，网关内集成 |
+| 管理网关 | Go 自建 | 认证 + 会话存储 + 管理 API (Railway 部署) |
+| 前端 | Tauri v2 + React 18 (Vite) | 桌面优先，内嵌 sidecar，本地 Agent 直接读写文件 |
+| 数据库 | PostgreSQL 17 (Railway) | 网关独用，JSONB 会话存储 |
+| LLM | 公司中转站 | `http://67.230.171.248:8317`，4 Provider 10 模型 |
+| 容器 | LXD (代码保留，未来扩展) | 非主要路径，网关中保留 LXD 管理代码 |
 
 ---
 
@@ -28,93 +29,73 @@
 JAcoworks/
 ├── AGENTS.md                        # 本文件
 ├── .gitignore
-├── auth-service/                    # Better Auth 认证微服务
-│   ├── src/
-│   │   ├── index.ts                 # Express server (:3100, CORS + BA handler + 激活码)
-│   │   ├── auth.ts                  # Better Auth 配置 (PostgreSQL + 飞书 SSO + admin 插件)
-│   │   └── invite.ts                # 激活码验证 → BA 创建用户
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── .env.example
-├── gateway/                         # Go 管理网关
-│   ├── cmd/gateway/main.go          # 入口 (HTTP server + 会话/Cowork/管理/激活码 API)
+├── gateway/                         # Go 管理网关 (Railway 部署)
+│   ├── cmd/gateway/main.go          # 入口 (Goth 认证 + 会话 CRUD + 管理 + Agent 配置下发)
 │   ├── internal/
-│   │   ├── config/config.go         # 配置 (YAML + env override, database.url + auth.auth_service_url)
-│   │   ├── auth/middleware.go       # BA session 验证中间件 (调 BA /api/auth/get-session)
-│   │   ├── proxy/handler.go         # httputil.ReverseProxy → VM Agent (SSE 透传)
-│   │   ├── cowork/handler.go        # Cowork 文件上传/下载/变更检测
+│   │   ├── config/config.go         # 配置 (YAML + env override)
+│   │   ├── auth/
+│   │   │   ├── middleware.go        # Bearer token → auth_sessions 验证
+│   │   │   ├── handlers.go          # 登录/注册/飞书 SSO/激活码/登出
+│   │   │   └── feishu/              # Goth Feishu Provider 实现
 │   │   ├── store/                   # PostgreSQL 数据层 (pgx/v5)
-│   │   │   ├── pg.go                # pgxpool 连接池 + Store 结构体
-│   │   │   ├── containers.go        # 容器映射 CRUD
-│   │   │   ├── sessions.go          # 聊天会话 CRUD (chat_sessions 表, JSONB)
+│   │   │   ├── pg.go                # pgxpool 连接池
+│   │   │   ├── users.go             # 用户 + auth_sessions + invite_codes CRUD
+│   │   │   ├── sessions.go          # chat_sessions CRUD (JSONB)
+│   │   │   ├── containers.go        # 容器映射 (保留)
 │   │   │   └── invites.go           # 激活码 CRUD
-│   │   ├── audit/logger.go          # 审计日志 (PostgreSQL)
-│   │   └── lxd/                     # LXD 容器生命周期 (克隆/启停/冻结/唤醒/磁盘挂载)
-│   ├── go.mod / go.sum
+│   │   ├── audit/logger.go          # 审计日志
+│   │   ├── proxy/handler.go         # ReverseProxy (保留，LXD 路径)
+│   │   ├── cowork/handler.go        # Cowork 文件操作 (保留，LXD 路径)
+│   │   └── lxd/                     # LXD 容器生命周期 (保留，未来扩展)
+│   ├── Dockerfile
 │   ├── gateway.yaml.example
 │   ├── Makefile
-│   └── Dockerfile
-├── vm-agent/                        # Per-VM Agent 服务 (Pi SDK + HTTP 桥接)
+│   ├── go.mod / go.sum
+│   └── ...
+├── vm-agent/                        # 本地 Agent sidecar (Pi SDK + HTTP 桥接)
 │   ├── src/
-│   │   ├── index.ts                 # HTTP server (:18789, SSE 流式 + compaction/retry 事件)
+│   │   ├── index.ts                 # HTTP server (:18789, native events + workspace/restricted per-request)
 │   │   ├── config.ts                # 配置加载 (.env + 环境变量)
-│   │   ├── agent.ts                 # Pi SDK session 池 + 4 Provider 模型注册
+│   │   ├── agent.ts                 # Pi SDK session 池 + 4 Provider + per-session workspace
 │   │   ├── extensions/
-│   │   │   └── memory.ts            # 记忆系统 Extension (context/agent_end/session_before_compact)
+│   │   │   └── memory.ts            # 记忆系统 Extension
 │   │   ├── services/
-│   │   │   ├── heartbeat.ts         # 心跳服务 (定时 Agent 自检)
-│   │   │   └── cron.ts              # 定时任务 (cron 表达式 + Agent 工具)
+│   │   │   ├── heartbeat.ts         # 心跳服务
+│   │   │   └── cron.ts              # 定时任务
 │   │   ├── lib/
-│   │   │   ├── daily-log.ts         # 日志读写工具 (memory/YYYY-MM-DD.md + MEMORY.md)
+│   │   │   ├── daily-log.ts         # 日志 I/O
 │   │   │   └── prompt-queue.ts      # Prompt 串行队列
 │   │   └── tools/
-│   │       └── web.ts               # 自定义工具 (web_search + web_fetch)
+│   │       └── web.ts               # web_search + web_fetch 自定义工具
 │   ├── package.json
 │   └── tsconfig.json
-├── desktop/                         # Tauri v2 + Svelte 5 桌面客户端
+├── desktop/                         # Tauri v2 + React 18 桌面客户端
 │   ├── src-tauri/
-│   │   ├── src/lib.rs               # Tauri 入口 (注册 8 个 Rust 命令)
+│   │   ├── src/lib.rs               # Tauri 入口 (注册 11 个 Rust 命令)
 │   │   ├── src/stream.rs            # SSE 流式桥接 (stream_fetch + stream_abort + http_fetch)
-│   │   ├── src/cowork.rs            # Cowork 文件操作 (tar/上传/下载/目录选择)
+│   │   ├── src/sidecar.rs           # Agent sidecar 生命周期 (start/stop/status)
+│   │   ├── src/cowork.rs            # 文件操作 (目录选择/tar，保留兼容)
 │   │   ├── Cargo.toml
 │   │   └── tauri.conf.json
 │   ├── src/
-│   │   ├── routes/+page.svelte      # 根页面 (Login 或 Chat 布局 + 模型传递)
-│   │   ├── lib/api.ts               # Fetch shim: Tauri invoke ↔ 浏览器 fetch
-│   │   ├── lib/sse.ts               # SSE 解析器 (content/tool_start/status/done 事件)
-│   │   ├── lib/auth-client.ts       # Better Auth Svelte 客户端
-│   │   ├── lib/auth.svelte.ts       # 三种登录 + BA session 管理 (签名 cookie 持久化)
-│   │   ├── lib/sessions.ts          # 会话 CRUD (网关 API，含 model 字段, JSONB)
-│   │   ├── lib/cowork.ts            # Cowork 前端 API (选择/上传/拉取)
-│   │   ├── lib/config.ts            # 网关地址 + 认证服务地址 + MODEL_OPTIONS (9 模型)
-│   │   ├── lib/stores/app.svelte.ts # 全局状态 ($state runes)
-│   │   ├── lib/components/
-│   │   │   ├── LoginPage.svelte     # 三种登录入口 (邮箱密码 / 激活码 / 飞书 SSO)
-│   │   │   ├── ChatView.svelte      # 核心聊天 (SSE 流式 + session_id + 模型路由)
-│   │   │   ├── InputBar.svelte      # 输入框 + 附件 (图片/文本文件)
-│   │   │   ├── MessageBubble.svelte # 消息气泡 (Markdown + 图片)
-│   │   │   ├── Markdown.svelte      # Markdown 渲染 (marked + highlight.js + DOMPurify)
-│   │   │   ├── NewSession.svelte    # 新建会话 (模型选择 + Cowork 文件夹)
-│   │   │   ├── SessionList.svelte   # 会话侧栏 (chat/cowork 类型图标)
-│   │   │   ├── ToolStatus.svelte    # 工具执行状态 (Pi SDK 7 内置 + 3 自定义)
-│   │   │   └── TopBar.svelte        # 顶栏 (标题 + 模型徽章 + 用户名)
-│   │   └── app.css                  # CSS 变量主题 (暗色/亮色自适应)
+│   │   ├── main.tsx                 # React 入口
+│   │   ├── App.tsx                  # 根页面 (Login → Agent 启动 → 会话)
+│   │   ├── app.css                  # CSS 变量主题 (Design Token)
+│   │   └── react/
+│   │       ├── components/          # LoginPanel/Sidebar/NewSessionPanel/ChatView/Composer...
+│   │       ├── lib/                 # auth/sessions/agent-events/transport/cowork
+│   │       ├── styles.css           # React 组件样式
+│   │       └── types.ts             # 前端类型定义
 │   └── package.json
 ├── deploy/                          # 部署配置
 │   ├── sql/
-│   │   ├── 001_init_business_tables.sql  # PostgreSQL 业务表初始化
-│   │   └── 002_seed_test_data.sql        # 测试激活码种子数据
-│   ├── auth-service/auth-service.service # systemd 服务
-│   ├── gateway/jacoworks-gateway.service
-│   ├── pi-agent/
-│   │   ├── pi-agent.service         # systemd 服务
-│   │   └── setup.sh                 # VM 初始化脚本
-│   └── scripts/
-├── shared/                          # 共享资源 (只读挂载到容器)
-│   ├── skills/                      # 预制技能包 (SKILL.md)
+│   │   ├── 001_init_business_tables.sql  # PostgreSQL 全量 schema (Goth auth + 业务表)
+│   │   └── 002_seed_test_data.sql
+│   └── ...
+├── shared/                          # 共享资源
+│   ├── skills/                      # 预制技能包
 │   └── docs/                        # 企业知识库
 ├── docs/                            # 设计文档
-│   └── auth-migration-plan.md       # 认证系统迁移设计文档
 └── tasks/                           # 任务追踪
 ```
 
@@ -123,192 +104,194 @@ JAcoworks/
 ## 3. 系统架构
 
 ```
-Tauri 桌面端 ──登录──→ Better Auth 微服务 (:3100)
-                        │ ├─ 飞书 SSO (内部员工)
-                        │ ├─ 激活码登录 (外部用户)
-                        │ └─ 签发 session token (签名 cookie)
-                        ↓
-Tauri 桌面端 ──业务──→ Go 网关 (:8090)
-                        │ ├─ 验证 BA session (HTTP 调用 BA /api/auth/get-session)
-                        │ ├─ 查 user→container 映射 (PostgreSQL)
-                        │ └─ 透传 → vm-agent (SSE)
-                        ↓
-                    PostgreSQL (Railway) ← BA + 网关共用
+Tauri 桌面端
+  │
+  ├─ 登录/会话/管理 ──HTTPS──→ Go 网关 (Railway)
+  │                              ├─ Goth 飞书 SSO / bcrypt 密码认证
+  │                              ├─ auth_sessions 表验证
+  │                              ├─ chat_sessions CRUD
+  │                              ├─ invite_codes 管理
+  │                              └─ GET /api/agent/config → 下发 LLM 密钥
+  │
+  ├─ 获取 LLM 配置 (登录后) ──→ 启动本地 vm-agent sidecar
+  │
+  └─ 统一会话对话 ──→ 本地 vm-agent (:18789)
+                              ├─ Pi SDK sessions (per session_id)
+                              ├─ 默认 restricted=false (开放全部工具)
+                              ├─ workspace 可选 (输入栏选择目录后生效)
+                              └─ LLM 调用 → 中转站 (唯一网络依赖)
+
+Railway:
+  ┌──────────────────┐     ┌──────────────┐
+  │ Go 网关 (Docker) │────→│ PostgreSQL   │
+  │ :8080            │     │ (内网连接)    │
+  └──────────────────┘     └──────────────┘
 ```
 
-### 3.1 认证流程
+### 3.1 认证流程 (Goth + bcrypt)
+
+认证完全由 Go 网关内置处理，无独立认证微服务。
 
 ```
 激活码注册:
-  桌面端 → POST auth-service/api/activate {code, username, password}
-         → 验证激活码 → BA 创建用户 → 返回 user
-         → 自动登录 → POST auth-service/api/auth/sign-in/email
-         → 返回签名 cookie (set-cookie: better-auth.session_token=<token>.<signature>)
+  桌面端 → POST /api/auth/activate {code, username, password}
+         → 验证激活码 → bcrypt 哈希 → 创建 users 记录
+         → 创建 auth_sessions → 返回 {token, user}
 
 密码登录:
-  桌面端 → POST auth-service/api/auth/sign-in/email {email, password}
-         → 返回签名 cookie
+  桌面端 → POST /api/auth/login {email, password}
+         → bcrypt 验证 → 创建 auth_sessions → 返回 {token, user}
+
+飞书 SSO:
+  桌面端 → GET /api/auth/feishu → Goth 跳转飞书 OAuth
+         → 回调 GET /api/auth/feishu/callback
+         → Goth FetchUser → FindOrCreate 用户
+         → 创建 auth_sessions → 重定向携带 ?token=xxx
 
 业务请求:
-  桌面端 → Go 网关 (Authorization: Bearer <signed_cookie>)
-         → 网关 → BA /api/auth/get-session (Cookie: better-auth.session_token=<signed_cookie>)
-         → BA 返回 {session, user} → 网关注入 context → 处理请求
+  桌面端 → Authorization: Bearer <session_token>
+         → middleware 查 auth_sessions JOIN users → 注入 user context
 ```
 
-### 3.2 数据流 (双模式路由)
+### 3.2 数据流 (本地 Agent 单模式 + 可选工作目录)
 
 ```
-用户请求 → Go 网关 (:8090) → 认证验证 (session token)
-             │
-             ├─ Chat 模式 (无 X-Cowork-Session 头)
-             │    └─ 直接转发 → 共享 vm-agent (:18790, 宿主机)
-             │         ├─ 受限工具: web_search, web_fetch only
-             │         ├─ Pi SDK session 隔离 (per session_id)
-             │         └─ SSE 流式返回
-             │
-             └─ Cowork 模式 (有 X-Cowork-Session 头)
-                  ├─ 查 user→container 映射 (PostgreSQL)
-                  ├─ 唤醒容器 (如 frozen/stopped)
-                  └─ httputil.ReverseProxy → vm-agent (:18789) in LXD
-                       ├─ 全部工具: bash, edit, read, grep, find, ls, web_*
-                       ├─ Pi SDK createAgentSession(session_id)
-                       └─ SSE 流式返回
+用户登录后:
+  桌面端 → GET /api/agent/config → 获取 {llm_proxy_url, llm_proxy_key}
+         → Tauri invoke start_agent(agentDir, envVars)
+         → 启动 Node.js 进程 (vm-agent :18789)
+         → 轮询 /health 等待就绪
+
+统一会话模式 (restricted: false):
+  输入栏可随时选择本地项目文件夹（可选） →
+  POST localhost:18789/v1/chat/events
+    body: { message, model, session_id, restricted: false, workspace?: "/path/to/project" }
+    → vm-agent 创建完整 session (bash/edit/read/grep/find/ls/write + web)
+    → 若提供 workspace，Agent 在该目录直接读写本地文件
+    → SSE 流式返回
 ```
 
-**路由决策**: `proxy/handler.go` 通过 `X-Cowork-Session` HTTP 头判断模式。Chat 请求不查容器表，直接转发共享 agent，无容器也能聊天。
+**关键优势**: 单模式下仍可直接操作本地文件系统，无 tar 打包/上传/下载/容器挂载步骤。
 
-### 3.3 Better Auth 认证服务
-
-独立 Node.js 微服务，运行在宿主机 :3100。
-
-核心依赖:
-- `better-auth` — 认证框架 (session 管理, OAuth, 用户 CRUD)
-- `express` — HTTP 服务
-- `pg` — PostgreSQL 连接
-
-**BA 自动管理的表** (首次启动自动创建):
-- `user` — 用户主表 (id, name, email, role, ...)
-- `session` — 登录会话 (token, userId, expiresAt, ...)
-- `account` — OAuth 绑定
-- `verification` — 验证令牌
-
-**认证方式**:
-- 邮箱密码 (`emailAndPassword: { enabled: true }`)
-- 飞书 SSO (`genericOAuth` 插件, 待配置 client_id/secret)
-- 激活码 (自定义 `/api/activate` 端点)
-
-**用户注册策略**: 无公开注册。两种渠道:
-1. 飞书 SSO — 内部员工自动创建账户
-2. 激活码 — 管理员生成一次性激活码，用户通过激活码注册
-
-### 3.4 Go 管理网关
+### 3.3 Go 管理网关
 
 Go module: `github.com/fran0220/jacoworks/gateway`
 
 核心依赖:
-- `net/http` + `httputil.ReverseProxy` — SSE 透传 (`FlushInterval: -1`)
+- `net/http` — 标准库 HTTP server
+- `github.com/markbates/goth` — 飞书 SSO (OAuth2)
 - `github.com/jackc/pgx/v5` — PostgreSQL 连接池
 - `github.com/rs/zerolog` — 结构化日志
 
-API 端点:
+**主要 API 端点**:
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/users/me` | 当前用户信息 (从 BA session 获取) |
-| GET | `/api/sessions` | 列出用户聊天会话 |
-| POST | `/api/sessions` | 创建会话 (type: chat/cowork) |
+| POST | `/api/auth/login` | 邮箱密码登录 |
+| POST | `/api/auth/activate` | 激活码注册 |
+| GET | `/api/auth/feishu` | 飞书 SSO 入口 |
+| GET | `/api/auth/feishu/callback` | 飞书 SSO 回调 |
+| POST | `/api/auth/logout` | 登出 |
+| GET | `/api/users/me` | 当前用户信息 |
+| GET | `/api/agent/config` | **下发 LLM 配置** (proxy_url + proxy_key + 模型列表) |
+| GET | `/api/sessions` | 列出用户会话 |
+| POST | `/api/sessions` | 创建会话 |
 | GET | `/api/sessions/{id}` | 获取会话详情 |
 | PUT | `/api/sessions/{id}` | 更新会话 (title/messages) |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
-| GET | `/api/cowork/container-status` | Cowork: 检查用户容器状态 |
-| POST | `/api/cowork/provision` | Cowork: 自助分配容器 (首次进入 cowork 触发) |
-| POST | `/api/cowork/{sid}/upload` | Cowork: 上传项目 tar.gz |
-| GET | `/api/cowork/{sid}/changes` | Cowork: 获取变更文件列表 |
-| GET | `/api/cowork/{sid}/download` | Cowork: 下载变更 tar.gz |
-| POST | `/v1/chat/completions` | **透传** → 用户 VM 的 vm-agent (SSE) |
-| GET | `/api/admin/containers` | 管理: 列出容器状态 |
-| POST | `/api/admin/containers/{id}/start` | 管理: 启动容器 |
-| POST | `/api/admin/containers/{id}/stop` | 管理: 停止容器 |
-| POST | `/api/admin/provision` | 管理: 为用户分配容器 |
 | POST | `/api/admin/invite-codes` | 管理: 生成激活码 |
 | GET | `/api/admin/invite-codes` | 管理: 列出激活码 |
 | GET | `/health` | 健康检查 |
 
-容器唤醒策略: 请求到达 → 检查容器状态 → frozen 则 unfreeze → 轮询 `/health` → 透传请求 (超时 10s)
+**保留的 LXD 端点** (未来扩展用，当前非主要路径):
 
-### 3.5 VM Agent (Pi SDK)
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/v1/chat/completions` | 透传 → 远程 vm-agent |
+| GET | `/api/cowork/container-status` | 容器状态 |
+| POST | `/api/cowork/provision` | 自助分配容器 |
+| POST | `/api/cowork/{sid}/upload` | 上传项目 |
+| GET | `/api/cowork/{sid}/download` | 下载变更 |
+| GET | `/api/admin/containers` | 列出容器 |
+| POST | `/api/admin/containers/{id}/start` | 启动容器 |
+| POST | `/api/admin/containers/{id}/stop` | 停止容器 |
 
-每个 LXD 容器内运行的 Agent 服务。
+### 3.4 VM Agent (Pi SDK，本地 Sidecar)
 
-**入口**: `vm-agent/src/index.ts` — Node.js HTTP server (:18789)
+Tauri 桌面端启动时自动 spawn 的 Node.js 进程。
+
+**入口**: `vm-agent/src/index.ts` — HTTP server (:18789)
 
 **核心组件**:
-- `config.ts` — 从 `.env` / 环境变量加载配置，支持 `LLM_PROXY_KEY` 或 `ANTHROPIC_API_KEY`
-- `agent.ts` — Pi SDK session 池 + `registerProvider()` 注册 4 个中转 Provider
-- `extensions/memory.ts` — Pi Extension: daily log + MEMORY.md 记忆系统 (context/agent_end/session_before_compact 事件)
-- `services/heartbeat.ts` — 定时心跳 (HEARTBEAT.md → Agent 自检)
-- `services/cron.ts` — Cron 定时任务 (cron_manage 工具 + 持久化 cron-jobs.json)
-- `lib/prompt-queue.ts` — Prompt 串行队列 (防止 Pi SDK 流式中重复 prompt)
-- `lib/daily-log.ts` — 日志 I/O (memory/YYYY-MM-DD.md + MEMORY.md)
-- `tools/web.ts` — web_search (Tavily) + web_fetch 自定义工具
+- `config.ts` — 环境变量加载 (LLM_PROXY_KEY/URL 由 Tauri 注入)
+- `agent.ts` — Pi SDK session 池 + 4 Provider 注册 + **per-request workspace（可选）**
+- `extensions/memory.ts` — 记忆系统 (daily log + MEMORY.md)
+- `services/heartbeat.ts` — 心跳 (本地 sidecar 模式下默认关闭)
+- `services/cron.ts` — 定时任务 (本地 sidecar 模式下默认关闭)
+- `tools/web.ts` — web_search (Tavily) + web_fetch
 
-**模型注册** (代码内注册，无需 models.json):
+**请求字段** (ChatRequest):
 
-| Provider | 协议 | 端点 | 模型 |
-|----------|------|------|------|
-| `proxy-claude` | `anthropic-messages` | `POST /v1/messages` | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001 |
-| `proxy-gpt` | `openai-completions` | `POST /v1/chat/completions` | gpt-5.3-codex, gpt-5.2 |
-| `proxy-gemini` | `openai-completions` | `POST /v1/chat/completions` | gemini-3.1-pro-preview, gemini-3-pro-preview, gemini-3-flash-preview |
-| `proxy-grok` | `openai-completions` | `POST /v1/chat/completions` | grok-4.20-beta, grok-4.1-fast |
+| 字段 | 说明 |
+|------|------|
+| `restricted` | 默认 `false`（开放全部工具），当前前端固定传 `false` |
+| `workspace` | 可选项目目录路径，提供时 Agent 以此为 cwd |
 
-**请求级模型切换**: 客户端在 `model` 字段指定模型 ID，支持:
-- `"claude-sonnet-4-6"` — 自动匹配 provider
-- `"proxy-gpt/gpt-5.2"` — 完整路径
+**模型注册** (代码内 registerProvider):
 
-**Session 隔离**: 客户端在 `session_id` 字段传入桌面会话 ID，vm-agent 为每个 session_id 创建独立的 Pi SDK AgentSession，不同会话不共享上下文。
+| Provider | 协议 | 模型 |
+|----------|------|------|
+| `proxy-claude` | `anthropic-messages` | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001 |
+| `proxy-gpt` | `openai-completions` | gpt-5.3-codex, gpt-5.2 |
+| `proxy-gemini` | `openai-completions` | gemini-3.1-pro-preview, gemini-3-pro-preview, gemini-3-flash-preview |
+| `proxy-grok` | `openai-completions` | grok-4.20-beta, grok-4.1-fast |
 
 **SSE 事件格式**:
-- `data: {"choices":[{"delta":{"content":"..."}}]}` — 文本增量
-- `: tool <name> started` — 工具执行开始 (SSE 注释)
-- `: compaction started (reason: ...)` — 上下文压缩 (SSE 注释)
-- `: retry <n>/<max> (delay: <ms>ms)` — LLM 重试 (SSE 注释)
-- `data: [DONE]` — 流结束
+- `data: {"type":"session_event","session_id":"...","event":{...}}` — Pi `AgentSessionEvent`
+- `data: {"type":"done","session_id":"..."}` — 流结束
+- 兼容保留: `/v1/chat/completions` 仍支持 OpenAI chunk 格式
 
-**内置工具** (Pi SDK): read, bash, edit, write, grep, find, ls (7 个)
-**自定义工具**: web_search (Tavily API), web_fetch (HTTP 抓取), memory_search, memory_save, cron_manage
+**内置工具** (Pi SDK): read, bash, edit, write, grep, find, ls
+**自定义工具**: web_search, web_fetch, memory_search, memory_save, cron_manage
 
-### 3.6 Tauri 桌面客户端
+### 3.5 Tauri 桌面客户端
 
 **Rust 侧命令** (src-tauri/src/):
 - `stream_fetch` → SSE 流式桥接 (reqwest stream + Tauri emit)
-- `stream_abort` → 取消流式请求 (oneshot channel)
-- `http_fetch` → 同步 HTTP (认证/会话 API, 返回 headers 含 set-cookie)
+- `stream_abort` → 取消流式请求
+- `http_fetch` → 同步 HTTP (认证/会话 API)
+- `start_agent` → 启动本地 vm-agent sidecar (spawn Node.js + 健康检查)
+- `stop_agent` → 停止 sidecar 进程
+- `agent_status` → 检查 sidecar 状态
 - `select_directory` → 原生文件夹选择对话框
-- `tar_directory` → 项目打包 tar.gz (排除 .git/node_modules 等)
-- `extract_tar` → 解压 tar.gz 到本地
-- `upload_cowork` → 上传 tar.gz 到网关
-- `download_cowork` → 下载变更 tar.gz
+- `tar_directory` / `extract_tar` / `upload_cowork` / `download_cowork` → 保留兼容
 
-**前端数据流**:
+**应用启动流程**:
 ```
-用户输入 → messages[] 追加 → stream_fetch(POST /v1/chat/completions)
-  请求体: { model, messages, stream: true, session_id }
-  请求头: Authorization: Bearer <BA_signed_cookie>
-                            → Rust reqwest → Go 网关 → vm-agent
-                            → emit("stream-response", chunk[]) 逐 chunk
-                            → parseSSE(content/tool_start/status/done)
-                            → 增量 Markdown 渲染 + 工具状态 + compaction/retry 提示
-                            → emit("stream-end") → 保存到网关会话 API
+1. 用户登录 (密码/激活码/飞书 SSO)
+2. 登录成功 → fetchAgentConfig() → 获取 LLM 配置
+3. invoke start_agent(agentDir, { LLM_PROXY_URL, LLM_PROXY_KEY })
+4. Tauri spawn Node.js 进程 → 轮询 /health (最多 10s)
+5. Agent 就绪 → 进入主界面
 ```
 
-**登录页**: 三种登录方式标签切换:
-- 密码登录: 邮箱 + 密码 → BA sign-in/email
-- 激活码: 激活码 + 用户名 + 密码 → auth-service /api/activate → 自动登录
-- 飞书 SSO: 按钮跳转 BA OAuth 流程
+**前端数据流 (React)**:
+```
+用户输入 → messages[] 追加
+  → stream_fetch(POST localhost:18789/v1/chat/events)
+    body: { model, message, session_id, workspace?, restricted: false }
+    → Rust reqwest → 本地 vm-agent → LLM 中转站
+    → emit("stream-response", chunk[])
+    → parseNativeSSE → AgentSessionEvent reducer → 增量 Markdown 渲染 + 工具状态
+    → emit("stream-end") → 保存到网关会话 API
+```
 
-**模型选择**: NewSession 组件提供 9 个模型下拉 (config.ts MODEL_OPTIONS)，选择后存储在会话对象上，ChatView 在每次请求中传递 `model` 字段，TopBar 显示当前模型徽章。
+**登录页**: 三种登录方式:
+- 密码登录: 邮箱 + 密码 → POST /api/auth/login
+- 激活码: 激活码 + 用户名 + 密码 → POST /api/auth/activate
+- 飞书 SSO: 跳转 Goth OAuth 流程
 
-**Cowork 模式**: 选择本地项目文件夹 → tar + 上传到网关 → 网关挂载到 LXD 容器 → Agent 可直接读写项目文件 → 对话结束后自动拉取变更到本地。
+**本地目录协作**: 输入栏可选择本地项目文件夹 → Agent 直接读写 → 零同步延迟。
 
 ---
 
@@ -318,30 +301,28 @@ API 端点:
 
 连接: `postgresql://postgres:***@trolley.proxy.rlwy.net:28177/railway`
 
-**Better Auth 管理的表** (自动创建，勿手动修改):
+**认证表** (Go 网关 + Goth 管理):
 
 | 表 | 说明 |
 |-----|------|
-| `user` | 用户 (id TEXT, name, email, role, banned, ...) |
-| `session` | 登录会话 (token, userId, expiresAt, ...) |
-| `account` | OAuth 绑定 |
-| `verification` | 验证令牌 |
+| `users` | 用户 (id TEXT PK, name, email, password_hash, role, feishu_open_id) |
+| `auth_sessions` | 登录会话 (token, user_id → users, expires_at, ip_address) |
 
-**Go 网关业务表** (`deploy/sql/001_init_business_tables.sql`):
+**业务表**:
 
 | 表 | 说明 |
 |-----|------|
-| `containers` | 用户→容器映射 (user_id TEXT, container_name, container_ip, container_token) |
-| `chat_sessions` | 聊天会话 (user_id TEXT, title, type, model, messages JSONB) |
+| `chat_sessions` | 聊天会话 (user_id TEXT, title, type, model, workspace_path, messages JSONB) |
 | `invite_codes` | 激活码 (code TEXT PK, role, max_uses, used_count, expires_at) |
 | `invite_code_usages` | 激活码使用记录 |
 | `audit_logs` | 审计日志 (user_id, action, resource_type, detail JSONB) |
+| `containers` | 容器映射 (保留，未来扩展) |
 
 **关键设计**:
-- `user_id` 全部为 TEXT 类型 (BA 使用 nanoid/随机字符串)
-- 聊天会话表名为 `chat_sessions` (避免与 BA 的 `session` 表冲突)
-- `messages` 使用 JSONB 存储，支持 GIN 索引
+- `user_id` 为 TEXT 类型 (gen_random_uuid()::text)
+- `messages` 使用 JSONB + GIN 索引
 - `updated_at` 由数据库触发器自动更新
+- 完整 schema 见 `deploy/sql/001_init_business_tables.sql`
 
 ---
 
@@ -353,136 +334,128 @@ API 端点:
 支持 4 种原生协议:
 - Claude: `POST /v1/messages` (Anthropic 原生)
 - GPT: `POST /v1/chat/completions` (OpenAI 原生)
-- Gemini: OpenAI 兼容 或 `POST /v1beta/models/{model}:generateContent`
+- Gemini: `POST /v1/chat/completions` (OpenAI 兼容)
 - Grok: `POST /v1/chat/completions` (OpenAI 兼容)
 
-全部用同一个 API Key，vm-agent 通过 `registerProvider()` 将同一 key 注入所有 provider。
+全部用同一个 API Key，vm-agent 通过 `registerProvider()` 注入所有 provider。
+
+网关通过 `GET /api/agent/config` 将密钥下发给桌面端，桌面端注入本地 sidecar 环境变量。
 
 ---
 
 ## 6. 基础设施
 
+### 生产环境 (Railway)
+
+| 服务 | 说明 |
+|------|------|
+| Go 网关 | Docker 容器，Dockerfile 在 `gateway/`，:8080 |
+| PostgreSQL | Railway 托管，内网连接 |
+
+**Railway 环境变量**:
+```
+GATEWAY_DATABASE_URL=postgresql://...@内网地址/railway
+GATEWAY_SERVER_PORT=8080
+GATEWAY_AUTH_ADMIN_TOKEN=<token>
+GATEWAY_AUTH_FEISHU_CLIENT_ID=<id>
+GATEWAY_AUTH_FEISHU_CLIENT_SECRET=<secret>
+GATEWAY_AUTH_SESSION_TTL_HOURS=720
+GATEWAY_LLM_PROXY_URL=http://67.230.171.248:8317
+GATEWAY_LLM_PROXY_KEY=<key>
+GATEWAY_SERVER_PUBLIC_URL=https://<railway-domain>
+```
+
+### 宿主机 (保留，LXD 未来扩展)
+
 | 项目 | 值 |
 |------|-----|
-| 宿主机 | 192.168.31.162 (Ubuntu 24.04, SSH: `ssh local`) |
-| 宿主机规格 | Ryzen 5 5600H (6C/12T), 62GB RAM, 1.9TB |
+| 地址 | 192.168.31.162 (Ubuntu 24.04, SSH: `ssh local`) |
+| 规格 | Ryzen 5 5600H (6C/12T), 62GB RAM, 1.9TB |
 | LXD 网络 | `jaconet` (10.10.10.0/24) |
-| VM 模板 | `tpl-openclaw` (运行中) |
+| VM 模板 | `tpl-openclaw` |
 | LLM 中转 | http://67.230.171.248:8317 |
-| PostgreSQL | Railway: trolley.proxy.rlwy.net:28177/railway |
-| 共享 Chat Agent | 192.168.31.162:18790, systemd: jacoworks-chat-agent.service |
-| Go 网关 | 192.168.31.162:8090, systemd: jacoworks-gateway.service |
-
-SSH 连接:
-- 宿主机: `ssh local`
-- 容器命令: `ssh local "lxc exec <container> -- <cmd>"`
-
-宿主机部署路径:
-- `/opt/jacoworks/gateway` — 网关二进制
-- `/opt/jacoworks/gateway.yaml` — 网关配置
-- `/opt/jacoworks/gateway-src/` — 网关源码 (用于在宿主机编译)
-- `/opt/jacoworks/auth-service/` — 认证服务 (Node.js)
-
-扩容: ≤60 人当前宿主机可承载 (1GB/VM) → 60-120 人扩容内存 → 120+ 人多节点 LXD 集群
-空闲策略: `lxc pause` 冻结 + 请求时自动唤醒
 
 ---
 
 ## 7. 环境变量
 
-### auth-service (.env)
-
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `DATABASE_URL` | PostgreSQL 连接串 | `postgresql://postgres:xxx@trolley.proxy.rlwy.net:28177/railway` |
-| `BETTER_AUTH_SECRET` | 加密密钥 (≥32字符) | 随机生成 |
-| `BETTER_AUTH_URL` | BA 服务地址 | `http://192.168.31.162:3100` |
-| `PORT` | HTTP 端口 | `3100` |
-| `FEISHU_CLIENT_ID` | 飞书应用 ID | 飞书开放平台获取 |
-| `FEISHU_CLIENT_SECRET` | 飞书应用密钥 | 飞书开放平台获取 |
-
-### gateway.yaml
+### gateway.yaml (本地开发) / Railway 环境变量 (生产)
 
 ```yaml
 server:
-  port: 8090
+  port: 8080
   host: "0.0.0.0"
+  public_url: "https://<domain>"
 auth:
   admin_token: "<admin-token>"
-  auth_service_url: "http://localhost:3100"
+  feishu_client_id: ""
+  feishu_client_secret: ""
+  session_ttl_hours: 720
 database:
   url: "postgresql://postgres:xxx@trolley.proxy.rlwy.net:28177/railway"
+llm:
+  proxy_url: "http://67.230.171.248:8317"
+  proxy_key: "<key>"
+# LXD 配置保留，本地 sidecar 模式下不使用
 lxd:
   ssh_target: "local"
   template: "tpl-openclaw"
   network: "jaconet"
   openclaw_port: 18789
-llm:
-  proxy_url: "http://67.230.171.248:8317"
-  proxy_key: "<key>"
 ```
 
-### vm-agent (.env)
+### vm-agent (.env，本地 sidecar 由 Tauri 注入)
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `LLM_PROXY_URL` | 中转站地址 | `http://67.230.171.248:8317` |
-| `LLM_PROXY_KEY` | 中转站密钥 (或 `ANTHROPIC_API_KEY`) | 必填 |
+| `LLM_PROXY_KEY` | 中转站密钥 | **由网关 /api/agent/config 下发** |
 | `PORT` | HTTP 端口 | `18789` |
-| `GATEWAY_TOKEN` | Go 网关 Bearer 认证 | 空 = 无认证 |
-| `WORKSPACE_DIR` | Agent 工作目录 | `process.cwd()` |
+| `WORKSPACE_DIR` | 默认工作目录 (可被请求级 workspace 覆盖) | `process.cwd()` |
 | `PRIMARY_MODEL` | 默认模型 | `claude-sonnet-4-6` |
 | `PRIMARY_PROVIDER` | 默认 Provider | `proxy-claude` |
-| `MEMORY_ENABLED` | 记忆系统开关 | `true` |
-| `HEARTBEAT_ENABLED` | 心跳服务开关 | `false` |
-| `HEARTBEAT_INTERVAL` | 心跳间隔 (ms/s/m/h) | `30m` |
-| `HEARTBEAT_ACTIVE_START` | 心跳活跃时段起始 | — |
-| `HEARTBEAT_ACTIVE_END` | 心跳活跃时段结束 | — |
-| `CRON_ENABLED` | Cron 服务开关 | `false` |
-| `SKILLS_PATHS` | 技能目录 (逗号分隔) | `/shared/skills,/workspace/skills` |
-| `TOOL_DENY_LIST` | 禁用工具 (逗号分隔) | — |
+| `MEMORY_ENABLED` | 记忆系统 | `true` |
+| `HEARTBEAT_ENABLED` | 心跳 (sidecar 模式关闭) | `false` |
+| `CRON_ENABLED` | 定时任务 (sidecar 模式关闭) | `false` |
+| `SKILLS_PATHS` | 技能目录 | `/shared/skills,/workspace/skills` |
+| `TOOL_DENY_LIST` | 静态禁用工具 (请求级 restricted 优先) | — |
 | `TAVILY_API_KEY` | Web 搜索 (可选) | — |
 
 ### desktop (config.ts)
 
 | 常量 | 说明 | 值 |
 |------|------|-----|
-| `GATEWAY_URL` | 网关地址 | `http://192.168.31.162:8090` |
-| `AUTH_URL` | 认证服务地址 | `http://192.168.31.162:3100` |
+| `GATEWAY_URL` | 网关地址 | `http://api.xiaomao.chat:8090` (或 Railway 域名) |
+| `AGENT_URL` | 本地 sidecar | `http://localhost:18789` |
 
 ---
 
 ## 8. 已完成 & 待完成
 
 ### ✅ 已完成
-- [x] vm-agent 全功能实现 (Pi SDK session + 4 Provider + memory + heartbeat + cron)
-- [x] vm-agent 集成测试通过 (16 tests)
-- [x] Go 网关 v1 (JWT + SQLite + 代理 + 会话 CRUD + Cowork + LXD 管理)
-- [x] 桌面端核心 UI (登录/聊天/会话管理/Cowork)
-- [x] 桌面端 SSE 解析器修复 (支持工具/compaction/retry 注释事件)
-- [x] 桌面端模型选择器 (9 模型，NewSession→ChatView→TopBar 全链路)
-- [x] 桌面端 session_id 传递 (不同会话隔离 Pi SDK Agent 上下文)
-- [x] 桌面端工具状态标签修正 (匹配 Pi SDK 内置工具名)
-- [x] 端到端 SSE 流式联调通过 (桌面端→网关→vm-agent→LLM)
-- [x] **认证系统迁移**: SQLite JWT → PostgreSQL + Better Auth
-- [x] **auth-service 微服务**: Better Auth + 飞书 SSO 结构 + 激活码
-- [x] **Go 网关 v2**: pgx/v5 + BA session 验证 + 激活码管理 API
-- [x] **桌面端 v2**: 三种登录方式 + BA 签名 cookie + 新 LoginPage
-- [x] **PostgreSQL 部署**: Railway, 9 张表 (4 BA + 5 业务)
-- [x] **全栈部署**: auth-service + 网关 + 桌面端适配均已上线
-- [x] **双模式路由**: Chat → 共享 agent (restricted), Cowork → per-user 容器 (full tools)
-- [x] **共享 Chat Agent**: 宿主机 :18790, TOOL_DENY_LIST=bash,edit,write,read,grep,find,ls
-- [x] **Cowork 自助分配**: 用户首次进入 cowork 自动分配容器 (无需 admin)
+- [x] vm-agent 全功能 (Pi SDK session + 4 Provider + memory + heartbeat + cron)
+- [x] vm-agent 支持 per-request workspace（可选）+ restricted 字段兼容
+- [x] Go 网关 Goth 认证 (飞书 SSO + bcrypt 密码 + 激活码 + session 管理)
+- [x] Go 网关会话 CRUD + 管理 API + agent/config 端点
+- [x] Go 网关 Dockerfile (Railway 部署就绪)
+- [x] PostgreSQL schema (Goth auth + 业务表，deploy/sql/)
+- [x] Tauri sidecar 管理 (start_agent/stop_agent/agent_status)
+- [x] 桌面端登录后自动启动本地 Agent
+- [x] 桌面端统一会话请求打本地 AGENT_URL
+- [x] 输入栏可选本地目录并直接读写文件（无 tar/上传/下载）
+- [x] 桌面端核心 UI (登录/聊天/会话管理/模型选择)
+- [x] 原生事件流解析 (session_event/done + tool/retry/compaction 状态)
+- [x] 端到端联调通过 (桌面端 → 本地 agent → LLM)
 
 ### 🔲 待完成
+- [ ] Railway 部署 (网关 + PostgreSQL)
 - [ ] 飞书 SSO 联调 (需飞书开放平台应用凭证)
-- [ ] 创建 `tpl-pi-agent` VM 模板，替代 tpl-openclaw
+- [ ] vm-agent 编译为单二进制 (bun build --compile)，打包进 Tauri
 - [ ] 向量记忆系统 (Pi Extension + SQLite-vec)
 - [ ] 技能植入 (Pi Extension `context` 事件注入 SKILL.md)
-- [ ] 飞书 Webhook 接入 (Go 网关 + 飞书 Bot SDK)
 - [ ] system prompt 定制 (AGENTS.md/SOUL.md 注入)
-- [ ] Nginx TLS + 安全加固
-- [ ] 灰度发布
+- [ ] TLS + 安全加固 (Railway 自带 HTTPS)
+- [ ] LXD 远程容器模式 (保留代码，按需启用)
 
 ---
 
@@ -490,21 +463,22 @@ llm:
 
 - Go: 标准风格 + `golangci-lint`
 - TypeScript: strict mode, ES2022, NodeNext 模块
-- Frontend: Svelte 5 runes + TypeScript, 纯 CSS 变量主题, 设计 Token 系统 (见下方)
+- Frontend: React 18 + TypeScript (Vite), 纯 CSS 变量主题, 设计 Token 系统 (见下方)
 - Rust: Tauri v2 命令, reqwest + futures-util, serde
 - 提交: Conventional Commits (`feat:`, `fix:`, `docs:`)
 - 分支: `main` (生产) / `develop` / `feature/*`
 - 安全: `.gitignore` 保护所有敏感文件 (`.env`, `gateway.yaml`, `data/`)
 
 ### 关键约束
-- **Better Auth 优先**: 认证相关逻辑全部由 auth-service 处理，网关仅验证 session
-- **签名 Cookie**: 桌面端存储 BA 签名 cookie (token.signature)，以 Bearer 传给网关，网关以 Cookie 转发给 BA
-- **user_id 为 string**: BA 使用随机字符串 ID，所有 user_id 字段均为 TEXT 类型
-- **Pi SDK 优先**: 使用 Pi SDK 原生功能，不要重建已有能力
-- **SSE 兼容**: vm-agent SSE 流包含 `data:` 行 (OpenAI 格式) + `:` 注释行 (工具/compaction/retry 状态)
-- **Session 隔离**: 桌面端每个会话必须传 `session_id`，vm-agent 按此隔离 Pi SDK session
-- **模型路由**: `model` 字段支持 `"model-id"` (自动匹配) 或 `"provider/model-id"` (显式指定)
-- **chat_sessions**: 聊天会话表名为 `chat_sessions`，避免与 BA 的 `session` 表冲突
+- **本地 Agent 优先**: 统一会话请求打本地 sidecar (localhost:18789)，不经网关
+- **网关仅管控面**: 认证、会话 CRUD、管理 API、LLM 配置下发
+- **Goth 认证**: 飞书 SSO + bcrypt 密码 + 激活码，网关内集成，无独立认证服务
+- **user_id 为 TEXT**: gen_random_uuid()::text
+- **Pi SDK 优先**: 使用 Pi SDK 原生功能，不重建已有能力
+- **事件流优先**: 首选 `/v1/chat/events` 原生 `session_event`；`/v1/chat/completions` 仅作兼容
+- **Session 隔离**: 每个会话传 `session_id`，vm-agent 按此隔离 Pi SDK session
+- **请求字段约定**: `restricted` 当前固定 `false`（开放工具），`workspace` 可选用于限定工作目录
+- **模型路由**: `"model-id"` (自动匹配) 或 `"provider/model-id"` (显式指定)
 
 ### 设计语言 (Design Token System) — 强制约束
 
@@ -513,12 +487,12 @@ llm:
 **设计风格**: Claude.ai 暖色奶油主题 — `#F5F0EB` 主背景、`#C4724A` 陶土强调色、白色卡片、柔和阴影、大圆角。
 
 **必须遵守**:
-1. **禁止魔法数字**: 所有 `padding`/`margin`/`gap` 必须用 `--space-*` (15 级, 2px 递增)；`font-size` 用 `--text-*` (10 级)；`font-weight` 用 `--font-*`；`border-radius` 用 `--radius-*`；`z-index` 用 `--z-*`；`transition` 时长用 `--duration-*`
-2. **颜色必须使用变量**: 禁止在组件 `<style>` 中硬编码 `#hex` / `rgb()` / `rgba()` 颜色值
+1. **禁止魔法数字**: 所有 `padding`/`margin`/`gap` 必须用 `--space-*`；`font-size` 用 `--text-*`；`font-weight` 用 `--font-*`；`border-radius` 用 `--radius-*`；`z-index` 用 `--z-*`；`transition` 时长用 `--duration-*`
+2. **颜色必须使用变量**: 禁止在组件 `<style>` 中硬编码 `#hex` / `rgb()` / `rgba()`
 3. **白色文字统一**: 强调色/危险色背景上的白色文字用 `var(--text-on-accent)`
-4. **Token 类别不混用**: `--space-*` 仅用于间距，`--radius-*` 仅用于圆角，`--shadow-sm`/`--shadow-md` 是完整声明，`--shadow-color` 是纯颜色值
-5. **组件尺寸标准化**: 按钮/头像/图标使用 `--size-*` token (btn-sm/btn/btn-lg, avatar-sm/avatar, icon-sm/icon/icon-lg)
+4. **Token 类别不混用**: `--space-*` 仅间距，`--radius-*` 仅圆角
+5. **组件尺寸标准化**: 按钮/头像/图标使用 `--size-*` token
 
-**允许的例外**: `0`/`auto`/百分比、`1px` 边框宽度、`opacity` 值、`em` 相对值、SVG 属性、`@keyframes` 动画参数、组件唯一的一次性约束 (如 `max-width: 200px`)
+**允许的例外**: `0`/`auto`/百分比、`1px` 边框宽度、`opacity` 值、`em` 相对值、SVG 属性、`@keyframes` 参数
 
-**新增 Token 流程**: 优先对齐最近的现有 token → 如确需新值，添加到 `app.css :root` 并同步更新 `docs/design-system.md`
+**新增 Token**: 优先对齐最近的现有 token → 如确需新值，添加到 `app.css :root` 并同步 `docs/design-system.md`

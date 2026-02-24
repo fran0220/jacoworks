@@ -103,6 +103,9 @@ func main() {
 	mux.Handle("PUT /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(updateSessionHandler(s))))
 	mux.Handle("DELETE /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteSessionHandler(s))))
 
+	// Authenticated: agent config
+	mux.Handle("GET /api/agent/config", authMiddleware.Authenticate(http.HandlerFunc(agentConfigHandler(cfg))))
+
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
 	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, lxdClient, auditLogger, cfg))))
@@ -521,6 +524,31 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			"status":         "ready",
 			"container_name": containerName,
 			"ip":             ip,
+		})
+	}
+}
+
+func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"llm_proxy_url": cfg.LLM.ProxyURL,
+			"llm_proxy_key": cfg.LLM.ProxyKey,
+			"models": []map[string]string{
+				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
+				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
+				{"id": "claude-haiku-4-5-20251001", "provider": "proxy-claude", "label": "Haiku 4.5"},
+				{"id": "gpt-5.3-codex", "provider": "proxy-gpt", "label": "GPT-5.3 Codex"},
+				{"id": "gpt-5.2", "provider": "proxy-gpt", "label": "GPT-5.2"},
+				{"id": "gemini-3.1-pro-preview", "provider": "proxy-gemini", "label": "Gemini 3.1 Pro"},
+				{"id": "gemini-3-flash-preview", "provider": "proxy-gemini", "label": "Gemini 3 Flash"},
+				{"id": "grok-4.20-beta", "provider": "proxy-grok", "label": "Grok 4.20"},
+				{"id": "grok-4.1-fast", "provider": "proxy-grok", "label": "Grok 4.1 Fast"},
+			},
 		})
 	}
 }

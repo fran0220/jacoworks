@@ -1,19 +1,16 @@
 [Unit]
 Description=JAcoworks Management Gateway
-After=network.target lxd.service
-Wants=lxd.service
+After=network.target postgresql.service lxd.service
+Wants=postgresql.service lxd.service
 
 [Service]
 Type=simple
 User=root
-ExecStart=/opt/jacoworks/gateway -config /opt/jacoworks/gateway.yaml
+ExecStart=/opt/jacoworks/gateway /opt/jacoworks/gateway.yaml
 WorkingDirectory=/opt/jacoworks
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
-
-Environment=GATEWAY_AUTH_JWT_SECRET=change-me-in-production
-Environment=GATEWAY_AUTH_ADMIN_TOKEN=admin-bootstrap-token
 
 [Install]
 WantedBy=multi-user.target

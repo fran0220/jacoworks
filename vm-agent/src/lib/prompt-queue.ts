@@ -3,6 +3,10 @@ export interface PromptQueue {
   isProcessing(): boolean;
 }
 
+export interface PromptQueueOptions {
+  timeoutMs?: number; // default 300_000 (5min)
+}
+
 interface QueueItem {
   prompt: string;
   resolve: (result: string) => void;
@@ -11,7 +15,9 @@ interface QueueItem {
 
 export function createPromptQueue(
   executeFn: (prompt: string) => Promise<string>,
+  options?: PromptQueueOptions,
 ): PromptQueue {
+  const timeoutMs = options?.timeoutMs ?? 300_000;
   const queue: QueueItem[] = [];
   let processing = false;
 
@@ -21,7 +27,12 @@ export function createPromptQueue(
 
     const item = queue.shift()!;
     try {
-      const result = await executeFn(item.prompt);
+      const result = await Promise.race([
+        executeFn(item.prompt),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Prompt timeout after ${timeoutMs}ms`)), timeoutMs),
+        ),
+      ]);
       item.resolve(result);
     } catch (err) {
       item.reject(err instanceof Error ? err : new Error(String(err)));

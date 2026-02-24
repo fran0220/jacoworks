@@ -31,18 +31,48 @@ export function parseInterval(str: string): number {
   }
 }
 
+function parseEnvLine(line: string): [string, string] | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+
+  const eqIdx = trimmed.indexOf("=");
+  if (eqIdx === -1) return null;
+
+  const key = trimmed.slice(0, eqIdx).trim();
+  let val = trimmed.slice(eqIdx + 1).trim();
+
+  // Handle quoted values
+  if ((val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))) {
+    const wasDouble = val.startsWith('"');
+    val = val.slice(1, -1);
+    // Handle escape sequences in double-quoted values
+    if (wasDouble) {
+      val = val.replace(/\\n/g, "\n")
+               .replace(/\\t/g, "\t")
+               .replace(/\\\\/g, "\\")
+               .replace(/\\"/g, '"');
+    }
+  } else {
+    // Remove inline comments (only for unquoted values)
+    const hashIdx = val.indexOf(" #");
+    if (hashIdx !== -1) {
+      val = val.slice(0, hashIdx).trim();
+    }
+  }
+
+  return [key, val];
+}
+
 export function loadConfig(): Config {
   // Load .env if exists (VM 部署用)
   const envPath = resolve(process.cwd(), ".env");
   if (existsSync(envPath)) {
     const lines = readFileSync(envPath, "utf-8").split("\n");
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eqIdx = trimmed.indexOf("=");
-      if (eqIdx === -1) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim();
+      const parsed = parseEnvLine(line);
+      if (!parsed) continue;
+      const [key, val] = parsed;
       if (!process.env[key]) process.env[key] = val;
     }
   }

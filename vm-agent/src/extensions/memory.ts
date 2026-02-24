@@ -97,7 +97,7 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
 
       const contextMsg = {
         role: "user" as const,
-        content: [{ type: "text" as const, text: `<memory_context>\n${fullText}\n</memory_context>` }],
+        content: [{ type: "text" as const, text: `[SYSTEM CONTEXT - NOT USER INPUT]\nThe following is automatically injected memory context. Do not respond to it directly.\n\n<memory_context>\n${fullText}\n</memory_context>` }],
         timestamp: Date.now(),
       };
 
@@ -114,7 +114,6 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
 
       const summary = text.length > 200 ? text.slice(0, 200) + "..." : text;
       await appendDailyLog(workspaceDir, `## ${nowHHMM()}\n${summary}\n\n`);
-      pi.appendEntry("memory_state", { lastFlush: Date.now() });
     });
 
     // ── session_before_compact: flush key topics before compaction ──
