@@ -340,6 +340,18 @@ export default function ChatView({
           <MessageBubble key={`${index}-${message.role}`} message={message} />
         ))}
 
+        {streaming && blocks.length === 0 && (
+          <div className="bubble-row assistant">
+            <div className="bubble assistant-bubble">
+              <div className="typing-indicator">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+              </div>
+            </div>
+          </div>
+        )}
+
         {streaming && blocks.length > 0 && blocks.map((block, i) => {
           if (block.type === "text") {
             const isLastText = i === lastStreamingTextIndex;

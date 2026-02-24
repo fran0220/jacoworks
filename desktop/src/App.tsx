@@ -34,10 +34,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 export default function App() {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isMobileLike, setIsMobileLike] = useState(() =>
     typeof window !== "undefined" ? window.matchMedia("(max-width: 1023px)").matches : false,
   );
+  const [isSidebarOpen, setIsSidebarOpen] = useState(!isMobileLike);
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -59,6 +59,8 @@ export default function App() {
     const mediaQuery = window.matchMedia("(max-width: 1023px)");
     const handleChange = (event: MediaQueryListEvent) => {
       setIsMobileLike(event.matches);
+      // Desktop: auto-open sidebar; Mobile: auto-close
+      setIsSidebarOpen(!event.matches);
     };
 
     setIsMobileLike(mediaQuery.matches);
@@ -70,7 +72,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isSidebarOpen) return;
+    if (!isSidebarOpen || !isMobileLike) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsSidebarOpen(false);
@@ -81,7 +83,7 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isSidebarOpen]);
+  }, [isSidebarOpen, isMobileLike]);
 
   async function refreshSessions() {
     if (!isAuthenticated()) return;
