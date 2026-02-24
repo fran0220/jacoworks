@@ -45,6 +45,45 @@ export default function ChatView({
   const blocksRef = useRef<StreamBlock[]>([]);
   const streamBaseRef = useRef<ChatMessage[]>([]);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const blocksRenderRafRef = useRef<number | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  const isNearBottom = (container: HTMLDivElement) => {
+    const remaining = container.scrollHeight - container.scrollTop - container.clientHeight;
+    return remaining <= 96;
+  };
+
+  const cancelRenderFrame = () => {
+    if (blocksRenderRafRef.current !== null) {
+      window.cancelAnimationFrame(blocksRenderRafRef.current);
+      blocksRenderRafRef.current = null;
+    }
+  };
+
+  const cancelScrollFrame = () => {
+    if (scrollRafRef.current !== null) {
+      window.cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = null;
+    }
+  };
+
+  const scheduleBlocksRender = () => {
+    if (blocksRenderRafRef.current !== null) return;
+    blocksRenderRafRef.current = window.requestAnimationFrame(() => {
+      blocksRenderRafRef.current = null;
+      setBlocks([...blocksRef.current]);
+    });
+  };
+
+  const scheduleScrollToBottom = () => {
+    if (!stickToBottomRef.current || scrollRafRef.current !== null) return;
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      if (!messagesRef.current) return;
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    });
+  };
 
   useEffect(() => {
     setLocalSession(session);
@@ -55,10 +94,25 @@ export default function ChatView({
     [localSession.messages],
   );
 
+  const lastStreamingTextIndex = useMemo(() => {
+    for (let index = blocks.length - 1; index >= 0; index--) {
+      if (blocks[index]?.type === "text") {
+        return index;
+      }
+    }
+    return -1;
+  }, [blocks]);
+
   useEffect(() => {
-    if (!messagesRef.current) return;
-    messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    scheduleScrollToBottom();
   }, [visibleMessages, blocks]);
+
+  useEffect(() => {
+    return () => {
+      cancelRenderFrame();
+      cancelScrollFrame();
+    };
+  }, []);
 
   useEffect(() => {
     if (!pendingMessage || streaming) return;
@@ -86,9 +140,11 @@ export default function ChatView({
 
     setStreaming(true);
     setBlocks([]);
+    cancelRenderFrame();
     blocksRef.current = [];
     streamBaseRef.current = nextMessages;
     abortedRef.current = false;
+    stickToBottomRef.current = true;
 
     try {
       const currentUser = getUser();
@@ -132,7 +188,7 @@ export default function ChatView({
             } else {
               blocksRef.current.push({ type: "text", content: ame.delta });
             }
-            setBlocks([...blocksRef.current]);
+            scheduleBlocksRender();
           } else if (ame?.type === "thinking_delta" && ame.delta) {
             const last = blocksRef.current[blocksRef.current.length - 1];
             if (last?.type === "thinking") {
@@ -140,7 +196,7 @@ export default function ChatView({
             } else {
               blocksRef.current.push({ type: "thinking", content: ame.delta });
             }
-            setBlocks([...blocksRef.current]);
+            scheduleBlocksRender();
           }
         }
 
@@ -151,7 +207,7 @@ export default function ChatView({
             name: String(event.toolName || "tool"),
             status: "running",
           });
-          setBlocks([...blocksRef.current]);
+          scheduleBlocksRender();
         }
 
         if (event.type === "tool_execution_end") {
@@ -166,7 +222,7 @@ export default function ChatView({
               break;
             }
           }
-          setBlocks([...blocksRef.current]);
+          scheduleBlocksRender();
         }
 
         if (event.type === "auto_compaction_start") {
@@ -174,7 +230,7 @@ export default function ChatView({
             type: "status",
             text: `上下文压缩中 (${String(event.reason || "auto")})`,
           });
-          setBlocks([...blocksRef.current]);
+          scheduleBlocksRender();
         }
 
         if (event.type === "auto_retry_start") {
@@ -182,7 +238,7 @@ export default function ChatView({
             type: "status",
             text: `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
           });
-          setBlocks([...blocksRef.current]);
+          scheduleBlocksRender();
         }
       }
 
@@ -196,6 +252,7 @@ export default function ChatView({
     } finally {
       sendLockRef.current = false;
       setStreaming(false);
+      cancelRenderFrame();
       setBlocks([]);
       blocksRef.current = [];
     }
@@ -250,8 +307,14 @@ export default function ChatView({
 
     sendLockRef.current = false;
     setStreaming(false);
+    cancelRenderFrame();
     setBlocks([]);
     blocksRef.current = [];
+  };
+
+  const handleMessagesScroll = () => {
+    if (!messagesRef.current) return;
+    stickToBottomRef.current = isNearBottom(messagesRef.current);
   };
 
   const handleWorkspaceChange = (workspacePath: string) => {
@@ -266,7 +329,7 @@ export default function ChatView({
 
   return (
     <div className="chat-view">
-      <div className="messages" ref={messagesRef}>
+      <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {visibleMessages.length === 0 && !streaming && (
           <div className="empty-state">
             <p>发送消息开始对话</p>
@@ -279,7 +342,7 @@ export default function ChatView({
 
         {streaming && blocks.length > 0 && blocks.map((block, i) => {
           if (block.type === "text") {
-            const isLastText = !blocks.slice(i + 1).some((b) => b.type === "text");
+            const isLastText = i === lastStreamingTextIndex;
             return (
               <div key={`stream-text-${i}`} className="bubble-row assistant">
                 <div className="bubble assistant-bubble">

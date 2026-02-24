@@ -174,11 +174,36 @@
 
 ## 9. 动画
 
+### 时长
+
 | Token | 值 | 用途 |
 |-------|-----|------|
 | `--duration-fast` | `0.12s` | 快速反馈（列表项 hover） |
 | `--duration-normal` | `0.15s` | 标准过渡（按钮、tab） |
 | `--duration-slow` | `0.2s` | 慢过渡（表单焦点、drawer 滑出） |
+| `--duration-reduced` | `0.01ms` | 减少动画偏好下的降级过渡 |
+
+### 曲线
+
+| Token | 值 | 用途 |
+|-------|-----|------|
+| `--ease-standard` | `cubic-bezier(0.2, 0, 0, 1)` | 常规反馈（按钮、hover） |
+| `--ease-emphasized` | `cubic-bezier(0.2, 0.8, 0.2, 1)` | 结构切换（drawer、面板） |
+| `--ease-linear` | `linear` | 连续旋转（spinner） |
+| `--ease-step-end` | `step-end` | 光标闪烁 |
+
+### 交互动画规范矩阵
+
+| 场景 | duration | easing | 属性白名单 |
+|------|----------|--------|------------|
+| 按钮/控件 hover、focus | `--duration-fast` | `--ease-standard` | `background-color`, `color`, `border-color`, `opacity` |
+| 结构开合（drawer、面板） | `--duration-slow` | `--ease-emphasized` | `transform`, `opacity` |
+| 加载指示器（spinner） | `0.8s - 0.9s` | `--ease-linear` | `transform` |
+| 光标闪烁 | `1s` | `--ease-step-end` | `opacity` |
+
+说明：
+- 交互动效默认不动画 `width`、`height`、`top`、`left`、`box-shadow` 等高成本属性。
+- 新组件必须先对照矩阵选场景，再写具体 `transition`/`animation` 声明。
 
 ---
 
@@ -186,9 +211,11 @@
 
 ### 必须遵守
 
-1. **禁止魔法数字**：所有 `padding`、`margin`、`gap`、`font-size`、`font-weight`、`border-radius`、`z-index`、`transition` duration 必须使用 token
+1. **禁止魔法数字**：所有 `padding`、`margin`、`gap`、`font-size`、`font-weight`、`border-radius`、`z-index`、`transition` duration/timing-function 必须使用 token
 2. **颜色必须使用变量**：禁止在组件 `<style>` 中硬编码颜色值
 3. **白色文字用 `--text-on-accent`**：在强调色/危险色背景上的白色文字统一使用 `var(--text-on-accent)`
+4. **禁止 `transition: all`**：必须明确声明动画属性（如 `background-color`、`color`、`border-color`、`opacity`、`transform`）
+5. **遵循 reduced-motion**：新增动画需兼容 `@media (prefers-reduced-motion: reduce)`
 
 ### 允许的例外
 

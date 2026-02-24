@@ -34,6 +34,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 export default function App() {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isMobileLike, setIsMobileLike] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(max-width: 1023px)").matches : false,
+  );
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -50,6 +54,34 @@ export default function App() {
   useEffect(() => {
     handleOAuthCallback().catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 1023px)");
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsMobileLike(event.matches);
+    };
+
+    setIsMobileLike(mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleChange);
+
+    return () => {
+      mediaQuery.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isSidebarOpen]);
 
   async function refreshSessions() {
     if (!isAuthenticated()) return;
@@ -175,11 +207,33 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {isSidebarOpen && isMobileLike && (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="关闭会话列表"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
       <Sidebar
+        open={isSidebarOpen}
+        mobileLike={isMobileLike}
         sessions={sessions}
         currentSessionId={currentSessionId}
-        onSelect={(sessionId) => setCurrentSessionId(sessionId)}
-        onNew={() => setCurrentSessionId(null)}
+        onSelect={(sessionId) => {
+          setCurrentSessionId(sessionId);
+          if (isMobileLike) {
+            setIsSidebarOpen(false);
+          }
+        }}
+        onNew={() => {
+          setCurrentSessionId(null);
+          if (isMobileLike) {
+            setIsSidebarOpen(false);
+          }
+        }}
+        onClose={() => setIsSidebarOpen(false)}
         onDelete={async (sessionId) => {
           await deleteSession(sessionId);
           await refreshSessions();
@@ -190,7 +244,11 @@ export default function App() {
       />
 
       <div className="main-area">
-        <TopBar title={title} />
+        <TopBar
+          title={title}
+          sidebarOpen={isSidebarOpen}
+          onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
+        />
 
         {currentSession ? (
           <ChatView

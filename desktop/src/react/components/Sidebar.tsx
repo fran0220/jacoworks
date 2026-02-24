@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import type { ChatSession } from "../types";
 
 function formatDate(timestamp: number): string {
@@ -15,21 +15,42 @@ function stripMarkdown(text: string): string {
 }
 
 export default function Sidebar({
+  open,
+  mobileLike,
   sessions,
   currentSessionId,
   onSelect,
   onNew,
+  onClose,
   onDelete,
 }: {
+  open: boolean;
+  mobileLike: boolean;
   sessions: ChatSession[];
   currentSessionId: string | null;
   onSelect: (sessionId: string) => void;
   onNew: () => void;
+  onClose: () => void;
   onDelete: (sessionId: string) => void;
 }) {
   return (
-    <aside className="sidebar">
-      <button className="btn-new" onClick={onNew}>
+    <aside
+      id="chat-sidebar"
+      className={`sidebar ${open ? "open" : ""} ${mobileLike ? "mobile-like" : "desktop-like"}`}
+    >
+      <div className="sidebar-head">
+        <h2 className="sidebar-title">会话历史</h2>
+        <button
+          type="button"
+          className="sidebar-close"
+          aria-label="关闭会话列表"
+          onClick={onClose}
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <button className="btn-new" onClick={onNew} type="button">
         <Plus size={14} />
         新会话
       </button>
@@ -46,6 +67,7 @@ export default function Sidebar({
               <span className="session-date">{formatDate(session.updatedAt)}</span>
               <button
                 className="btn-delete"
+                type="button"
                 onClick={(event) => {
                   event.stopPropagation();
                   if (window.confirm("确认删除该会话？")) {

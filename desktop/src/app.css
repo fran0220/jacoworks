@@ -10,7 +10,8 @@
 	--bg-active: #E5E0DA;
 	--bg-error: rgba(224, 80, 80, 0.15);
 	--bg-badge: rgba(196, 114, 74, 0.12);
-	--bg-code: #0d1117;
+	--bg-backdrop: rgba(26, 26, 26, 0.28);
+        --bg-code: #0d1117;
 
 	/* 文字 */
 	--text-primary: #1A1A1A;
@@ -121,6 +122,13 @@
 	--duration-fast: 0.12s;
 	--duration-normal: 0.15s;
 	--duration-slow: 0.2s;
+        --duration-reduced: 0.01ms;
+
+        /* ===== Motion Curves ===== */
+        --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+        --ease-emphasized: cubic-bezier(0.2, 0.8, 0.2, 1);
+        --ease-linear: linear;
+        --ease-step-end: step-end;
 }
 
 * {
