@@ -5,7 +5,7 @@ import type {
   SessionMessageEntry,
 } from "@mariozechner/pi-coding-agent";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename } from "node:path";
 import {
   readMemoryMd,
   readDailyLog,
@@ -16,11 +16,17 @@ import {
 
 const MAX_INJECTION_CHARS = 3000;
 
-export const MEMORY_SYSTEM_PROMPT = `[Memory System]
-You have access to a persistent memory system:
-- memory_search: Search past daily logs by keyword (simple grep, for advanced search use the built-in grep tool on memory/*.md)
-- memory_save: Save important facts to MEMORY.md (long-term curated memory)
-Use these tools proactively to remember user preferences, project context, and decisions.`;
+const LOW_SIGNAL_PREFIX_PATTERNS = [
+  /^hi[!,.\s]/i,
+  /^hello[!,.\s]/i,
+  /^what can i help you with today\??/i,
+  /^how can i help you today\??/i,
+  /^what are you working on today/i,
+  /^what do you want to work on right now/i,
+  /^你好[！!，,\s]*/,
+  /^嗨[！!，,\s]*/,
+  /^您好[！!，,\s]*/,
+];
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -58,6 +64,18 @@ function nowHHMM(): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+function shouldPersistAssistantSummary(text: string): boolean {
+  const normalized = text
+    .replace(/[`*_~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return false;
+  if (normalized.length < 24) return false;
+
+  return !LOW_SIGNAL_PREFIX_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 // ─── Tool Parameter Schemas ─────────────────────────
 
 const SearchParams = Type.Object({
@@ -76,19 +94,19 @@ const SaveParams = Type.Object({
 
 // ─── Extension Factory ──────────────────────────────
 
-export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
+export function createMemoryExtension(memoryRootDir: string): ExtensionFactory {
   return (pi) => {
     // ── context: prepend memory summary before existing messages ──
     pi.on("context", async (event) => {
       const parts: string[] = [];
 
-      const longTerm = await readMemoryMd(workspaceDir, 2000);
+      const longTerm = await readMemoryMd(memoryRootDir, 2000);
       if (longTerm) parts.push(`### Long-term Memory (MEMORY.md)\n${longTerm}`);
 
-      const todayLog = await readDailyLog(workspaceDir, new Date(), 30);
+      const todayLog = await readDailyLog(memoryRootDir, new Date(), 30);
       if (todayLog) parts.push(`### Today's Log\n${todayLog}`);
 
-      const yesterdayLog = await readDailyLog(workspaceDir, yesterday(), 10);
+      const yesterdayLog = await readDailyLog(memoryRootDir, yesterday(), 10);
       if (yesterdayLog) parts.push(`### Yesterday's Log\n${yesterdayLog}`);
 
       if (parts.length === 0) return {};
@@ -113,7 +131,8 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
       if (!text) return;
 
       const summary = text.length > 200 ? text.slice(0, 200) + "..." : text;
-      await appendDailyLog(workspaceDir, `## ${nowHHMM()}\n${summary}\n\n`);
+      if (!shouldPersistAssistantSummary(summary)) return;
+      await appendDailyLog(memoryRootDir, `## ${nowHHMM()}\n${summary}\n\n`);
     });
 
     // ── session_before_compact: flush key topics before compaction ──
@@ -139,7 +158,7 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
       if (topics.length > 0) {
         const summary = topics.slice(0, 5).join("\n- ");
         await appendDailyLog(
-          workspaceDir,
+          memoryRootDir,
           `## ${nowHHMM()} — Compaction Summary\nTopics discussed:\n- ${summary}\n\n`,
         );
       }
@@ -152,7 +171,7 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
       name: "memory_search",
       label: "Memory Search",
       description:
-        "Search daily memory logs by keyword. Returns matching lines with date context. For advanced search, use the built-in grep tool on memory/*.md files.",
+        "Search daily memory logs by keyword. Returns matching lines with date context.",
       parameters: SearchParams,
       execute: async (_toolCallId, params: Static<typeof SearchParams>) => {
         const days = params.days ?? 7;
@@ -171,7 +190,7 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
         for (let i = 0; i < days; i++) {
           const date = new Date(now);
           date.setDate(date.getDate() - i);
-          const logPath = getDailyLogPath(workspaceDir, date);
+          const logPath = getDailyLogPath(memoryRootDir, date);
 
           let content: string;
           try {
@@ -180,7 +199,7 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
             continue;
           }
 
-          const dateStr = logPath.split("/").pop()!.replace(".md", "");
+          const dateStr = basename(logPath, ".md");
           const lines = content.split("\n");
           for (const line of lines) {
             const lower = line.toLowerCase();
@@ -210,7 +229,7 @@ export function createMemoryExtension(workspaceDir: string): ExtensionFactory {
         "Save important information to MEMORY.md (long-term curated memory). Use section parameter to organize under headings.",
       parameters: SaveParams,
       execute: async (_toolCallId, params: Static<typeof SaveParams>) => {
-        await appendMemoryMd(workspaceDir, params.content, params.section);
+        await appendMemoryMd(memoryRootDir, params.content, params.section);
         return {
           content: [
             {

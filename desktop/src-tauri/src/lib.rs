@@ -8,8 +8,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            stream::stream_fetch,
-            stream::stream_abort,
             stream::http_fetch,
             cowork::select_directory,
             cowork::tar_directory,
@@ -17,6 +15,7 @@ pub fn run() {
             cowork::upload_cowork,
             cowork::download_cowork,
             sidecar::start_agent,
+            sidecar::agent_rpc_send,
             sidecar::stop_agent,
             sidecar::agent_status,
         ])

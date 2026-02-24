@@ -1,7 +1,5 @@
 export const GATEWAY_URL =
-  import.meta.env.VITE_GATEWAY_URL || "https://gateway-production-8582.up.railway.app";
-
-export const AGENT_URL = "http://localhost:18789";
+  import.meta.env.VITE_GATEWAY_URL || "http://api.xiaomao.chat:8090";
 
 export const DEFAULT_MODEL = "proxy-claude/claude-sonnet-4-6";
 

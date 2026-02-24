@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import {
   createAgentSession,
   SessionManager,
@@ -11,7 +13,8 @@ import {
 import type { ExtensionFactory, CreateAgentSessionResult } from "@mariozechner/pi-coding-agent";
 import type { Config } from "./config.js";
 import { createWebTools } from "./tools/web.js";
-import { createMemoryExtension, MEMORY_SYSTEM_PROMPT } from "./extensions/memory.js";
+import { createMemoryExtension } from "./extensions/memory.js";
+import { buildSystemPrompt } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
 import { createCronService, type CronService } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
@@ -21,6 +24,7 @@ import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 export interface SessionMeta {
   restricted: boolean;
   workspace: string;
+  userScope: string;
   lastAccess: number;
 }
 
@@ -42,8 +46,27 @@ const ALLOWED_RESTRICTED_TOOLS = ["web_search", "web_fetch"];
 
 // ─── Cache key helpers ──────────────────────────────
 
-function sessionCacheKey(sessionId: string, workspace: string, restricted: boolean): string {
-  return `${sessionId}::${workspace}::${restricted ? "restricted" : "full"}`;
+function normalizeUserId(userId?: string): string {
+  const normalized = userId?.trim();
+  return normalized || "anonymous";
+}
+
+function userScopeKey(userId?: string): string {
+  const normalized = normalizeUserId(userId);
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+}
+
+function userMemoryRootDir(userId?: string): string {
+  return join(config.memoryRootDir, userScopeKey(userId));
+}
+
+function sessionCacheKey(
+  sessionId: string,
+  workspace: string,
+  restricted: boolean,
+  userScope: string,
+): string {
+  return `${sessionId}::${workspace}::${restricted ? "restricted" : "full"}::${userScope}`;
 }
 
 function getSettingsManager(workspace: string): SettingsManager {
@@ -205,6 +228,7 @@ export function initAgent(cfg: Config) {
   console.log(`   Default model: ${cfg.primaryProvider}/${cfg.primaryModel}`);
   console.log(`   LLM Proxy: ${cfg.proxyUrl}`);
   console.log(`   Workspace: ${cfg.workspaceDir}`);
+  console.log(`   Memory root: ${cfg.memoryRootDir}`);
 
   // 列出已注册的代理模型
   const proxyModels = modelRegistry
@@ -219,12 +243,15 @@ export function initAgent(cfg: Config) {
 export interface SessionOptions {
   workspace?: string;
   restricted?: boolean;
+  model?: { provider: string; id: string } | null;
+  userId?: string;
 }
 
 export async function getSession(sessionId: string, opts?: SessionOptions) {
   const workspace = opts?.workspace || config.workspaceDir;
   const restricted = !!opts?.restricted;
-  const cacheKey = sessionCacheKey(sessionId, workspace, restricted);
+  const userScope = userScopeKey(opts?.userId);
+  const cacheKey = sessionCacheKey(sessionId, workspace, restricted, userScope);
 
   let entry = sessions.get(cacheKey);
   if (entry) {
@@ -234,7 +261,11 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     return entry;
   }
 
-  const model = modelRegistry.find(config.primaryProvider, config.primaryModel);
+  // Use requested model if provided, otherwise fall back to default
+  const requestedModel = opts?.model
+    ? modelRegistry.find(opts.model.provider, opts.model.id)
+    : null;
+  const model = requestedModel || modelRegistry.find(config.primaryProvider, config.primaryModel);
   if (!model) {
     const proxyModels = modelRegistry
       .getAll()
@@ -263,7 +294,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   }
 
   if (config.memoryEnabled) {
-    extensionFactories.push(createMemoryExtension(workspace));
+    extensionFactories.push(createMemoryExtension(userMemoryRootDir(opts?.userId)));
   }
 
   if (config.cronEnabled && cronService) {
@@ -282,12 +313,20 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   const settingsManager = getSettingsManager(workspace);
 
+  // Build system prompt: core identity + SOUL.md + active services
+  const systemPrompt = await buildSystemPrompt({
+    workspaceDir: workspace,
+    memoryEnabled: config.memoryEnabled,
+    cronEnabled: config.cronEnabled,
+    heartbeatEnabled: config.heartbeatEnabled,
+  });
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: workspace,
     settingsManager,
     extensionFactories,
     additionalSkillPaths: config.skillsPaths.filter((p) => existsSync(p)),
-    appendSystemPrompt: config.memoryEnabled ? MEMORY_SYSTEM_PROMPT : undefined,
+    appendSystemPrompt: systemPrompt,
     noThemes: true,
     noPromptTemplates: true,
   });
@@ -309,9 +348,10 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   sessionMetas.set(cacheKey, {
     restricted,
     workspace,
+    userScope,
     lastAccess: Date.now(),
   });
-  console.log(`[session] created: ${sessionId} -> ${model.provider}/${model.id} (workspace: ${workspace}, restricted: ${restricted})`);
+  console.log(`[session] created: ${sessionId} -> ${model.provider}/${model.id} (workspace: ${workspace}, restricted: ${restricted}, userScope: ${userScope})`);
   return entry;
 }
 
@@ -485,7 +525,12 @@ export async function startBackgroundServices() {
     cronService.start();
     // Register cron_manage tool into background session
     const bgSessionId = `${config.primaryProvider}/${config.primaryModel}${BG_SESSION_SUFFIX}`;
-    const bgCacheKey = sessionCacheKey(bgSessionId, config.workspaceDir, false);
+    const bgCacheKey = sessionCacheKey(
+      bgSessionId,
+      config.workspaceDir,
+      false,
+      userScopeKey(undefined),
+    );
     const bgEntry = sessions.get(bgCacheKey);
     if (!bgEntry) {
       // Ensure bg session exists so cron tool gets registered on next getSession()

@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { resolve, join, dirname } from "node:path";
 
 export interface Config {
   port: number;
@@ -7,6 +8,7 @@ export interface Config {
   proxyUrl: string;
   proxyKey: string;
   workspaceDir: string;
+  memoryRootDir: string;
   primaryModel: string;
   primaryProvider: string;
   memoryEnabled: boolean;
@@ -16,6 +18,20 @@ export interface Config {
   heartbeatActiveHours?: { start: string; end: string };
   cronEnabled: boolean;
   toolDenyList: string[];
+}
+
+function defaultMemoryRootDir(): string {
+  if (process.platform === "darwin") {
+    return join(homedir(), "Library", "Application Support", "JAcoworks", "memory");
+  }
+
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+    return join(localAppData, "JAcoworks", "memory");
+  }
+
+  const xdgDataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  return join(xdgDataHome, "JAcoworks", "memory");
 }
 
 export function parseInterval(str: string): number {
@@ -64,6 +80,19 @@ function parseEnvLine(line: string): [string, string] | null {
   return [key, val];
 }
 
+function resolveSkillsPaths(envVal?: string): string[] {
+  if (envVal) {
+    return envVal.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  // Default: look for shared/skills relative to vm-agent's parent (monorepo root)
+  const monorepoRoot = resolve(dirname(new URL(import.meta.url).pathname), "../..");
+  const defaultPaths = [
+    join(monorepoRoot, "shared", "skills"), // JAcoworks/shared/skills
+    "/shared/skills",                        // container fallback
+  ];
+  return defaultPaths;
+}
+
 export function loadConfig(): Config {
   // Load .env if exists (VM 部署用)
   const envPath = resolve(process.cwd(), ".env");
@@ -102,13 +131,11 @@ export function loadConfig(): Config {
     proxyUrl,
     proxyKey,
     workspaceDir: process.env.WORKSPACE_DIR || process.cwd(),
+    memoryRootDir: process.env.MEMORY_ROOT_DIR || defaultMemoryRootDir(),
     primaryModel: process.env.PRIMARY_MODEL || "claude-sonnet-4-6",
     primaryProvider: process.env.PRIMARY_PROVIDER || "proxy-claude",
     memoryEnabled: process.env.MEMORY_ENABLED !== "false",
-    skillsPaths: (process.env.SKILLS_PATHS || "/shared/skills,/workspace/skills")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    skillsPaths: resolveSkillsPaths(process.env.SKILLS_PATHS),
     heartbeatEnabled: process.env.HEARTBEAT_ENABLED === "true",
     heartbeatIntervalMs: parseInterval(process.env.HEARTBEAT_INTERVAL || "30m"),
     heartbeatActiveHours:

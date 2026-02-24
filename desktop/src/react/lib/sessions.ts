@@ -10,6 +10,7 @@ interface SessionSummary {
   created_at: string | number;
   updated_at: string | number;
   type?: string;
+  model?: string;
   workspace_path?: string;
 }
 
@@ -87,7 +88,22 @@ export async function createSession(options?: { workspacePath?: string; model?: 
     throw new Error("创建会话失败");
   }
 
-  return toSession(JSON.parse(response.body));
+  const session = toSession(JSON.parse(response.body));
+  const requestedModel = options?.model?.trim();
+
+  if (requestedModel && session.model !== requestedModel) {
+    session.model = requestedModel;
+    try {
+      await apiFetch(`/api/sessions/${session.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ model: requestedModel }),
+      });
+    } catch {
+      // Keep local model selection even when persistence fails.
+    }
+  }
+
+  return session;
 }
 
 export async function getSession(id: string): Promise<ChatSession | undefined> {
@@ -109,7 +125,7 @@ export async function listSessions(): Promise<ChatSession[]> {
     updatedAt: parseTime(summary.updated_at),
     type: (summary.type as ChatSession["type"]) || "chat",
     workspacePath: summary.workspace_path || "",
-    model: "",
+    model: summary.model || "",
   }));
 }
 

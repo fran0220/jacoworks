@@ -11,7 +11,7 @@
 | 层级 | 选型 | 说明 |
 |------|------|------|
 | AI 引擎 | Pi SDK (`@mariozechner/pi-coding-agent` ^0.54.2) | 轻量 Agent 框架，9MB，< 50MB 内存 |
-| Agent 桥接 | vm-agent (TypeScript) | Pi SDK 原生事件流 + OpenAI 兼容端点，本地 sidecar (:18789) |
+| Agent 桥接 | vm-agent (TypeScript) | Pi SDK 原生事件流 + **RPC(stdio)**，本地 sidecar 进程 |
 | 认证 | Goth + bcrypt (Go 内置) | 飞书 SSO + 激活码 + 邮箱密码，网关内集成 |
 | 管理网关 | Go 自建 | 认证 + 会话存储 + 管理 API (Railway 部署) |
 | 前端 | Tauri v2 + React 18 (Vite) | 桌面优先，内嵌 sidecar，本地 Agent 直接读写文件 |
@@ -52,9 +52,9 @@ JAcoworks/
 │   ├── Makefile
 │   ├── go.mod / go.sum
 │   └── ...
-├── vm-agent/                        # 本地 Agent sidecar (Pi SDK + HTTP 桥接)
+├── vm-agent/                        # 本地 Agent sidecar (Pi SDK + RPC 桥接)
 │   ├── src/
-│   │   ├── index.ts                 # HTTP server (:18789, native events + workspace/restricted per-request)
+│   │   ├── index.ts                 # RPC loop (stdin command / stdout JSON line events)
 │   │   ├── config.ts                # 配置加载 (.env + 环境变量)
 │   │   ├── agent.ts                 # Pi SDK session 池 + 4 Provider + per-session workspace
 │   │   ├── extensions/
@@ -71,9 +71,9 @@ JAcoworks/
 │   └── tsconfig.json
 ├── desktop/                         # Tauri v2 + React 18 桌面客户端
 │   ├── src-tauri/
-│   │   ├── src/lib.rs               # Tauri 入口 (注册 11 个 Rust 命令)
-│   │   ├── src/stream.rs            # SSE 流式桥接 (stream_fetch + stream_abort + http_fetch)
-│   │   ├── src/sidecar.rs           # Agent sidecar 生命周期 (start/stop/status)
+│   │   ├── src/lib.rs               # Tauri 入口 (注册 Rust 命令)
+│   │   ├── src/stream.rs            # HTTP 桥接 (http_fetch，仅网关 API)
+│   │   ├── src/sidecar.rs           # Agent sidecar 生命周期 + RPC(stdin/stdout)桥接
 │   │   ├── src/cowork.rs            # 文件操作 (目录选择/tar，保留兼容)
 │   │   ├── Cargo.toml
 │   │   └── tauri.conf.json
@@ -83,7 +83,7 @@ JAcoworks/
 │   │   ├── app.css                  # CSS 变量主题 (Design Token)
 │   │   └── react/
 │   │       ├── components/          # LoginPanel/Sidebar/NewSessionPanel/ChatView/Composer...
-│   │       ├── lib/                 # auth/sessions/agent-events/transport/cowork
+│   │       ├── lib/                 # auth/sessions/agent/transport/cowork
 │   │       ├── styles.css           # React 组件样式
 │   │       └── types.ts             # 前端类型定义
 │   └── package.json
@@ -111,15 +111,16 @@ Tauri 桌面端
   │                              ├─ auth_sessions 表验证
   │                              ├─ chat_sessions CRUD
   │                              ├─ invite_codes 管理
-  │                              └─ GET /api/agent/config → 下发 LLM 密钥
+  │                              └─ GET /api/agent/config (可选) → 下发 LLM 密钥
   │
-  ├─ 获取 LLM 配置 (登录后) ──→ 启动本地 vm-agent sidecar
+  ├─ 登录后启动本地 vm-agent sidecar (Node 进程)
+  │      └─ start_agent strict ready handshake (RPC)
   │
-  └─ 统一会话对话 ──→ 本地 vm-agent (:18789)
-                              ├─ Pi SDK sessions (per session_id)
-                              ├─ 默认 restricted=false (开放全部工具)
-                              ├─ workspace 可选 (输入栏选择目录后生效)
-                              └─ LLM 调用 → 中转站 (唯一网络依赖)
+  └─ 统一会话对话 ──invoke/emit──→ sidecar RPC (stdin/stdout JSON lines)
+                                 ├─ Pi SDK sessions (per session_id)
+                                 ├─ 默认 restricted=false (开放全部工具)
+                                 ├─ workspace 可选 (输入栏选择目录后生效)
+                                 └─ LLM 调用 → 中转站 (唯一网络依赖)
 
 Railway:
   ┌──────────────────┐     ┌──────────────┐
@@ -157,18 +158,26 @@ Railway:
 
 ```
 用户登录后:
-  桌面端 → GET /api/agent/config → 获取 {llm_proxy_url, llm_proxy_key}
-         → Tauri invoke start_agent(agentDir, envVars)
-         → 启动 Node.js 进程 (vm-agent :18789)
-         → 轮询 /health 等待就绪
+  桌面端 → 可选 GET /api/agent/config → 获取 {llm_proxy_url, llm_proxy_key}
+         → Tauri invoke start_agent(agentDir, envVars?)
+         → 启动 Node.js 进程 (vm-agent)
+         → sidecar 收到 {"type":"ready"} 后返回成功
+         → 若 /api/agent/config 失败，回退 vm-agent 本地 .env 启动
 
 统一会话模式 (restricted: false):
   输入栏可随时选择本地项目文件夹（可选） →
-  POST localhost:18789/v1/chat/events
-    body: { message, model, session_id, restricted: false, workspace?: "/path/to/project" }
+  invoke("agent_rpc_send", {
+    id,
+    type: "prompt",
+    session_id,
+    message,
+    model,
+    workspace?,
+    restricted: false
+  })
     → vm-agent 创建完整 session (bash/edit/read/grep/find/ls/write + web)
     → 若提供 workspace，Agent 在该目录直接读写本地文件
-    → SSE 流式返回
+    → emit("agent-rpc-event", {type:"session_event"|"done"|"error"|"response"})
 ```
 
 **关键优势**: 单模式下仍可直接操作本地文件系统，无 tar 打包/上传/下载/容器挂载步骤。
@@ -220,7 +229,7 @@ Go module: `github.com/fran0220/jacoworks/gateway`
 
 Tauri 桌面端启动时自动 spawn 的 Node.js 进程。
 
-**入口**: `vm-agent/src/index.ts` — HTTP server (:18789)
+**入口**: `vm-agent/src/index.ts` — RPC stdin/stdout 主循环
 
 **核心组件**:
 - `config.ts` — 环境变量加载 (LLM_PROXY_KEY/URL 由 Tauri 注入)
@@ -230,12 +239,16 @@ Tauri 桌面端启动时自动 spawn 的 Node.js 进程。
 - `services/cron.ts` — 定时任务 (本地 sidecar 模式下默认关闭)
 - `tools/web.ts` — web_search (Tavily) + web_fetch
 
-**请求字段** (ChatRequest):
+**RPC Prompt 字段**:
 
 | 字段 | 说明 |
 |------|------|
-| `restricted` | 默认 `false`（开放全部工具），当前前端固定传 `false` |
+| `message` | 用户输入 |
+| `session_id` | 会话 ID，用于隔离上下文 |
+| `model` | 模型路由 (`provider/model` 或 `model`) |
+| `restricted` | 默认 `false`（开放全部工具） |
 | `workspace` | 可选项目目录路径，提供时 Agent 以此为 cwd |
+| `streaming_behavior` | 流中追问策略：`followUp` / `steer` |
 
 **模型注册** (代码内 registerProvider):
 
@@ -246,10 +259,12 @@ Tauri 桌面端启动时自动 spawn 的 Node.js 进程。
 | `proxy-gemini` | `openai-completions` | gemini-3.1-pro-preview, gemini-3-pro-preview, gemini-3-flash-preview |
 | `proxy-grok` | `openai-completions` | grok-4.20-beta, grok-4.1-fast |
 
-**SSE 事件格式**:
-- `data: {"type":"session_event","session_id":"...","event":{...}}` — Pi `AgentSessionEvent`
-- `data: {"type":"done","session_id":"..."}` — 流结束
-- 兼容保留: `/v1/chat/completions` 仍支持 OpenAI chunk 格式
+**RPC 事件格式** (stdout JSON lines):
+- `{"id":"...","type":"response", ...}` — 命令响应
+- `{"id":"...","type":"session_event","session_id":"...","event":{...}}` — Pi `AgentSessionEvent`
+- `{"id":"...","type":"error", ...}` — 运行错误
+- `{"id":"...","type":"done","session_id":"..."}` — 流结束
+- `{"type":"ready"}` — sidecar 启动就绪握手
 
 **内置工具** (Pi SDK): read, bash, edit, write, grep, find, ls
 **自定义工具**: web_search, web_fetch, memory_search, memory_save, cron_manage
@@ -257,10 +272,9 @@ Tauri 桌面端启动时自动 spawn 的 Node.js 进程。
 ### 3.5 Tauri 桌面客户端
 
 **Rust 侧命令** (src-tauri/src/):
-- `stream_fetch` → SSE 流式桥接 (reqwest stream + Tauri emit)
-- `stream_abort` → 取消流式请求
 - `http_fetch` → 同步 HTTP (认证/会话 API)
-- `start_agent` → 启动本地 vm-agent sidecar (spawn Node.js + 健康检查)
+- `start_agent` → 启动本地 vm-agent sidecar (spawn Node.js + ready handshake)
+- `agent_rpc_send` → 向 sidecar stdin 发送 JSON RPC 命令
 - `stop_agent` → 停止 sidecar 进程
 - `agent_status` → 检查 sidecar 状态
 - `select_directory` → 原生文件夹选择对话框
@@ -269,21 +283,21 @@ Tauri 桌面端启动时自动 spawn 的 Node.js 进程。
 **应用启动流程**:
 ```
 1. 用户登录 (密码/激活码/飞书 SSO)
-2. 登录成功 → fetchAgentConfig() → 获取 LLM 配置
-3. invoke start_agent(agentDir, { LLM_PROXY_URL, LLM_PROXY_KEY })
-4. Tauri spawn Node.js 进程 → 轮询 /health (最多 10s)
+2. 登录成功 → 尝试 fetchAgentConfig()（失败可回退）
+3. invoke start_agent(agentDir, envVars?)
+4. sidecar 收到 `{"type":"ready"}` → start_agent 返回
 5. Agent 就绪 → 进入主界面
 ```
 
 **前端数据流 (React)**:
 ```
 用户输入 → messages[] 追加
-  → stream_fetch(POST localhost:18789/v1/chat/events)
-    body: { model, message, session_id, workspace?, restricted: false }
-    → Rust reqwest → 本地 vm-agent → LLM 中转站
-    → emit("stream-response", chunk[])
-    → parseNativeSSE → AgentSessionEvent reducer → 增量 Markdown 渲染 + 工具状态
-    → emit("stream-end") → 保存到网关会话 API
+  → invoke("agent_rpc_send", { id, type:"prompt", model, message, session_id, workspace?, restricted:false })
+  → Rust stdin 写入 vm-agent
+  → vm-agent 执行并 stdout 输出 JSON 行
+  → emit("agent-rpc-event")
+  → AgentSessionEvent reducer → 增量 Markdown 渲染 + 工具状态
+  → done 后保存到网关会话 API
 ```
 
 **登录页**: 三种登录方式:
@@ -339,7 +353,7 @@ Tauri 桌面端启动时自动 spawn 的 Node.js 进程。
 
 全部用同一个 API Key，vm-agent 通过 `registerProvider()` 注入所有 provider。
 
-网关通过 `GET /api/agent/config` 将密钥下发给桌面端，桌面端注入本地 sidecar 环境变量。
+网关 `GET /api/agent/config` 用于优先下发密钥；若不可用，桌面端允许回退到 vm-agent 本地 `.env`。
 
 ---
 
@@ -409,8 +423,8 @@ lxd:
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `LLM_PROXY_URL` | 中转站地址 | `http://67.230.171.248:8317` |
-| `LLM_PROXY_KEY` | 中转站密钥 | **由网关 /api/agent/config 下发** |
-| `PORT` | HTTP 端口 | `18789` |
+| `LLM_PROXY_KEY` | 中转站密钥 | **优先网关下发，失败时使用本地 .env** |
+| `PORT` | 历史兼容字段（RPC 模式不对外监听 HTTP） | `18789` |
 | `WORKSPACE_DIR` | 默认工作目录 (可被请求级 workspace 覆盖) | `process.cwd()` |
 | `PRIMARY_MODEL` | 默认模型 | `claude-sonnet-4-6` |
 | `PRIMARY_PROVIDER` | 默认 Provider | `proxy-claude` |
@@ -426,7 +440,7 @@ lxd:
 | 常量 | 说明 | 值 |
 |------|------|-----|
 | `GATEWAY_URL` | 网关地址 | `http://api.xiaomao.chat:8090` (或 Railway 域名) |
-| `AGENT_URL` | 本地 sidecar | `http://localhost:18789` |
+| `AGENT_URL` | 已废弃（RPC 模式不再使用） | — |
 
 ---
 
@@ -441,10 +455,10 @@ lxd:
 - [x] PostgreSQL schema (Goth auth + 业务表，deploy/sql/)
 - [x] Tauri sidecar 管理 (start_agent/stop_agent/agent_status)
 - [x] 桌面端登录后自动启动本地 Agent
-- [x] 桌面端统一会话请求打本地 AGENT_URL
+- [x] 桌面端统一会话请求改为 sidecar RPC (`agent_rpc_send`)
 - [x] 输入栏可选本地目录并直接读写文件（无 tar/上传/下载）
 - [x] 桌面端核心 UI (登录/聊天/会话管理/模型选择)
-- [x] 原生事件流解析 (session_event/done + tool/retry/compaction 状态)
+- [x] 原生事件流解析 (RPC session_event/done/error + tool/retry/compaction 状态)
 - [x] 端到端联调通过 (桌面端 → 本地 agent → LLM)
 
 ### 🔲 待完成
@@ -470,15 +484,23 @@ lxd:
 - 安全: `.gitignore` 保护所有敏感文件 (`.env`, `gateway.yaml`, `data/`)
 
 ### 关键约束
-- **本地 Agent 优先**: 统一会话请求打本地 sidecar (localhost:18789)，不经网关
+- **本地 Agent 优先**: 统一会话请求打本地 sidecar RPC (stdin/stdout)，不经网关
 - **网关仅管控面**: 认证、会话 CRUD、管理 API、LLM 配置下发
 - **Goth 认证**: 飞书 SSO + bcrypt 密码 + 激活码，网关内集成，无独立认证服务
 - **user_id 为 TEXT**: gen_random_uuid()::text
 - **Pi SDK 优先**: 使用 Pi SDK 原生功能，不重建已有能力
-- **事件流优先**: 首选 `/v1/chat/events` 原生 `session_event`；`/v1/chat/completions` 仅作兼容
+- **事件流优先**: 首选 sidecar RPC `session_event`；不维护 SSE 双栈
 - **Session 隔离**: 每个会话传 `session_id`，vm-agent 按此隔离 Pi SDK session
 - **请求字段约定**: `restricted` 当前固定 `false`（开放工具），`workspace` 可选用于限定工作目录
 - **模型路由**: `"model-id"` (自动匹配) 或 `"provider/model-id"` (显式指定)
+- **启动容错**: `fetchAgentConfig()` 失败不应阻断 sidecar 启动；回退 vm-agent 本地 `.env`
+
+### Agent 启动失败排查（RPC 单栈）
+
+1. 先看右下角 `RPC 日志` 面板（`agent-rpc-log`）最后 20 行。
+2. 若出现 `需要 LLM_PROXY_KEY`：补齐 `vm-agent/.env` 或恢复网关 `/api/agent/config`。
+3. 若出现 `Agent ready handshake timed out`：检查 `vm-agent/dist/index.js` 是否为最新构建（含 `{"type":"ready"}` 输出）。
+4. 若网关可登录但 `GET /api/agent/config` 返回 404：确认当前网关版本是否包含该路由；桌面端应仍可走本地 `.env` 回退。
 
 ### 设计语言 (Design Token System) — 强制约束
 

@@ -163,7 +163,7 @@ export function logout() {
 export async function fetchAgentConfig(): Promise<{ llm_proxy_url: string; llm_proxy_key: string }> {
   const response = await authFetch("/api/agent/config", { method: "GET" });
   if (response.status !== 200) {
-    throw new Error("获取 Agent 配置失败");
+    throw new Error(parseError(response.body, `获取 Agent 配置失败 (${response.status})`));
   }
   return JSON.parse(response.body);
 }

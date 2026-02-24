@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -165,10 +167,28 @@ var allowedOrigins = map[string]bool{
 	"http://api.xiaomao.chat:8090": true,
 }
 
+func isAllowedOrigin(origin string) bool {
+	if allowedOrigins[origin] {
+		return true
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if allowedOrigins[origin] {
+		if isAllowedOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Cowork-Session")
@@ -378,6 +398,7 @@ func createSessionHandler(s *store.Store, lxdClient *lxd.SSHClient) http.Handler
 	type createSessionRequest struct {
 		Type          string `json:"type"`
 		WorkspacePath string `json:"workspace_path"`
+		Model         string `json:"model"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -390,7 +411,7 @@ func createSessionHandler(s *store.Store, lxdClient *lxd.SSHClient) http.Handler
 		var req createSessionRequest
 		json.NewDecoder(r.Body).Decode(&req)
 
-		sess, err := s.CreateSession(r.Context(), user.ID, req.Type, req.WorkspacePath)
+		sess, err := s.CreateSession(r.Context(), user.ID, req.Type, req.WorkspacePath, req.Model)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create session"})
 			return
@@ -413,8 +434,10 @@ func createSessionHandler(s *store.Store, lxdClient *lxd.SSHClient) http.Handler
 
 func updateSessionHandler(s *store.Store) http.HandlerFunc {
 	type updateRequest struct {
-		Title    string `json:"title"`
-		Messages string `json:"messages"`
+		Title         *string `json:"title"`
+		Messages      *string `json:"messages"`
+		Model         *string `json:"model"`
+		WorkspacePath *string `json:"workspace_path"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +451,12 @@ func updateSessionHandler(s *store.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		sess, err := s.UpdateSession(r.Context(), user.ID, r.PathValue("id"), req.Title, req.Messages)
+		sess, err := s.UpdateSession(r.Context(), user.ID, r.PathValue("id"), store.SessionUpdate{
+			Title:         req.Title,
+			Messages:      req.Messages,
+			Model:         req.Model,
+			WorkspacePath: req.WorkspacePath,
+		})
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 			return

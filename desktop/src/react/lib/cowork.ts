@@ -1,8 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-
-function isTauri() {
-  return typeof window !== "undefined" && "__TAURI__" in window;
-}
+import { invoke, isTauri } from "@tauri-apps/api/core";
 
 export async function selectFolder(): Promise<string | null> {
   if (!isTauri()) return null;

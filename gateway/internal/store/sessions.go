@@ -20,17 +20,19 @@ type ChatSession struct {
 }
 
 type SessionSummary struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Type         string    `json:"type"`
-	MessageCount int       `json:"message_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Title         string    `json:"title"`
+	Type          string    `json:"type"`
+	Model         string    `json:"model"`
+	WorkspacePath string    `json:"workspace_path"`
+	MessageCount  int       `json:"message_count"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (s *Store) ListSessions(ctx context.Context, userID string) ([]SessionSummary, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, title, type, jsonb_array_length(messages), created_at, updated_at
+		`SELECT id, title, type, model, workspace_path, jsonb_array_length(messages), created_at, updated_at
 		 FROM chat_sessions WHERE user_id = $1 ORDER BY updated_at DESC`,
 		userID,
 	)
@@ -42,7 +44,7 @@ func (s *Store) ListSessions(ctx context.Context, userID string) ([]SessionSumma
 	var sessions []SessionSummary
 	for rows.Next() {
 		var ss SessionSummary
-		if err := rows.Scan(&ss.ID, &ss.Title, &ss.Type, &ss.MessageCount, &ss.CreatedAt, &ss.UpdatedAt); err != nil {
+		if err := rows.Scan(&ss.ID, &ss.Title, &ss.Type, &ss.Model, &ss.WorkspacePath, &ss.MessageCount, &ss.CreatedAt, &ss.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan session: %w", err)
 		}
 		sessions = append(sessions, ss)
@@ -63,17 +65,17 @@ func (s *Store) GetSession(ctx context.Context, userID, sessionID string) (*Chat
 	return sess, nil
 }
 
-func (s *Store) CreateSession(ctx context.Context, userID, sessionType, workspacePath string) (*ChatSession, error) {
+func (s *Store) CreateSession(ctx context.Context, userID, sessionType, workspacePath, model string) (*ChatSession, error) {
 	if sessionType == "" {
 		sessionType = "chat"
 	}
 
 	sess := &ChatSession{}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO chat_sessions (user_id, type, workspace_path)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO chat_sessions (user_id, type, workspace_path, model)
+		 VALUES ($1, $2, $3, $4)
 		 RETURNING id, user_id, title, type, model, workspace_path, messages, created_at, updated_at`,
-		userID, sessionType, workspacePath,
+		userID, sessionType, workspacePath, model,
 	).Scan(&sess.ID, &sess.UserID, &sess.Title, &sess.Type, &sess.Model, &sess.WorkspacePath, &sess.Messages, &sess.CreatedAt, &sess.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
@@ -81,34 +83,63 @@ func (s *Store) CreateSession(ctx context.Context, userID, sessionType, workspac
 	return sess, nil
 }
 
-func (s *Store) UpdateSession(ctx context.Context, userID, sessionID, title, messages string) (*ChatSession, error) {
-	if title != "" && messages != "" {
-		_, err := s.pool.Exec(ctx,
-			`UPDATE chat_sessions SET title = $1, messages = $2::jsonb WHERE id = $3 AND user_id = $4`,
-			title, messages, sessionID, userID,
+type SessionUpdate struct {
+	Title         *string
+	Messages      *string
+	Model         *string
+	WorkspacePath *string
+}
+
+func (s *Store) UpdateSession(ctx context.Context, userID, sessionID string, upd SessionUpdate) (*ChatSession, error) {
+	setClauses := []string{}
+	args := []interface{}{}
+	argIdx := 1
+
+	if upd.Title != nil && *upd.Title != "" {
+		setClauses = append(setClauses, fmt.Sprintf("title = $%d", argIdx))
+		args = append(args, *upd.Title)
+		argIdx++
+	}
+	if upd.Messages != nil && *upd.Messages != "" {
+		setClauses = append(setClauses, fmt.Sprintf("messages = $%d::jsonb", argIdx))
+		args = append(args, *upd.Messages)
+		argIdx++
+	}
+	if upd.Model != nil {
+		setClauses = append(setClauses, fmt.Sprintf("model = $%d", argIdx))
+		args = append(args, *upd.Model)
+		argIdx++
+	}
+	if upd.WorkspacePath != nil {
+		setClauses = append(setClauses, fmt.Sprintf("workspace_path = $%d", argIdx))
+		args = append(args, *upd.WorkspacePath)
+		argIdx++
+	}
+
+	if len(setClauses) > 0 {
+		query := fmt.Sprintf(
+			"UPDATE chat_sessions SET %s WHERE id = $%d AND user_id = $%d",
+			joinStrings(setClauses, ", "), argIdx, argIdx+1,
 		)
-		if err != nil {
-			return nil, fmt.Errorf("update session: %w", err)
-		}
-	} else if title != "" {
-		_, err := s.pool.Exec(ctx,
-			`UPDATE chat_sessions SET title = $1 WHERE id = $2 AND user_id = $3`,
-			title, sessionID, userID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("update session: %w", err)
-		}
-	} else if messages != "" {
-		_, err := s.pool.Exec(ctx,
-			`UPDATE chat_sessions SET messages = $1::jsonb WHERE id = $2 AND user_id = $3`,
-			messages, sessionID, userID,
-		)
+		args = append(args, sessionID, userID)
+		_, err := s.pool.Exec(ctx, query, args...)
 		if err != nil {
 			return nil, fmt.Errorf("update session: %w", err)
 		}
 	}
 
 	return s.GetSession(ctx, userID, sessionID)
+}
+
+func joinStrings(s []string, sep string) string {
+	result := ""
+	for i, v := range s {
+		if i > 0 {
+			result += sep
+		}
+		result += v
+	}
+	return result
 }
 
 func (s *Store) DeleteSession(ctx context.Context, userID, sessionID string) error {

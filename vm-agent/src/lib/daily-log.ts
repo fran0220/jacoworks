@@ -8,25 +8,25 @@ function formatDate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-export function getDailyLogPath(workspaceDir: string, date?: Date): string {
-  return join(workspaceDir, "memory", `${formatDate(date ?? new Date())}.md`);
+export function getDailyLogPath(memoryRootDir: string, date?: Date): string {
+  return join(memoryRootDir, "daily", `${formatDate(date ?? new Date())}.md`);
 }
 
 export async function appendDailyLog(
-  workspaceDir: string,
+  memoryRootDir: string,
   content: string,
 ): Promise<void> {
-  const logPath = getDailyLogPath(workspaceDir);
+  const logPath = getDailyLogPath(memoryRootDir);
   await mkdir(dirname(logPath), { recursive: true });
   await appendFile(logPath, content, "utf-8");
 }
 
 export async function readDailyLog(
-  workspaceDir: string,
+  memoryRootDir: string,
   date: Date,
   maxLines = 30,
 ): Promise<string> {
-  const logPath = getDailyLogPath(workspaceDir, date);
+  const logPath = getDailyLogPath(memoryRootDir, date);
   try {
     const text = await readFile(logPath, "utf-8");
     const lines = text.split("\n");
@@ -38,10 +38,10 @@ export async function readDailyLog(
 }
 
 export async function readMemoryMd(
-  workspaceDir: string,
+  memoryRootDir: string,
   maxChars = 2000,
 ): Promise<string> {
-  const memPath = join(workspaceDir, "MEMORY.md");
+  const memPath = join(memoryRootDir, "MEMORY.md");
   try {
     const text = await readFile(memPath, "utf-8");
     if (text.length <= maxChars) return text;
@@ -52,11 +52,11 @@ export async function readMemoryMd(
 }
 
 export async function appendMemoryMd(
-  workspaceDir: string,
+  memoryRootDir: string,
   content: string,
   section?: string,
 ): Promise<void> {
-  const memPath = join(workspaceDir, "MEMORY.md");
+  const memPath = join(memoryRootDir, "MEMORY.md");
   let existing = "";
   try {
     existing = await readFile(memPath, "utf-8");

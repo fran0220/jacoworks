@@ -1,11 +1,11 @@
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Check, X as XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { abortNativeSession, startNativeStream } from "../lib/agent";
-import { parseNativeSSE } from "../lib/agent-events";
-import { abortStream } from "../lib/transport";
+import { getUser } from "../lib/auth";
 import { generateTitle, updateSession } from "../lib/sessions";
-import type { AttachedFile, ChatMessage, ChatSession } from "../types";
+import type { AttachedFile, ChatMessage, ChatSession, StreamBlock } from "../types";
 import Composer from "./Composer";
+import Markdown from "./Markdown";
 import MessageBubble from "./MessageBubble";
 import ToolStatus from "./ToolStatus";
 
@@ -37,13 +37,13 @@ export default function ChatView({
 }) {
   const [localSession, setLocalSession] = useState(session);
   const [streaming, setStreaming] = useState(false);
-  const [streamingText, setStreamingText] = useState("");
-  const [currentTool, setCurrentTool] = useState<string | null>(null);
-  const [statusText, setStatusText] = useState<string | null>(null);
+  const [blocks, setBlocks] = useState<StreamBlock[]>([]);
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [requestId, setRequestId] = useState<number | null>(null);
 
   const abortedRef = useRef(false);
+  const sendLockRef = useRef(false);
+  const blocksRef = useRef<StreamBlock[]>([]);
+  const streamBaseRef = useRef<ChatMessage[]>([]);
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -58,7 +58,7 @@ export default function ChatView({
   useEffect(() => {
     if (!messagesRef.current) return;
     messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-  }, [visibleMessages, streamingText, currentTool, statusText]);
+  }, [visibleMessages, blocks]);
 
   useEffect(() => {
     if (!pendingMessage || streaming) return;
@@ -76,7 +76,8 @@ export default function ChatView({
   }
 
   async function sendMessage(text: string, files: AttachedFile[]) {
-    if (streaming) return;
+    if (sendLockRef.current) return;
+    sendLockRef.current = true;
     setErrorText(null);
 
     const userMessage: ChatMessage = { role: "user", content: text };
@@ -84,112 +85,173 @@ export default function ChatView({
     await persistSession(nextMessages);
 
     setStreaming(true);
-    setStreamingText("");
-    setCurrentTool(null);
-    setStatusText(null);
+    setBlocks([]);
+    blocksRef.current = [];
+    streamBaseRef.current = nextMessages;
     abortedRef.current = false;
 
     try {
+      const currentUser = getUser();
       const response = await startNativeStream({
         session_id: localSession.id,
+        user_id: currentUser?.id || undefined,
         model: localSession.model,
         message: buildPrompt(text, files),
         workspace: localSession.workspacePath || undefined,
         restricted: false,
       });
 
-      if (response.status !== 200) {
-        throw new Error(`请求失败 (${response.status})`);
-      }
-
-      setRequestId(response.requestId);
-      let assistantText = "";
-
-      for await (const packet of parseNativeSSE(response.body)) {
+      for await (const packet of response.stream) {
         if (abortedRef.current) break;
 
-        if (packet.type === "done") break;
+        if (packet.type === "response") {
+          if (packet.success === false) {
+            throw new Error(String(packet.error || "请求失败"));
+          }
+          continue;
+        }
 
+        if (packet.type === "error") {
+          throw new Error(String(packet.error || "请求失败"));
+        }
+
+        if (packet.type === "done") break;
         if (packet.type !== "session_event" || !packet.event) continue;
 
         const event = packet.event;
+
         if (event.type === "message_update") {
-          const assistantMessageEvent = event.assistantMessageEvent as {
+          const ame = event.assistantMessageEvent as {
             type?: string;
             delta?: string;
           };
-          if (assistantMessageEvent?.type === "text_delta" && assistantMessageEvent.delta) {
-            assistantText += assistantMessageEvent.delta;
-            setStreamingText(assistantText);
-            setCurrentTool(null);
-            setStatusText(null);
+          if (ame?.type === "text_delta" && ame.delta) {
+            const last = blocksRef.current[blocksRef.current.length - 1];
+            if (last?.type === "text") {
+              last.content += ame.delta;
+            } else {
+              blocksRef.current.push({ type: "text", content: ame.delta });
+            }
+            setBlocks([...blocksRef.current]);
+          } else if (ame?.type === "thinking_delta" && ame.delta) {
+            const last = blocksRef.current[blocksRef.current.length - 1];
+            if (last?.type === "thinking") {
+              last.content += ame.delta;
+            } else {
+              blocksRef.current.push({ type: "thinking", content: ame.delta });
+            }
+            setBlocks([...blocksRef.current]);
           }
         }
 
         if (event.type === "tool_execution_start") {
-          setCurrentTool(String(event.toolName || "tool"));
-          setStatusText(null);
-        }
-
-        if (event.type === "auto_compaction_start") {
-          setStatusText(`上下文压缩中 (${String(event.reason || "auto")})`);
-        }
-
-        if (event.type === "auto_retry_start") {
-          setStatusText(
-            `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
-          );
+          blocksRef.current.push({
+            type: "tool",
+            id: String(event.toolCallId || `tool-${Date.now()}`),
+            name: String(event.toolName || "tool"),
+            status: "running",
+          });
+          setBlocks([...blocksRef.current]);
         }
 
         if (event.type === "tool_execution_end") {
-          setCurrentTool(null);
+          for (let i = blocksRef.current.length - 1; i >= 0; i--) {
+            const b = blocksRef.current[i];
+            if (
+              b.type === "tool" &&
+              b.name === String(event.toolName) &&
+              b.status === "running"
+            ) {
+              b.status = (event.isError as boolean) ? "error" : "completed";
+              break;
+            }
+          }
+          setBlocks([...blocksRef.current]);
+        }
+
+        if (event.type === "auto_compaction_start") {
+          blocksRef.current.push({
+            type: "status",
+            text: `上下文压缩中 (${String(event.reason || "auto")})`,
+          });
+          setBlocks([...blocksRef.current]);
+        }
+
+        if (event.type === "auto_retry_start") {
+          blocksRef.current.push({
+            type: "status",
+            text: `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
+          });
+          setBlocks([...blocksRef.current]);
         }
       }
 
-      if (!abortedRef.current && assistantText.trim()) {
-        // Clear streaming bubble before persisting to avoid flash of duplicate
-        setStreamingText("");
-        setStreaming(false);
-
-        const assistantMessage: ChatMessage = {
-          role: "assistant",
-          content: assistantText,
-        };
-        const finalMessages = [...nextMessages, assistantMessage];
-
-        const assistantCount = finalMessages.filter(
-          (message) => message.role === "assistant",
-        ).length;
-        const isUntitled =
-          localSession.title === "新对话" || localSession.title === "新会话";
-        const title =
-          isUntitled && assistantCount === 1
-            ? generateTitle(assistantText)
-            : undefined;
-
-        await persistSession(finalMessages, title);
+      if (!abortedRef.current) {
+        await finalizeStream();
       }
     } catch (err) {
       if (!abortedRef.current) {
         setErrorText(err instanceof Error ? err.message : "请求失败");
       }
     } finally {
+      sendLockRef.current = false;
       setStreaming(false);
-      setStreamingText("");
-      setCurrentTool(null);
-      setStatusText(null);
-      setRequestId(null);
+      setBlocks([]);
+      blocksRef.current = [];
     }
+  }
+
+  async function finalizeStream() {
+    const assistantText = blocksRef.current
+      .filter((b): b is Extract<StreamBlock, { type: "text" }> => b.type === "text")
+      .map((b) => b.content)
+      .join("\n\n");
+
+    if (!assistantText.trim()) return;
+
+    setBlocks([]);
+    setStreaming(false);
+
+    const assistantMessage: ChatMessage = {
+      role: "assistant",
+      content: assistantText,
+    };
+    const finalMessages = [...streamBaseRef.current, assistantMessage];
+
+    const assistantCount = finalMessages.filter(
+      (message) => message.role === "assistant",
+    ).length;
+    const isUntitled =
+      localSession.title === "新对话" || localSession.title === "新会话";
+    const title =
+      isUntitled && assistantCount === 1
+        ? generateTitle(assistantText)
+        : undefined;
+
+    await persistSession(finalMessages, title);
   }
 
   const stopStreaming = async () => {
     abortedRef.current = true;
-    if (requestId !== null) {
-      await abortStream(requestId);
-    }
     await abortNativeSession(localSession.id).catch(() => {});
+
+    const assistantText = blocksRef.current
+      .filter((b): b is Extract<StreamBlock, { type: "text" }> => b.type === "text")
+      .map((b) => b.content)
+      .join("\n\n");
+
+    if (assistantText.trim()) {
+      const assistantMessage: ChatMessage = {
+        role: "assistant",
+        content: assistantText,
+      };
+      await persistSession([...streamBaseRef.current, assistantMessage]);
+    }
+
+    sendLockRef.current = false;
     setStreaming(false);
-    setStatusText("已停止生成");
+    setBlocks([]);
+    blocksRef.current = [];
   };
 
   const handleWorkspaceChange = (workspacePath: string) => {
@@ -215,16 +277,44 @@ export default function ChatView({
           <MessageBubble key={`${index}-${message.role}`} message={message} />
         ))}
 
-        {streaming && streamingText && (
-          <MessageBubble
-            message={{ role: "assistant", content: streamingText }}
-            streaming
-          />
-        )}
-        {streaming && currentTool && <ToolStatus toolName={currentTool} />}
-        {streaming && statusText && (
-          <div className="status-hint">{statusText}</div>
-        )}
+        {streaming && blocks.length > 0 && blocks.map((block, i) => {
+          if (block.type === "text") {
+            const isLastText = !blocks.slice(i + 1).some((b) => b.type === "text");
+            return (
+              <div key={`stream-text-${i}`} className="bubble-row assistant">
+                <div className="bubble assistant-bubble">
+                  <Markdown content={block.content} />
+                  {isLastText && <span className="cursor">▋</span>}
+                </div>
+              </div>
+            );
+          }
+          if (block.type === "thinking") {
+            return (
+              <div key={`thinking-${i}`} className="thinking-block">
+                <span className="thinking-label">思考中</span>
+                <span className="thinking-text">{block.content}</span>
+              </div>
+            );
+          }
+          if (block.type === "tool") {
+            return (
+              <ToolStatus
+                key={block.id}
+                toolName={block.name}
+                status={block.status}
+              />
+            );
+          }
+          if (block.type === "status") {
+            return (
+              <div key={`status-${i}`} className="status-hint">
+                {block.text}
+              </div>
+            );
+          }
+          return null;
+        })}
         {errorText && (
           <div className="error-inline">
             <AlertCircle size={14} />

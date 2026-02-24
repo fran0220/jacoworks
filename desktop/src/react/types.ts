@@ -33,3 +33,9 @@ export interface ChatSession {
   workspacePath: string;
   model: string;
 }
+
+export type StreamBlock =
+  | { type: "thinking"; content: string }
+  | { type: "text"; content: string }
+  | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error" }
+  | { type: "status"; text: string };

@@ -1,9 +1,11 @@
 import { Agentation } from "agentation";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { AlertTriangle, LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import ChatView from "./react/components/ChatView";
 import LoginPanel from "./react/components/LoginPanel";
 import NewSessionPanel from "./react/components/NewSessionPanel";
+import RpcLogPanel from "./react/components/RpcLogPanel";
 import Sidebar from "./react/components/Sidebar";
 import TopBar from "./react/components/TopBar";
 import {
@@ -16,16 +18,32 @@ import {
 import { deleteSession, getSession, listSessions } from "./react/lib/sessions";
 import type { ChatSession } from "./react/types";
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), ms);
+    promise
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  const [agentBootNonce, setAgentBootNonce] = useState(0);
   const [agentStarting, setAgentStarting] = useState(false);
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
-  const isTauriEnv = typeof window !== "undefined" && "__TAURI__" in window;
+  const isTauriEnv = isTauri();
 
   useEffect(() => subscribeAuth(() => setAuthenticated(isAuthenticated())), []);
 
@@ -44,38 +62,62 @@ export default function App() {
   }, [authenticated]);
 
   useEffect(() => {
-    if (!authenticated || agentRunning) return;
+    if (!authenticated) return;
 
-    // Browser dev mode expects vm-agent to run separately; no sidecar boot needed.
+    let cancelled = false;
+
+    // RPC transport only works in the Tauri runtime.
     if (!isTauriEnv) {
-      setAgentRunning(true);
       setAgentStarting(false);
-      setAgentError(null);
+      setAgentRunning(false);
+      setAgentError("当前版本仅支持 Tauri 运行时（RPC sidecar）");
       return;
     }
 
-    if (agentStarting) return;
-
     setAgentStarting(true);
+    setAgentRunning(false);
     setAgentError(null);
-    fetchAgentConfig()
-      .then(async (config) => {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const agentDir = import.meta.env.VITE_AGENT_DIR || "../../vm-agent";
-        await invoke("start_agent", {
-          agentDir,
-          envVars: {
+
+    withTimeout(
+      (async () => {
+        let envVars: Record<string, string> = {};
+        try {
+          const config = await fetchAgentConfig();
+          envVars = {
             LLM_PROXY_URL: config.llm_proxy_url,
             LLM_PROXY_KEY: config.llm_proxy_key,
-          },
+          };
+        } catch (error) {
+          console.warn("[agent] fetchAgentConfig failed, fallback to vm-agent local env", error);
+        }
+
+        const agentDir = import.meta.env.VITE_AGENT_DIR || "../vm-agent";
+        await invoke("start_agent", {
+          agentDir,
+          envVars,
         });
+      })(),
+      20000,
+      "Agent 启动超时，请点击右下角 RPC 日志排查",
+    )
+      .then(() => {
+        if (cancelled) return;
         setAgentRunning(true);
       })
       .catch((err) => {
+        if (cancelled) return;
+        setAgentRunning(false);
         setAgentError(err instanceof Error ? err.message : "Agent 启动失败");
       })
-      .finally(() => setAgentStarting(false));
-  }, [authenticated, agentRunning, agentStarting, isTauriEnv]);
+      .finally(() => {
+        if (cancelled) return;
+        setAgentStarting(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, isTauriEnv, agentBootNonce]);
 
   useEffect(() => {
     if (!currentSessionId) {
@@ -83,9 +125,15 @@ export default function App() {
       return;
     }
 
+    // Skip fetch if we already have the correct session loaded
+    // (e.g., from onSessionCreated setting it directly)
+    if (currentSession?.id === currentSessionId) return;
+
+    let cancelled = false;
     getSession(currentSessionId).then((session) => {
-      if (session) setCurrentSession(session);
+      if (!cancelled && session) setCurrentSession(session);
     }).catch(() => {});
+    return () => { cancelled = true; };
   }, [currentSessionId]);
 
   const title = useMemo(() => {
@@ -99,23 +147,29 @@ export default function App() {
 
   if (agentStarting) {
     return (
-      <div className="agent-loading">
-        <LoaderCircle size={24} className="spinning" />
-        <p>正在启动 AI Agent</p>
-      </div>
+      <>
+        <div className="agent-loading">
+          <LoaderCircle size={24} className="spinning" />
+          <p>正在启动 AI Agent</p>
+        </div>
+        <RpcLogPanel />
+      </>
     );
   }
 
   if (agentError) {
     return (
-      <div className="agent-error">
-        <p>
-          <AlertTriangle size={16} />
-          {agentError}
-        </p>
-        <button onClick={() => setAgentRunning(false)}>重试</button>
-        <button onClick={() => logout()}>退出登录</button>
-      </div>
+      <>
+        <div className="agent-error">
+          <p>
+            <AlertTriangle size={16} />
+            {agentError}
+          </p>
+          <button onClick={() => setAgentBootNonce((value) => value + 1)}>重试</button>
+          <button onClick={() => logout()}>退出登录</button>
+        </div>
+        <RpcLogPanel />
+      </>
     );
   }
 
@@ -149,12 +203,14 @@ export default function App() {
           <NewSessionPanel
             onSessionCreated={(session, firstMessage) => {
               setSessions((prev) => [session, ...prev]);
+              setCurrentSession(session);
               setCurrentSessionId(session.id);
               setPendingMessage(firstMessage);
             }}
           />
         )}
       </div>
+      <RpcLogPanel />
       <Agentation />
     </div>
   );
