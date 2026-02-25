@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   createAgentSession,
   SessionManager,
@@ -9,10 +9,11 @@ import {
   DefaultResourceLoader,
   SettingsManager,
   createCodingTools,
+  loadSkillsFromDir,
 } from "@mariozechner/pi-coding-agent";
 import type { ExtensionFactory, CreateAgentSessionResult } from "@mariozechner/pi-coding-agent";
 import type { Config } from "./config.js";
-import { createWebTools } from "./tools/web.js";
+
 import { createMemoryExtension } from "./extensions/memory.js";
 import { buildSystemPrompt } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
@@ -40,9 +41,7 @@ let heartbeatService: HeartbeatService | null = null;
 let cronService: CronService | null = null;
 let promptQueue: PromptQueue | null = null;
 
-// ─── Restricted mode tool allowlist ─────────────────
-
-const ALLOWED_RESTRICTED_TOOLS = ["web_search", "web_fetch"];
+// ─── Restricted mode: no coding tools, skills still available ──
 
 // ─── Cache key helpers ──────────────────────────────
 
@@ -278,20 +277,8 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   }
 
   const codingTools = createCodingTools(workspace);
-  const webTools = createWebTools();
 
   const extensionFactories: ExtensionFactory[] = [];
-
-  // Restricted mode: block all tools except allowlist
-  if (opts?.restricted) {
-    extensionFactories.push((pi) => {
-      pi.on("tool_call", async (event) => {
-        if (!ALLOWED_RESTRICTED_TOOLS.includes(event.toolName)) {
-          return { block: true, reason: `Tool '${event.toolName}' is not available in chat mode` };
-        }
-      });
-    });
-  }
 
   if (config.memoryEnabled) {
     extensionFactories.push(createMemoryExtension(userMemoryRootDir(opts?.userId)));
@@ -338,7 +325,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     modelRegistry,
     model,
     tools: opts?.restricted ? [] : codingTools,
-    customTools: webTools,
     resourceLoader,
     settingsManager,
     cwd: workspace,
@@ -547,4 +533,127 @@ export function getHeartbeatService(): HeartbeatService | null {
 
 export function getCronService(): CronService | null {
   return cronService;
+}
+
+// ─── Skill Discovery (Pi SDK native) ─────────────────
+
+function readDisplayFields(filePath: string): { displayName?: string; displayDesc?: string; displayGroup?: string } {
+  try {
+    const content = readFileSync(filePath, "utf-8");
+    const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!m) return {};
+    const result: Record<string, string> = {};
+    for (const line of m[1].split("\n")) {
+      const idx = line.indexOf(":");
+      if (idx < 0) continue;
+      const key = line.slice(0, idx).trim();
+      let val = line.slice(idx + 1).trim();
+      if (/^["'].*["']$/.test(val)) val = val.slice(1, -1);
+      result[key] = val;
+    }
+    return { displayName: result["display-name"], displayDesc: result["display-description"], displayGroup: result["display-group"] };
+  } catch { return {}; }
+}
+
+export function listAvailableSkills(): Array<{ id: string; name: string; description: string; group?: string }> {
+  const skills: Array<{ id: string; name: string; description: string; group?: string }> = [];
+  for (const dir of config.skillsPaths) {
+    if (!existsSync(dir)) continue;
+    const result = loadSkillsFromDir({ dir, source: "additional" });
+    for (const s of result.skills) {
+      const { displayName, displayDesc, displayGroup } = readDisplayFields(s.filePath);
+      // Extract group from directory structure: dir/group/skill-name/SKILL.md
+      const rel = relative(dir, s.filePath);
+      const parts = rel.split("/");
+      const dirGroup = parts.length > 2 ? parts[0] : undefined;
+      skills.push({
+        id: s.name,
+        name: displayName || s.name,
+        description: displayDesc || s.description,
+        group: displayGroup || dirGroup,
+      });
+    }
+  }
+  return skills;
+}
+
+// ─── Lightweight Title Generation ───────────────────
+
+export async function generateSessionTitle(
+  userMessage: string,
+  assistantMessage: string,
+): Promise<string> {
+  const truncUser = userMessage.slice(0, 300);
+  const truncAssistant = assistantMessage.slice(0, 500);
+  const prompt = `根据以下对话生成一个简短标题（最多15个中文字符或30个英文字符）。只回复标题本身，不要加引号或标点。\n\n用户: ${truncUser}\n助手: ${truncAssistant}`;
+
+  // 优先用轻量模型，回退到主模型
+  const titleModels = [
+    { model: "claude-haiku-4-5-20251001", api: "anthropic" },
+    { model: config.primaryModel, api: config.primaryProvider.includes("claude") ? "anthropic" : "openai" },
+  ];
+
+  let lastError: Error | null = null;
+
+  for (const { model, api } of titleModels) {
+    try {
+      if (api === "anthropic") {
+        const res = await fetch(`${config.proxyUrl}/v1/messages`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": config.proxyKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 30,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`Anthropic ${model} ${res.status}: ${body.slice(0, 200)}`);
+        }
+
+        const result = (await res.json()) as {
+          content?: Array<{ text?: string }>;
+        };
+        const title = result.content?.[0]?.text?.trim() || "";
+        if (title) return title;
+      } else {
+        const res = await fetch(`${config.proxyUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.proxyKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 30,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`OpenAI ${model} ${res.status}: ${body.slice(0, 200)}`);
+        }
+
+        const result = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const title = result.choices?.[0]?.message?.content?.trim() || "";
+        if (title) return title;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.error(`[title] ${model} failed:`, lastError.message);
+      continue;
+    }
+  }
+
+  if (lastError) throw lastError;
+  return "新会话";
 }

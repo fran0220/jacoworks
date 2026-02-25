@@ -1,174 +1,83 @@
-import { Agentation } from "agentation";
-import { invoke, isTauri } from "@tauri-apps/api/core";
 import { AlertTriangle, LoaderCircle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import ChatView from "./react/components/ChatView";
 import LoginPanel from "./react/components/LoginPanel";
 import NewSessionPanel from "./react/components/NewSessionPanel";
-import RpcLogPanel from "./react/components/RpcLogPanel";
 import Sidebar from "./react/components/Sidebar";
 import TopBar from "./react/components/TopBar";
+import PreviewDrawer from "./react/components/PreviewDrawer";
+import { useAgentBootstrap } from "./react/hooks/use-agent-bootstrap";
+import { useResponsiveSidebar } from "./react/hooks/use-responsive-sidebar";
+import { useSessionState } from "./react/hooks/use-session-state";
 import {
-  fetchAgentConfig,
   handleOAuthCallback,
   isAuthenticated,
   logout,
   subscribeAuth,
 } from "./react/lib/auth";
-import { deleteSession, getSession, listSessions } from "./react/lib/sessions";
-import type { ChatSession } from "./react/types";
+type AppMode = "local" | "openclaw";
 
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), ms);
-    promise
-      .then((value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      })
-      .catch((error) => {
-        window.clearTimeout(timer);
-        reject(error);
-      });
-  });
+const RpcLogPanel = lazy(() => import("./react/components/RpcLogPanel"));
+const SettingsModal = lazy(() => import("./react/components/SettingsModal"));
+const OpenClawApp = lazy(() => import("./react/openclaw/OpenClawApp"));
+const AgentationDevTools = import.meta.env.DEV
+  ? lazy(() => import("./react/components/AgentationDevTools"))
+  : null;
+
+function LazyRpcLogPanel() {
+  return (
+    <Suspense fallback={null}>
+      <RpcLogPanel />
+    </Suspense>
+  );
 }
 
 export default function App() {
-  const [isMobileLike, setIsMobileLike] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia("(max-width: 1023px)").matches : false,
-  );
-  const [isSidebarOpen, setIsSidebarOpen] = useState(!isMobileLike);
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
-  const [agentBootNonce, setAgentBootNonce] = useState(0);
-  const [agentStarting, setAgentStarting] = useState(false);
-  const [agentRunning, setAgentRunning] = useState(false);
-  const [agentError, setAgentError] = useState<string | null>(null);
-  const isTauriEnv = isTauri();
+  const [showSettings, setShowSettings] = useState(false);
+  const [mode, setMode] = useState<AppMode>("local");
 
-  useEffect(() => subscribeAuth(() => setAuthenticated(isAuthenticated())), []);
+  const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
+  const { agentStarting, agentError, retryAgent } = useAgentBootstrap(authenticated && mode === "local");
+  const {
+    sessions,
+    currentSessionId,
+    currentSession,
+    pendingMessage,
+    setPendingMessage,
+    refreshSessions,
+    selectSession,
+    createNewSession,
+    handleSessionCreated,
+    deleteSessionById,
+  } = useSessionState(authenticated);
+
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+
+  useEffect(
+    () =>
+      subscribeAuth(() => {
+        const nextAuthenticated = isAuthenticated();
+        setAuthenticated(nextAuthenticated);
+        if (!nextAuthenticated) {
+          setMode("local");
+        }
+      }),
+    [],
+  );
 
   useEffect(() => {
     handleOAuthCallback().catch(() => {});
   }, []);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 1023px)");
-    const handleChange = (event: MediaQueryListEvent) => {
-      setIsMobileLike(event.matches);
-      // Desktop: auto-open sidebar; Mobile: auto-close
-      setIsSidebarOpen(!event.matches);
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.path) setPreviewPath(detail.path);
     };
-
-    setIsMobileLike(mediaQuery.matches);
-    mediaQuery.addEventListener("change", handleChange);
-
-    return () => {
-      mediaQuery.removeEventListener("change", handleChange);
-    };
+    window.addEventListener("preview-file", handler);
+    return () => window.removeEventListener("preview-file", handler);
   }, []);
-
-  useEffect(() => {
-    if (!isSidebarOpen || !isMobileLike) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsSidebarOpen(false);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isSidebarOpen, isMobileLike]);
-
-  async function refreshSessions() {
-    if (!isAuthenticated()) return;
-    const list = await listSessions();
-    setSessions(list);
-  }
-
-  useEffect(() => {
-    refreshSessions().catch(() => {});
-  }, [authenticated]);
-
-  useEffect(() => {
-    if (!authenticated) return;
-
-    let cancelled = false;
-
-    // RPC transport only works in the Tauri runtime.
-    if (!isTauriEnv) {
-      setAgentStarting(false);
-      setAgentRunning(false);
-      setAgentError("当前版本仅支持 Tauri 运行时（RPC sidecar）");
-      return;
-    }
-
-    setAgentStarting(true);
-    setAgentRunning(false);
-    setAgentError(null);
-
-    withTimeout(
-      (async () => {
-        let envVars: Record<string, string> = {};
-        try {
-          const config = await fetchAgentConfig();
-          envVars = {
-            LLM_PROXY_URL: config.llm_proxy_url,
-            LLM_PROXY_KEY: config.llm_proxy_key,
-          };
-        } catch (error) {
-          console.warn("[agent] fetchAgentConfig failed, fallback to vm-agent local env", error);
-        }
-
-        const agentDir = import.meta.env.VITE_AGENT_DIR || "../vm-agent";
-        await invoke("start_agent", {
-          agentDir,
-          envVars,
-        });
-      })(),
-      20000,
-      "Agent 启动超时，请点击右下角 RPC 日志排查",
-    )
-      .then(() => {
-        if (cancelled) return;
-        setAgentRunning(true);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setAgentRunning(false);
-        setAgentError(err instanceof Error ? err.message : "Agent 启动失败");
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setAgentStarting(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authenticated, isTauriEnv, agentBootNonce]);
-
-  useEffect(() => {
-    if (!currentSessionId) {
-      setCurrentSession(null);
-      return;
-    }
-
-    // Skip fetch if we already have the correct session loaded
-    // (e.g., from onSessionCreated setting it directly)
-    if (currentSession?.id === currentSessionId) return;
-
-    let cancelled = false;
-    getSession(currentSessionId).then((session) => {
-      if (!cancelled && session) setCurrentSession(session);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [currentSessionId]);
 
   const title = useMemo(() => {
     if (!currentSession) return "新会话";
@@ -179,6 +88,21 @@ export default function App() {
     return <LoginPanel />;
   }
 
+  if (mode === "openclaw") {
+    return (
+      <Suspense
+        fallback={
+          <div className="agent-loading">
+            <LoaderCircle size={24} className="spinning" />
+            <p>正在进入 OpenClaw...</p>
+          </div>
+        }
+      >
+        <OpenClawApp onBack={() => setMode("local")} />
+      </Suspense>
+    );
+  }
+
   if (agentStarting) {
     return (
       <>
@@ -186,7 +110,7 @@ export default function App() {
           <LoaderCircle size={24} className="spinning" />
           <p>正在启动 AI Agent</p>
         </div>
-        <RpcLogPanel />
+        <LazyRpcLogPanel />
       </>
     );
   }
@@ -199,10 +123,10 @@ export default function App() {
             <AlertTriangle size={16} />
             {agentError}
           </p>
-          <button onClick={() => setAgentBootNonce((value) => value + 1)}>重试</button>
+          <button onClick={retryAgent}>重试</button>
           <button onClick={() => logout()}>退出登录</button>
         </div>
-        <RpcLogPanel />
+        <LazyRpcLogPanel />
       </>
     );
   }
@@ -224,25 +148,19 @@ export default function App() {
         sessions={sessions}
         currentSessionId={currentSessionId}
         onSelect={(sessionId) => {
-          setCurrentSessionId(sessionId);
+          selectSession(sessionId);
           if (isMobileLike) {
             setIsSidebarOpen(false);
           }
         }}
         onNew={() => {
-          setCurrentSessionId(null);
+          createNewSession();
           if (isMobileLike) {
             setIsSidebarOpen(false);
           }
         }}
         onClose={() => setIsSidebarOpen(false)}
-        onDelete={async (sessionId) => {
-          await deleteSession(sessionId);
-          await refreshSessions();
-          if (currentSessionId === sessionId) {
-            setCurrentSessionId(null);
-          }
-        }}
+        onDelete={deleteSessionById}
       />
 
       <div className="main-area">
@@ -250,6 +168,8 @@ export default function App() {
           title={title}
           sidebarOpen={isSidebarOpen}
           onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
+          onOpenSettings={() => setShowSettings(true)}
+          onToggleOpenClaw={() => setMode("openclaw")}
         />
 
         {currentSession ? (
@@ -261,17 +181,26 @@ export default function App() {
           />
         ) : (
           <NewSessionPanel
-            onSessionCreated={(session, firstMessage) => {
-              setSessions((prev) => [session, ...prev]);
-              setCurrentSession(session);
-              setCurrentSessionId(session.id);
-              setPendingMessage(firstMessage);
-            }}
+            onSessionCreated={handleSessionCreated}
           />
         )}
       </div>
-      <RpcLogPanel />
-      <Agentation />
+      <PreviewDrawer
+        filePath={previewPath}
+        workspace={currentSession?.workspacePath}
+        onClose={() => setPreviewPath(null)}
+      />
+      <LazyRpcLogPanel />
+      {showSettings && (
+        <Suspense fallback={null}>
+          <SettingsModal onClose={() => setShowSettings(false)} />
+        </Suspense>
+      )}
+      {AgentationDevTools && (
+        <Suspense fallback={null}>
+          <AgentationDevTools />
+        </Suspense>
+      )}
     </div>
   );
 }

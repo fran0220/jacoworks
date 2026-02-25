@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/cowork"
 	"github.com/fran0220/jacoworks/gateway/internal/lxd"
+	"github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/proxy"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
@@ -83,6 +85,10 @@ func main() {
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
 	proxyHandler := proxy.NewHandler(s, lxdClient, freezer, cfg.LXD.OpenClawPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
 	coworkHandler := cowork.NewHandler(s, lxdClient)
+	wsProxy := openclaw.NewWSProxy(s, lxdClient, freezer, cfg.LXD.OpenClawPort, "data")
+	channelPool := openclaw.NewChannelPool(wsProxy, 5*time.Minute, 1024)
+	defer channelPool.Close()
+	sseHandler := openclaw.NewSSEHandler(channelPool)
 
 	mux := http.NewServeMux()
 
@@ -110,7 +116,7 @@ func main() {
 
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
-	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, lxdClient, auditLogger, cfg))))
+	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, lxdClient, auditLogger, cfg, wsProxy))))
 	mux.Handle("POST /api/cowork/{sid}/upload", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Upload)))
 	mux.Handle("GET /api/cowork/{sid}/changes", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Changes)))
 	mux.Handle("GET /api/cowork/{sid}/download", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Download)))
@@ -118,13 +124,19 @@ func main() {
 	// Authenticated: chat proxy
 	mux.Handle("POST /v1/chat/completions", authMiddleware.Authenticate(http.HandlerFunc(proxyHandler.ChatCompletions)))
 
+	// Authenticated: OpenClaw WebSocket proxy
+	mux.Handle("GET /ws/openclaw", authMiddleware.Authenticate(wsProxy))
+	mux.Handle("GET /api/oc/stream", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.StreamEvents)))
+	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
+	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
+
 	// Admin: container management
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(lxdClient)))))
 	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(lxdClient, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(lxdClient, auditLogger)))))
 
 	// Admin: user management (container provisioning after activation)
-	mux.Handle("POST /api/admin/provision", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(provisionContainerHandler(s, lxdClient, auditLogger, cfg)))))
+	mux.Handle("POST /api/admin/provision", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(provisionContainerHandler(s, lxdClient, auditLogger, cfg, wsProxy)))))
 
 	// Admin: invite codes
 	mux.Handle("POST /api/admin/invite-codes", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(createInviteCodeHandler(s)))))
@@ -137,11 +149,11 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:         cfg.Addr(),
-		Handler:      corsMiddleware(mux),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 0,
-		IdleTimeout:  120 * time.Second,
+		Addr:              cfg.Addr(),
+		Handler:           corsMiddleware(mux),
+		ReadHeaderTimeout: 30 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
@@ -191,7 +203,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		if isAllowedOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Cowork-Session")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Cowork-Session, Upgrade")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		if r.Method == http.MethodOptions {
@@ -255,7 +267,7 @@ func stopContainerHandler(client *lxd.SSHClient, al *audit.Logger) http.HandlerF
 	}
 }
 
-func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
+func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Logger, cfg *config.Config, wsProxy *openclaw.WSProxy) http.HandlerFunc {
 	type provisionRequest struct {
 		UserID   string `json:"user_id"`
 		Username string `json:"username"`
@@ -275,7 +287,7 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 		admin := auth.GetUser(r.Context())
 
 		containerToken, _ := generateToken()
-		containerName := "oc-" + req.Username
+		containerName := containerNameForUser(req.UserID)
 
 		if err := s.CreateContainer(r.Context(), req.UserID, containerName, containerToken); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
@@ -286,7 +298,8 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 			"LLM_PROXY_URL": cfg.LLM.ProxyURL,
 			"LLM_PROXY_KEY": cfg.LLM.ProxyKey,
 		}
-		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars)
+		deviceKey := wsProxy.GetDeviceKeyInfo()
+		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
 		if err != nil {
 			log.Error().Err(err).Str("container", containerName).Msg("provision container failed")
 			al.Log(admin.ID, "provision_container", "container", containerName, r.RemoteAddr)
@@ -504,7 +517,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 }
 
 // selfProvisionHandler allows a user to provision their own container for cowork mode.
-func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
+func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Logger, cfg *config.Config, wsProxy *openclaw.WSProxy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -523,7 +536,7 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 		}
 
 		containerToken, _ := generateToken()
-		containerName := "oc-" + user.Name
+		containerName := containerNameForUser(user.ID)
 
 		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
@@ -534,7 +547,8 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			"LLM_PROXY_URL": cfg.LLM.ProxyURL,
 			"LLM_PROXY_KEY": cfg.LLM.ProxyKey,
 		}
-		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars)
+		deviceKey := wsProxy.GetDeviceKeyInfo()
+		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
 		if err != nil {
 			log.Error().Err(err).Str("container", containerName).Str("user_id", user.ID).Msg("self-provision failed")
 			al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
@@ -564,8 +578,10 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"llm_proxy_url": cfg.LLM.ProxyURL,
-			"llm_proxy_key": cfg.LLM.ProxyKey,
+			"llm_proxy_url":  cfg.LLM.ProxyURL,
+			"llm_proxy_key":  cfg.LLM.ProxyKey,
+			"exa_api_key":    cfg.LLM.ExaAPIKey,
+			"tavily_api_key": cfg.LLM.TavilyKey,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
@@ -593,4 +609,10 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func containerNameForUser(userID string) string {
+	sum := sha256.Sum256([]byte(userID))
+	// Deterministic 16-hex suffix avoids collisions from truncated IDs.
+	return "oc-" + hex.EncodeToString(sum[:8])
 }

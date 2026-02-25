@@ -96,6 +96,12 @@ func (c *SSHClient) Unfreeze(name string) error {
 	return c.waitForHealth(ip, 10*time.Second)
 }
 
+// Exec runs a command inside a container via lxc exec.
+func (c *SSHClient) Exec(container string, args ...string) (string, error) {
+	lxcArgs := append([]string{"exec", container, "--"}, args...)
+	return c.lxc(lxcArgs...)
+}
+
 func (c *SSHClient) Destroy(name string) error {
 	log.Warn().Str("name", name).Msg("destroying container")
 	// Force stop first
@@ -221,8 +227,90 @@ func (c *SSHClient) sshExec(cmdStr string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// DeviceKeyInfo holds the gateway's Ed25519 device key info for auto-pairing.
+type DeviceKeyInfo struct {
+	DeviceID  string
+	PublicKey string // base64url encoded
+}
+
+func gatewayDeviceEntry(deviceID, publicKey string, nowMs int64) map[string]any {
+	scopes := []string{"operator.admin", "operator.approvals", "operator.pairing", "operator.read", "operator.write"}
+	return map[string]any{
+		"deviceId":       deviceID,
+		"publicKey":      publicKey,
+		"platform":       "web",
+		"clientId":       "gateway-client",
+		"clientMode":     "backend",
+		"role":           "operator",
+		"roles":          []string{"operator"},
+		"scopes":         scopes,
+		"approvedScopes": scopes,
+		"remoteIp":       "10.10.10.1",
+		"tokens": map[string]any{
+			"operator": map[string]any{
+				"token":       "auto-paired-gateway",
+				"role":        "operator",
+				"scopes":      scopes,
+				"createdAtMs": nowMs,
+			},
+		},
+		"createdAtMs":  nowMs,
+		"approvedAtMs": nowMs,
+	}
+}
+
+func (c *SSHClient) injectGatewayDeviceKey(name string, deviceKey *DeviceKeyInfo) error {
+	if deviceKey == nil || deviceKey.DeviceID == "" || deviceKey.PublicKey == "" {
+		return nil
+	}
+
+	pairedPath := "/home/agent/.openclaw/devices/paired.json"
+	if _, err := c.lxc("exec", name, "--", "mkdir", "-p", "/home/agent/.openclaw/devices"); err != nil {
+		return fmt.Errorf("prepare devices dir: %w", err)
+	}
+
+	out, err := c.lxc("exec", name, "--", "sh", "-lc", "cat "+pairedPath+" 2>/dev/null || true")
+	if err != nil {
+		return fmt.Errorf("read paired.json: %w", err)
+	}
+
+	paired := map[string]map[string]any{}
+	trimmed := strings.TrimSpace(out)
+	if trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &paired); err != nil {
+			return fmt.Errorf("parse paired.json: %w", err)
+		}
+	}
+
+	if existing, ok := paired[deviceKey.DeviceID]; ok {
+		if existingPublicKey, ok := existing["publicKey"].(string); ok && existingPublicKey == deviceKey.PublicKey {
+			return nil
+		}
+	}
+
+	paired[deviceKey.DeviceID] = gatewayDeviceEntry(deviceKey.DeviceID, deviceKey.PublicKey, time.Now().UnixMilli())
+
+	payload, err := json.MarshalIndent(paired, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode paired.json: %w", err)
+	}
+
+	tmpFile := fmt.Sprintf("/tmp/_oc_paired_%s", strings.ReplaceAll(name, "/", "_"))
+	writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s", strings.ReplaceAll(string(payload), "'", "'\\''"), tmpFile)
+	if _, err := c.sshExec(writeCmd); err != nil {
+		return fmt.Errorf("write temp paired.json: %w", err)
+	}
+
+	pushCmd := fmt.Sprintf("lxc file push %s %s%s --uid 1001 --gid 1001 --mode 0600 && rm -f %s", tmpFile, name, pairedPath, tmpFile)
+	if _, err := c.sshExec(pushCmd); err != nil {
+		return fmt.Errorf("push paired.json: %w", err)
+	}
+
+	return nil
+}
+
 // ProvisionContainer clones from template, injects .env, starts, and returns IP.
-func (c *SSHClient) ProvisionContainer(name, containerToken string, envVars map[string]string) (string, error) {
+func (c *SSHClient) ProvisionContainer(name, containerToken string, envVars map[string]string, deviceKey *DeviceKeyInfo) (string, error) {
 	log.Info().Str("name", name).Str("template", c.template).Msg("provisioning container")
 
 	// 1. Clone from template snapshot
@@ -239,24 +327,34 @@ func (c *SSHClient) ProvisionContainer(name, containerToken string, envVars map[
 	// 3. Wait for network
 	time.Sleep(3 * time.Second)
 
-	// 4. Inject .env via lxc file push (avoids shell escaping issues)
+	// 4. Inject .env via printf + lxc file push (safe from echo -e backslash mangling)
 	envContent := fmt.Sprintf(
 		"LLM_PROXY_URL=%s\nLLM_PROXY_KEY=%s\nOPENCLAW_GATEWAY_TOKEN=%s\nNODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n",
 		envVars["LLM_PROXY_URL"], envVars["LLM_PROXY_KEY"], containerToken,
 	)
-	// Write to host temp file, then push into container
-	tmpCmd := fmt.Sprintf("echo -e '%s' > /tmp/_oc_env_%s", strings.ReplaceAll(envContent, "'", "'\\''"), name)
-	if _, err := c.sshExec(tmpCmd); err != nil {
+	tmpFile := fmt.Sprintf("/tmp/_oc_env_%s", name)
+	writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s", strings.ReplaceAll(envContent, "'", "'\\''"), tmpFile)
+	if _, err := c.sshExec(writeCmd); err != nil {
 		return "", fmt.Errorf("write temp env: %w", err)
 	}
-	pushCmd := fmt.Sprintf("lxc file push /tmp/_oc_env_%s %s/home/agent/.openclaw/.env --uid 1001 --gid 1001 --mode 0600 && rm -f /tmp/_oc_env_%s", name, name, name)
+	pushCmd := fmt.Sprintf("lxc file push %s %s/home/agent/.openclaw/.env --uid 1001 --gid 1001 --mode 0600 && rm -f %s", tmpFile, name, tmpFile)
 	if _, err := c.sshExec(pushCmd); err != nil {
 		return "", fmt.Errorf("push env: %w", err)
 	}
 
-	// 5. Restart OpenClaw to pick up new token
+	// 4.5 Inject gateway device key into paired.json BEFORE restart
+	if deviceKey != nil {
+		if err := c.injectGatewayDeviceKey(name, deviceKey); err != nil {
+			log.Warn().Err(err).Str("name", name).Msg("failed to inject gateway device key during provisioning")
+		} else {
+			log.Info().Str("name", name).Str("device_id", deviceKey.DeviceID).Msg("gateway device key injected before restart")
+		}
+	}
+
+	// 5. Restart OpenClaw to pick up new token (try systemctl, fallback to kill+wait)
 	if _, err := c.lxc("exec", name, "--", "systemctl", "restart", "openclaw.service"); err != nil {
-		return "", fmt.Errorf("restart openclaw: %w", err)
+		log.Warn().Err(err).Str("name", name).Msg("systemctl restart failed, falling back to process restart")
+		c.lxc("exec", name, "--", "bash", "-c", "pkill -u agent openclaw; sleep 2")
 	}
 
 	// 5.5 Auto-approve devices pairing (operator→admin scope for sessions_spawn)

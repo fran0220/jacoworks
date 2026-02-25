@@ -39,3 +39,13 @@ export type StreamBlock =
   | { type: "text"; content: string }
   | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error" }
   | { type: "status"; text: string };
+
+export interface FilePreview {
+  path: string;
+  name: string;
+  ext: string;
+  size: number;
+  category: "image" | "code" | "markdown" | "text" | "docx" | "xlsx" | "binary";
+  content: string | null;
+  language: string | null;
+}

@@ -10,6 +10,8 @@ import {
   destroySession,
   destroyAllSessions,
   cleanupStaleSessions,
+  generateSessionTitle,
+  listAvailableSkills,
 } from "./agent.js";
 
 type RpcId = string | number;
@@ -40,6 +42,12 @@ interface DestroySessionCommand extends RpcCommandBase {
   session_id: string;
 }
 
+interface GenerateTitleCommand extends RpcCommandBase {
+  type: "generate_title";
+  user_message: string;
+  assistant_message: string;
+}
+
 interface HealthCommand extends RpcCommandBase {
   type: "health";
 }
@@ -52,6 +60,7 @@ type RpcCommand =
   | PromptCommand
   | AbortCommand
   | DestroySessionCommand
+  | GenerateTitleCommand
   | HealthCommand
   | ListSessionsCommand;
 
@@ -159,6 +168,12 @@ async function handleCommand(command: RawCommand) {
       });
       return;
 
+    case "list_skills":
+      sendResponse(command.id, command.type, true, {
+        skills: listAvailableSkills(),
+      });
+      return;
+
     case "list_sessions":
       sendResponse(command.id, command.type, true, { sessions: listSessions() });
       return;
@@ -191,6 +206,24 @@ async function handleCommand(command: RawCommand) {
         return;
       }
       await handlePrompt(command as unknown as PromptCommand);
+      return;
+    }
+
+    case "generate_title": {
+      const userMsg = typeof command.user_message === "string" ? command.user_message : "";
+      const assistantMsg = typeof command.assistant_message === "string" ? command.assistant_message : "";
+      if (!assistantMsg) {
+        sendResponse(command.id, command.type, false, { error: "assistant_message required" });
+        return;
+      }
+      try {
+        const title = await generateSessionTitle(userMsg, assistantMsg);
+        sendResponse(command.id, command.type, true, { title });
+      } catch (err) {
+        sendResponse(command.id, command.type, false, {
+          error: err instanceof Error ? err.message : "title generation failed",
+        });
+      }
       return;
     }
 
@@ -254,4 +287,4 @@ process.on("unhandledRejection", (reason) => {
   console.error("unhandled rejection:", reason);
 });
 
-send({ type: "ready", service: "vm-agent", version: "0.2.0-rpc" });
+send({ type: "ready", service: "vm-agent", version: "0.2.0-rpc", skills: listAvailableSkills() });

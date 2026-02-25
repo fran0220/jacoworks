@@ -109,7 +109,8 @@ export async function createSession(options?: { workspacePath?: string; model?: 
 export async function getSession(id: string): Promise<ChatSession | undefined> {
   const response = await apiFetch(`/api/sessions/${id}`);
   if (response.status === 404 || response.status !== 200) return undefined;
-  return toSession(JSON.parse(response.body));
+  const session = toSession(JSON.parse(response.body));
+  return session.type === "chat" ? session : undefined;
 }
 
 export async function listSessions(): Promise<ChatSession[]> {
@@ -117,16 +118,18 @@ export async function listSessions(): Promise<ChatSession[]> {
   if (response.status !== 200) return [];
 
   const summaries: SessionSummary[] = JSON.parse(response.body) ?? [];
-  return summaries.map((summary) => ({
-    id: summary.id,
-    title: summary.title,
-    messages: [],
-    createdAt: parseTime(summary.created_at),
-    updatedAt: parseTime(summary.updated_at),
-    type: (summary.type as ChatSession["type"]) || "chat",
-    workspacePath: summary.workspace_path || "",
-    model: summary.model || "",
-  }));
+  return summaries
+    .filter((summary) => !summary.type || summary.type === "chat")
+    .map((summary) => ({
+      id: summary.id,
+      title: summary.title,
+      messages: [],
+      createdAt: parseTime(summary.created_at),
+      updatedAt: parseTime(summary.updated_at),
+      type: "chat",
+      workspacePath: summary.workspace_path || "",
+      model: summary.model || "",
+    }));
 }
 
 export async function updateSession(id: string, data: Partial<ChatSession>) {

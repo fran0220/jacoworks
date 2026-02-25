@@ -1,0 +1,142 @@
+/* ===== RPC Log Panel ===== */
+
+.rpc-log-root {
+  position: fixed;
+  right: var(--space-8);
+  bottom: var(--space-8);
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-4);
+}
+
+.rpc-log-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.rpc-log-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rpc-log-panel {
+  width: min(calc(var(--content-width) + var(--space-13)), calc(100vw - var(--space-15)));
+  height: min(calc(var(--space-15) * 4), 42vh);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rpc-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.rpc-log-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.rpc-log-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.rpc-log-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.rpc-log-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rpc-log-empty {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  padding: var(--space-3) var(--space-2);
+}
+
+.rpc-log-line {
+  display: grid;
+  grid-template-columns: var(--space-13) var(--space-11) 1fr;
+  align-items: start;
+  gap: var(--space-3);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-normal);
+}
+
+.rpc-log-time {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.rpc-log-source {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.rpc-log-source-error {
+  color: var(--danger);
+}
+
+.rpc-log-text {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .rpc-log-root {
+    right: var(--space-4);
+    left: var(--space-4);
+    bottom: var(--space-4);
+    align-items: stretch;
+  }
+
+  .rpc-log-panel {
+    width: 100%;
+    height: min(calc(var(--space-15) * 4), 48vh);
+  }
+}
+

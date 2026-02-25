@@ -1,35 +1,11 @@
 import { ArrowRight, ChevronDown, FolderOpen, Paperclip, Plus, Sparkles } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { DEFAULT_MODEL, MODEL_OPTIONS } from "../lib/config";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
 import { folderName, selectFolder } from "../lib/cowork";
+import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { createSession } from "../lib/sessions";
+import { useSkills } from "../lib/skills";
 import type { ChatSession } from "../types";
-
-const SKILLS = [
-  { id: "data-analysis", name: "数据分析", description: "数据清洗、可视化与统计分析" },
-  { id: "document-processing", name: "文档处理", description: "文档格式转换与内容提取" },
-  { id: "marketing", name: "营销助手", description: "营销文案与策略生成" },
-  { id: "finance", name: "财务分析", description: "财务报表分析与建议" },
-  { id: "legal", name: "法律助手", description: "法律文书审查与建议" },
-];
-
-const RECENT_FOLDERS_KEY = "jacoworks_recent_folders";
-const MAX_RECENT = 6;
-
-function getRecentFolders(): string[] {
-  try {
-    const raw = localStorage.getItem(RECENT_FOLDERS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function addRecentFolder(path: string) {
-  const recent = getRecentFolders().filter((p) => p !== path);
-  recent.unshift(path);
-  localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(recent.slice(0, MAX_RECENT)));
-}
 
 export default function NewSessionPanel({
   onSessionCreated,
@@ -38,10 +14,19 @@ export default function NewSessionPanel({
 }) {
   const [task, setTask] = useState("");
   const [model, setModel] = useState(DEFAULT_MODEL);
-  const [workspacePath, setWorkspacePath] = useState("");
+  const [workspacePath, setWorkspacePath] = useState(() => getSettings().defaultWorkspace);
   const [loading, setLoading] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
-  const [skillsSubOpen, setSkillsSubOpen] = useState(false);
+  const skills = useSkills();
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof skills>();
+    for (const s of skills) {
+      const g = s.group || "";
+      if (!map.has(g)) map.set(g, []);
+      map.get(g)!.push(s);
+    }
+    return map;
+  }, [skills]);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [recentFolders, setRecentFolders] = useState<string[]>(getRecentFolders);
   const plusMenuRef = useRef<HTMLDivElement>(null);
@@ -57,7 +42,6 @@ export default function NewSessionPanel({
     const handleClickOutside = (e: MouseEvent) => {
       if (plusMenuOpen && plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
         setPlusMenuOpen(false);
-        setSkillsSubOpen(false);
       }
       if (folderMenuOpen && folderMenuRef.current && !folderMenuRef.current.contains(e.target as Node)) {
         setFolderMenuOpen(false);
@@ -95,7 +79,6 @@ export default function NewSessionPanel({
   const handleFileSelect = () => {
     fileInputRef.current?.click();
     setPlusMenuOpen(false);
-    setSkillsSubOpen(false);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -107,11 +90,18 @@ export default function NewSessionPanel({
   };
 
   const handleSkillInsert = (skillId: string) => {
-    const insertion = `/${skillId} `;
-    setTask((prev) => prev + insertion);
+    setTask((prev) =>
+      prev.endsWith("/") ? `${prev.slice(0, -1)}/${skillId} ` : `${prev}/${skillId} `,
+    );
     setPlusMenuOpen(false);
-    setSkillsSubOpen(false);
     textareaRef.current?.focus();
+  };
+
+  const handleTaskChange = (val: string) => {
+    setTask(val);
+    if (val === "/" || val.endsWith("\n/") || val.endsWith(" /")) {
+      setPlusMenuOpen(true);
+    }
   };
 
   return (
@@ -126,7 +116,7 @@ export default function NewSessionPanel({
           rows={3}
           disabled={loading}
           value={task}
-          onChange={(e) => setTask(e.target.value)}
+          onChange={(e) => handleTaskChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -187,10 +177,7 @@ export default function NewSessionPanel({
               <button
                 className="ns-btn-plus"
                 disabled={loading}
-                onClick={() => {
-                  setPlusMenuOpen((v) => !v);
-                  setSkillsSubOpen(false);
-                }}
+                onClick={() => setPlusMenuOpen((v) => !v)}
                 title="添加附件或技能"
               >
                 <span className="ns-plus-icon">+</span>
@@ -210,29 +197,39 @@ export default function NewSessionPanel({
                     <Paperclip size={18} />
                     <span>附加文件或图片</span>
                   </button>
-                  <button
-                    className={`ns-menu-item ns-menu-item-sub ${skillsSubOpen ? "active" : ""}`}
-                    onClick={() => setSkillsSubOpen((v) => !v)}
-                  >
-                    <Sparkles size={18} />
-                    <span>功能</span>
-                    <ChevronDown size={14} className="ns-sub-arrow" />
-                  </button>
-
-                  {skillsSubOpen && (
-                    <div className="ns-skills-submenu">
-                      {SKILLS.map((skill) => (
-                        <button
-                          key={skill.id}
-                          className="ns-skill-item"
-                          onClick={() => handleSkillInsert(skill.id)}
-                        >
-                          <span className="ns-skill-name">/{skill.id}</span>
-                          <span className="ns-skill-desc">{skill.description}</span>
-                        </button>
-                      ))}
+                  <div className="ns-menu-item-hover">
+                    <div className="ns-menu-item ns-menu-item-sub">
+                      <Sparkles size={18} />
+                      <span>功能</span>
+                      <ChevronDown size={14} className="ns-sub-arrow" />
                     </div>
-                  )}
+                    <div className="ns-skills-submenu">
+                      <div className="ns-skills-submenu-content">
+                        {Array.from(grouped.entries()).map(([group, items]) => (
+                          <div key={group || "_ungrouped"} className="ns-group-hover">
+                            <div className="ns-group-trigger">
+                              <span>{group || "其他"}</span>
+                              <ChevronDown size={14} className="ns-sub-arrow" />
+                            </div>
+                            <div className="ns-group-skills">
+                              <div className="ns-group-skills-content">
+                                {items.map((skill) => (
+                                  <button
+                                    key={skill.id}
+                                    className="ns-skill-item"
+                                    onClick={() => handleSkillInsert(skill.id)}
+                                  >
+                                    <span className="ns-skill-name">/{skill.id}</span>
+                                    <span className="ns-skill-desc">{skill.description}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

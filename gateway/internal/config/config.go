@@ -23,8 +23,10 @@ type ChatAgentConfig struct {
 }
 
 type LLMConfig struct {
-	ProxyURL string `yaml:"proxy_url"`
-	ProxyKey string `yaml:"proxy_key"`
+	ProxyURL    string `yaml:"proxy_url"`
+	ProxyKey    string `yaml:"proxy_key"`
+	ExaAPIKey   string `yaml:"exa_api_key"`
+	TavilyKey   string `yaml:"tavily_api_key"`
 }
 
 type ServerConfig struct {
@@ -130,6 +132,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_LLM_PROXY_KEY"); v != "" {
 		cfg.LLM.ProxyKey = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_EXA_API_KEY"); v != "" {
+		cfg.LLM.ExaAPIKey = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_TAVILY_API_KEY"); v != "" {
+		cfg.LLM.TavilyKey = v
 	}
 	if v := os.Getenv("GATEWAY_CHAT_AGENT_URL"); v != "" {
 		cfg.ChatAgent.URL = v

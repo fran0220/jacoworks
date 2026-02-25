@@ -160,7 +160,12 @@ export function logout() {
   clearSession();
 }
 
-export async function fetchAgentConfig(): Promise<{ llm_proxy_url: string; llm_proxy_key: string }> {
+export async function fetchAgentConfig(): Promise<{
+  llm_proxy_url: string;
+  llm_proxy_key: string;
+  exa_api_key?: string;
+  tavily_api_key?: string;
+}> {
   const response = await authFetch("/api/agent/config", { method: "GET" });
   if (response.status !== 200) {
     throw new Error(parseError(response.body, `获取 Agent 配置失败 (${response.status})`));

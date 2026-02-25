@@ -1,0 +1,125 @@
+/* ===== Chat View ===== */
+
+.chat-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-8) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.empty-state {
+  margin: auto;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* ===== Message Bubbles ===== */
+
+.bubble-row {
+  display: flex;
+  padding: var(--space-3) var(--space-10);
+}
+
+.bubble-row.user {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 75%;
+}
+
+.user-bubble {
+  background: var(--bg-user-bubble);
+  padding: var(--space-5) var(--space-8);
+  border-radius: var(--radius-lg);
+}
+
+.assistant-bubble {
+  background: transparent;
+  padding: var(--space-2) 0;
+  max-width: 85%;
+}
+
+.user-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.attached-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.attached-img {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: var(--radius);
+  object-fit: cover;
+}
+
+.cursor {
+  animation: blink 1s var(--ease-step-end) infinite;
+  color: var(--accent);
+}
+
+.streaming-text,
+.assistant-plain-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: var(--text-md);
+  line-height: var(--leading-loose);
+}
+
+/* ===== Tool Status ===== */
+
+.tool-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-2) var(--space-10);
+  padding: var(--space-3) 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.tool-icon {
+  color: var(--accent);
+}
+
+.spinner {
+  width: var(--size-spinner-sm);
+  height: var(--size-spinner-sm);
+  border: 1.5px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-full);
+  animation: spin 0.8s var(--ease-linear) infinite;
+}
+
+.status-hint {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  padding: var(--space-2) 0;
+}
+
+.error-inline {
+  margin: var(--space-2) var(--space-10);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--danger);
+  font-size: var(--text-sm);
+}

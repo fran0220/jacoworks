@@ -6,17 +6,79 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+
+// ───── Memory helpers ─────────────────────────────────────────
+
+fn memory_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("memory"))
+        .map_err(|error| format!("Failed to resolve app data directory: {}", error))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryStats {
+    pub path: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+}
+
+#[tauri::command]
+pub fn get_memory_stats(app: AppHandle) -> Result<MemoryStats, String> {
+    let root = memory_root_dir(&app)?;
+    let path = root.display().to_string();
+
+    let mut file_count = 0usize;
+    let mut total_bytes = 0u64;
+
+    if root.exists() {
+        for entry in walkdir::WalkDir::new(&root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_type().is_file() {
+                file_count += 1;
+                total_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+
+    Ok(MemoryStats {
+        path,
+        file_count,
+        total_bytes,
+    })
+}
+
+#[tauri::command]
+pub fn clear_memory(app: AppHandle) -> Result<(), String> {
+    let root = memory_root_dir(&app)?;
+    if root.exists() {
+        std::fs::remove_dir_all(&root)
+            .map_err(|e| format!("Failed to clear memory: {}", e))?;
+    }
+    Ok(())
+}
 
 type SharedStdin = Arc<Mutex<ChildStdin>>;
 
 struct AgentProcess {
     child: Child,
     stdin: SharedStdin,
+    workspace: PathBuf,
 }
 
 static AGENT_PROCESS: std::sync::LazyLock<Mutex<Option<AgentProcess>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
+
+/// Returns the running agent's workspace directory (used by file-card path resolution).
+pub fn agent_workspace() -> Option<PathBuf> {
+    AGENT_PROCESS
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|p| p.workspace.clone()))
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentStatus {
@@ -193,6 +255,7 @@ pub async fn start_agent(
         *proc = Some(AgentProcess {
             child,
             stdin: Arc::new(Mutex::new(stdin)),
+            workspace: resolved_agent_dir.clone(),
         });
     }
 

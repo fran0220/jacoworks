@@ -1,0 +1,297 @@
+/* ===== Settings Modal ===== */
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  background: var(--bg-backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fade-in var(--duration-fast) var(--ease-standard);
+}
+
+.settings-modal {
+  width: 520px;
+  max-width: calc(100vw - var(--space-11) * 2);
+  max-height: calc(100vh - var(--space-15));
+  background: var(--bg-secondary);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: page-enter var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-9) var(--space-10);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.settings-header h2 {
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+}
+
+.settings-close {
+  width: var(--size-btn);
+  height: var(--size-btn);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.settings-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-10) var(--space-10);
+}
+
+.settings-section {
+  margin-top: var(--space-8);
+}
+
+.settings-section:first-child {
+  margin-top: 0;
+}
+
+.settings-section-title {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-bottom: var(--space-4);
+}
+
+.settings-item {
+  padding: var(--space-6) 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.settings-section > .settings-item:last-child {
+  border-bottom: none;
+}
+
+.settings-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.settings-item-info {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.settings-item-info > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.settings-item-label {
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+}
+
+.settings-item-desc {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-top: var(--space-1);
+}
+
+/* Toggle switch */
+
+.toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background-color var(--duration-normal) var(--ease-standard);
+}
+
+.toggle.on {
+  background: var(--accent);
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--duration-normal) var(--ease-emphasized);
+}
+
+.toggle.on .toggle-thumb {
+  transform: translateX(18px);
+}
+
+/* Memory meta info */
+
+.settings-memory-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-4);
+  padding-left: var(--space-11);
+}
+
+.settings-meta-path {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-meta-size {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+/* Settings buttons */
+
+.settings-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  margin-left: var(--space-11);
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius);
+  font-size: var(--text-xs);
+  color: var(--danger);
+  border: 1px solid transparent;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.settings-btn-danger:hover:not(:disabled) {
+  background: var(--bg-error);
+  border-color: var(--danger);
+}
+
+.settings-btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-btn-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.settings-btn-outline:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-btn-outline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-btn-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-delete-btn);
+  height: var(--size-delete-btn);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.settings-btn-clear:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+/* Workspace path display */
+
+.settings-workspace-path {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  margin-left: var(--space-11);
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.settings-workspace-path > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+/* Hint text */
+
+.settings-hint {
+  margin-top: var(--space-3);
+  padding-left: var(--space-11);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.settings-hint.success {
+  color: var(--accent);
+}
+
+.settings-link {
+  color: var(--accent);
+  text-decoration: underline;
+  font-size: var(--text-xs);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.settings-link:hover {
+  color: var(--accent-hover);
+}

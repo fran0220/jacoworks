@@ -1,5 +1,7 @@
+import { Suspense, lazy } from "react";
 import type { ChatMessage, MessageContent } from "../types";
-import Markdown from "./Markdown";
+
+const Markdown = lazy(() => import("./Markdown"));
 
 function extractText(content: string | MessageContent[]) {
   if (typeof content === "string") return content;
@@ -16,7 +18,15 @@ function extractImages(content: string | MessageContent[]) {
     .map((part) => part.image_url!.url);
 }
 
-export default function MessageBubble({ message, streaming = false }: { message: ChatMessage; streaming?: boolean }) {
+export default function MessageBubble({
+  message,
+  streaming = false,
+  workspacePath,
+}: {
+  message: ChatMessage;
+  streaming?: boolean;
+  workspacePath?: string;
+}) {
   const isUser = message.role === "user";
   const text = extractText(message.content);
   const images = extractImages(message.content);
@@ -37,7 +47,9 @@ export default function MessageBubble({ message, streaming = false }: { message:
           </>
         ) : (
           <>
-            <Markdown content={text} />
+            <Suspense fallback={<pre className="assistant-plain-text">{text}</pre>}>
+              <Markdown content={text} workspacePath={workspacePath} />
+            </Suspense>
             {streaming && <span className="cursor">▋</span>}
           </>
         )}

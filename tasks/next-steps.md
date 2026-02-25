@@ -1,6 +1,8 @@
 # JAcoworks 下一步开发计划
 
 > 创建于 2026-02-22，基于 Phase 2 部署验证完成后的状态
+> ⚠️ **2026-02-24 修正**: 本文档中多处提到 SSE 流式透传，实际 OpenClaw 使用 **WebSocket + JSON framing** 协议（非 SSE）。
+> 正确架构参见 `AGENTS.md` 3.2.1 节。Go 网关需新增 `/ws/openclaw` WebSocket 代理端点。
 
 ---
 

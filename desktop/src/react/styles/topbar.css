@@ -1,0 +1,78 @@
+/* ===== TopBar ===== */
+
+.topbar {
+  height: var(--titlebar-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-10);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.topbar .left,
+.topbar .right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.title {
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
+}
+
+.btn-sidebar {
+  width: var(--size-btn);
+  height: var(--size-btn);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.btn-sidebar:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.btn-openclaw {
+  height: var(--size-btn);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 0 var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.btn-openclaw:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+@media (max-width: 1023px) {
+  .topbar {
+    padding: 0 var(--space-6);
+  }
+
+  .btn-openclaw span {
+    display: none;
+  }
+
+  .btn-openclaw {
+    width: var(--size-btn);
+    padding: 0;
+    justify-content: center;
+  }
+}

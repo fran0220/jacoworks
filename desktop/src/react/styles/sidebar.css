@@ -1,0 +1,175 @@
+/* ===== Sidebar ===== */
+
+.sidebar {
+  width: 0;
+  min-width: 0;
+  height: 100vh;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition:
+    width var(--duration-slow) var(--ease-emphasized),
+    min-width var(--duration-slow) var(--ease-emphasized);
+}
+
+/* Desktop: static flow layout, push content */
+.sidebar.desktop-like.open {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+}
+
+/* Mobile: fixed overlay drawer */
+.sidebar.mobile-like {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: min(var(--sidebar-width), 85vw);
+  min-width: 0;
+  z-index: var(--z-drawer);
+  box-shadow: var(--shadow-md);
+  transform: translateX(-100%);
+  transition: transform var(--duration-slow) var(--ease-emphasized);
+  will-change: transform;
+  overflow: visible;
+}
+
+.sidebar.mobile-like.open {
+  transform: translateX(0);
+}
+
+.sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  min-width: var(--sidebar-width);
+  height: 100%;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-6) var(--space-6) var(--space-2);
+}
+
+.sidebar-title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-secondary);
+}
+
+.sidebar-close {
+  width: var(--size-btn);
+  height: var(--size-btn);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.sidebar-close:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.btn-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  margin: var(--space-4) var(--space-6) var(--space-6);
+  padding: var(--space-5) var(--space-8);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.btn-new:hover {
+  background: var(--accent-hover);
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.session-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.session-item:hover:not(.active) {
+  background: var(--bg-hover);
+}
+
+.session-item.active {
+  background: var(--bg-active);
+}
+
+.session-title {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item.active .session-title {
+  font-weight: var(--font-medium);
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.session-date {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.btn-delete {
+  width: var(--size-delete-btn);
+  height: var(--size-delete-btn);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.session-item:hover .btn-delete {
+  opacity: 1;
+}
+
+.btn-delete:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+.empty-hint {
+  padding: var(--space-10) var(--space-6);
+  color: var(--text-muted);
+  text-align: center;
+}
+

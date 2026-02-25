@@ -1,0 +1,142 @@
+/* ===== Composer Card (Claude Cowork style — borderless toolbar) ===== */
+
+.composer-card {
+  margin: var(--space-4) var(--space-10) var(--space-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xl);
+  background: var(--bg-secondary);
+  padding: var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+
+.composer-card textarea {
+  width: 100%;
+  border: none;
+  resize: none;
+  background: transparent;
+  max-height: 200px;
+  line-height: var(--leading-relaxed);
+}
+
+.composer-card textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+  font-size: var(--text-xs);
+}
+
+.attachment-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  color: var(--text-muted);
+}
+
+.attachment-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-icon-sm);
+  height: var(--size-icon-sm);
+  border-radius: var(--radius-full);
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.attachment-remove:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.composer-toolbar-left,
+.composer-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+/* Send / Stop buttons */
+
+.btn-send,
+.btn-stop {
+  width: var(--size-btn-lg);
+  height: var(--size-btn-lg);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: var(--duration-reduced) !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: var(--duration-reduced) !important;
+    scroll-behavior: auto !important;
+  }
+
+  .spinning,
+  .spinner,
+  .cursor {
+    animation: none !important;
+  }
+
+  .sidebar {
+    will-change: auto;
+  }
+}
+
+.btn-send {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.btn-send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-stop {
+  background: var(--danger);
+  color: var(--text-on-accent);
+}
+
+.btn-stop:hover {
+  background: var(--danger-hover);
+}
+

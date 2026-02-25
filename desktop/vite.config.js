@@ -29,4 +29,15 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          markdown: ["marked", "dompurify", "highlight.js"],
+        },
+      },
+    },
+  },
 }));

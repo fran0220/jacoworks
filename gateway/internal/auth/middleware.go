@@ -87,10 +87,14 @@ func GetUser(ctx context.Context) *UserInfo {
 
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		return ""
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
 	}
-	return strings.TrimPrefix(auth, "Bearer ")
+	// Fallback: query param for WebSocket connections (browsers can't set headers on WS)
+	if token := r.URL.Query().Get("token"); token != "" {
+		return token
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
