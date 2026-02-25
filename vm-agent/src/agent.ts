@@ -306,13 +306,17 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     memoryEnabled: config.memoryEnabled,
     cronEnabled: config.cronEnabled,
     heartbeatEnabled: config.heartbeatEnabled,
+    userSkillsDir: config.userSkillsDir,
   });
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: workspace,
     settingsManager,
     extensionFactories,
-    additionalSkillPaths: config.skillsPaths.filter((p) => existsSync(p)),
+    additionalSkillPaths: [
+      ...config.skillsPaths.filter((p) => existsSync(p)),
+      ...(existsSync(config.userSkillsDir) ? [config.userSkillsDir] : []),
+    ],
     appendSystemPrompt: systemPrompt,
     noThemes: true,
     noPromptTemplates: true,
@@ -537,7 +541,7 @@ export function getCronService(): CronService | null {
 
 // ─── Skill Discovery (Pi SDK native) ─────────────────
 
-function readDisplayFields(filePath: string): { displayName?: string; displayDesc?: string; displayGroup?: string } {
+function readDisplayFields(filePath: string): { displayName?: string; displayDesc?: string } {
   try {
     const content = readFileSync(filePath, "utf-8");
     const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -551,18 +555,29 @@ function readDisplayFields(filePath: string): { displayName?: string; displayDes
       if (/^["'].*["']$/.test(val)) val = val.slice(1, -1);
       result[key] = val;
     }
-    return { displayName: result["display-name"], displayDesc: result["display-description"], displayGroup: result["display-group"] };
+    return { displayName: result["display-name"], displayDesc: result["display-description"] };
   } catch { return {}; }
 }
 
-export function listAvailableSkills(): Array<{ id: string; name: string; description: string; group?: string }> {
-  const skills: Array<{ id: string; name: string; description: string; group?: string }> = [];
-  for (const dir of config.skillsPaths) {
-    if (!existsSync(dir)) continue;
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  group?: string;
+  source: "builtin" | "user";
+  editable: boolean;
+}
+
+export function listAvailableSkills(): SkillInfo[] {
+  const skills: SkillInfo[] = [];
+  const userDir = config.userSkillsDir;
+
+  // Helper: load skills from a directory and tag source
+  function loadFrom(dir: string, source: "builtin" | "user") {
+    if (!existsSync(dir)) return;
     const result = loadSkillsFromDir({ dir, source: "additional" });
     for (const s of result.skills) {
-      const { displayName, displayDesc, displayGroup } = readDisplayFields(s.filePath);
-      // Extract group from directory structure: dir/group/skill-name/SKILL.md
+      const { displayName, displayDesc } = readDisplayFields(s.filePath);
       const rel = relative(dir, s.filePath);
       const parts = rel.split("/");
       const dirGroup = parts.length > 2 ? parts[0] : undefined;
@@ -570,10 +585,21 @@ export function listAvailableSkills(): Array<{ id: string; name: string; descrip
         id: s.name,
         name: displayName || s.name,
         description: displayDesc || s.description,
-        group: displayGroup || dirGroup,
+        group: dirGroup,
+        source,
+        editable: source === "user",
       });
     }
   }
+
+  // Built-in skills (shared/skills/ etc.)
+  for (const dir of config.skillsPaths) {
+    loadFrom(dir, "builtin");
+  }
+
+  // User-created skills
+  loadFrom(userDir, "user");
+
   return skills;
 }
 

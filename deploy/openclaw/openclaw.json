@@ -76,9 +76,13 @@
       bootstrapMaxChars: 20000,
       userTimezone: "Asia/Shanghai",
 
-      // 记忆 — 本地向量搜索
+      // 记忆 — 在线向量搜索 (OpenAI Embedding API, 无本地回退)
       memorySearch: {
-        provider: "local",
+        provider: "openai",
+        model: "text-embedding-3-small",
+        remote: {
+          apiKey: "${OPENAI_API_KEY}",
+        },
         sync: {watch: true},
         cache: {enabled: true, maxEntries: 10000},
       },

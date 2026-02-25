@@ -1,0 +1,13 @@
+# JAcoworks 文档
+
+欢迎使用 JAcoworks — 企业 AI 协同办公平台。
+
+JAcoworks 帮你把 AI 助手真正用进日常工作：写文档、处理表格、分析数据、生成图片、整理想法。你不需要了解底层技术，只要描述需求，Agent 就会配合你完成任务。
+
+## 快速导航
+
+- [快速开始](getting-started) — 安装和首次使用
+- [用户指南](guide/overview) — 核心功能与使用方式
+- [技能系统](guide/skills) — 内置技能使用说明
+- [常见问题](faq) — FAQ
+- [更新日志](changelog) — 版本记录

@@ -18,3 +18,11 @@ type = "tcp"
 localIP = "127.0.0.1"
 localPort = 8090
 remotePort = 8090
+
+# Website :9527
+[[proxies]]
+name = "website"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 9527
+remotePort = 9527

@@ -5,6 +5,8 @@ export interface SkillDefinition {
   name: string;
   description: string;
   group?: string;
+  source: "builtin" | "user";
+  editable: boolean;
 }
 
 let cached: SkillDefinition[] = [];

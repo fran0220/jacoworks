@@ -1,14 +1,14 @@
-import { Building2, KeyRound, LogIn, Mail, ShieldCheck, User } from "lucide-react";
+import { Building2, KeyRound, LogIn, ShieldCheck, User } from "lucide-react";
 import { useState } from "react";
 import type { FormEventHandler } from "react";
 import { activateWithCode, login, loginWithFeishu } from "../lib/auth";
 
 export default function LoginPanel() {
   const [mode, setMode] = useState<"login" | "activate">("login");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [secret, setSecret] = useState("");
   const [code, setCode] = useState("");
-  const [username, setUsername] = useState("");
+  const [newUsername, setNewUsername] = useState("");
   const [newSecret, setNewSecret] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -19,9 +19,9 @@ export default function LoginPanel() {
     setError("");
     try {
       if (mode === "login") {
-        await login(email, secret);
+        await login(username, secret);
       } else {
-        await activateWithCode(code, username, newSecret);
+        await activateWithCode(code, newUsername, newSecret);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
@@ -52,13 +52,13 @@ export default function LoginPanel() {
         {mode === "login" ? (
           <>
             <label className="field">
-              <Mail size={14} />
+              <User size={14} />
               <input
-                type="email"
-                value={email}
-                placeholder="邮箱"
-                autoComplete="email"
-                onChange={(event) => setEmail(event.target.value)}
+                type="text"
+                value={username}
+                placeholder="用户名"
+                autoComplete="username"
+                onChange={(event) => setUsername(event.target.value)}
                 disabled={loading}
               />
             </label>
@@ -73,7 +73,7 @@ export default function LoginPanel() {
                 disabled={loading}
               />
             </label>
-            <button type="submit" className="btn-primary" disabled={loading || !email || !secret}>
+            <button type="submit" className="btn-primary" disabled={loading || !username || !secret}>
               登录
             </button>
           </>
@@ -93,10 +93,10 @@ export default function LoginPanel() {
               <User size={14} />
               <input
                 type="text"
-                value={username}
+                value={newUsername}
                 placeholder="用户名"
                 autoComplete="username"
-                onChange={(event) => setUsername(event.target.value)}
+                onChange={(event) => setNewUsername(event.target.value)}
                 disabled={loading}
               />
             </label>
@@ -111,7 +111,7 @@ export default function LoginPanel() {
                 disabled={loading}
               />
             </label>
-            <button type="submit" className="btn-primary" disabled={loading || !code || !username || !newSecret}>
+            <button type="submit" className="btn-primary" disabled={loading || !code || !newUsername || !newSecret}>
               激活并登录
             </button>
           </>

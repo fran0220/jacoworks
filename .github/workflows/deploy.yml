@@ -1,0 +1,114 @@
+name: Deploy Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gateway/**'
+      - 'website/**'
+      - 'deploy/**'
+
+# 串行部署，避免冲突
+concurrency:
+  group: deploy-jingao
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.filter.outputs.gateway }}
+      website: ${{ steps.filter.outputs.website }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            gateway:
+              - 'gateway/**'
+            website:
+              - 'website/**'
+              - 'deploy/website/**'
+
+  # ── 部署 Gateway ──
+  deploy-gateway:
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+
+      - name: Build linux binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o gateway ./cmd/gateway
+
+      - name: Deploy to jingao
+        env:
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.JINGAO_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+          HOST="root@${{ secrets.JINGAO_HOST }}"
+          scp gateway "$HOST:/opt/jacoworks/gateway.new"
+          ssh "$HOST" "
+            systemctl stop jacoworks-gateway
+            mv /opt/jacoworks/gateway.new /opt/jacoworks/gateway
+            chmod +x /opt/jacoworks/gateway
+            systemctl start jacoworks-gateway
+            sleep 2
+            curl -sf http://localhost:8847/health || (systemctl status jacoworks-gateway; exit 1)
+          "
+          echo "✅ Gateway deployed"
+
+  # ── 部署 Website ──
+  deploy-website:
+    needs: changes
+    if: needs.changes.outputs.website == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: website
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Deploy to jingao
+        env:
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.JINGAO_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+          HOST="root@${{ secrets.JINGAO_HOST }}"
+          REMOTE="/opt/jacoworks/www"
+
+          ssh "$HOST" "systemctl stop jacoworks-website 2>/dev/null || true"
+          scp target/release/jacoworks-website "$HOST:$REMOTE/jacoworks-website.new"
+          rsync -avz --delete content/ "$HOST:$REMOTE/content/"
+          rsync -avz --delete static/ "$HOST:$REMOTE/static/"
+          rsync -avz --delete templates/ "$HOST:$REMOTE/templates/"
+          ssh "$HOST" "
+            mv $REMOTE/jacoworks-website.new $REMOTE/jacoworks-website
+            chmod +x $REMOTE/jacoworks-website
+            systemctl start jacoworks-website
+            sleep 2
+            curl -sf http://localhost:9527/ || (systemctl status jacoworks-website; exit 1)
+          "
+          echo "✅ Website deployed"

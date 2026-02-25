@@ -1,0 +1,17 @@
+cookie_secret = "0123456789abcdef0123456789abcdef"
+
+[server]
+host = "0.0.0.0"
+port = 9527
+
+[database]
+url = "postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/jacoworks"
+
+[gateway]
+url = "http://localhost:8847"
+admin_token = "your-admin-token"
+
+[site]
+name = "JAcoworks"
+description = "企业 AI 协同办公平台"
+base_url = "https://jaco.jingao.club"

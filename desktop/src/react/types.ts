@@ -45,7 +45,21 @@ export interface FilePreview {
   name: string;
   ext: string;
   size: number;
-  category: "image" | "code" | "markdown" | "text" | "docx" | "xlsx" | "binary";
+  category:
+    | "image"
+    | "code"
+    | "markdown"
+    | "text"
+    | "docx"
+    | "xlsx"
+    | "pdf"
+    | "video"
+    | "audio"
+    | "archive"
+    | "design"
+    | "binary";
   content: string | null;
   language: string | null;
+  entries?: string[] | null;
+  metadata?: Record<string, string | number | boolean | null> | null;
 }

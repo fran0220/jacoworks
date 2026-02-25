@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
+	llmMu     sync.RWMutex    `yaml:"-"`
 	Server    ServerConfig    `yaml:"server"`
 	Auth      AuthConfig      `yaml:"auth"`
 	LXD       LXDConfig       `yaml:"lxd"`
@@ -23,10 +25,11 @@ type ChatAgentConfig struct {
 }
 
 type LLMConfig struct {
-	ProxyURL    string `yaml:"proxy_url"`
-	ProxyKey    string `yaml:"proxy_key"`
-	ExaAPIKey   string `yaml:"exa_api_key"`
-	TavilyKey   string `yaml:"tavily_api_key"`
+	ProxyURL     string `yaml:"proxy_url"`
+	ProxyKey     string `yaml:"proxy_key"`
+	ExaAPIKey    string `yaml:"exa_api_key"`
+	TavilyKey    string `yaml:"tavily_api_key"`
+	OpenAIAPIKey string `yaml:"openai_api_key"`
 }
 
 type ServerConfig struct {
@@ -139,6 +142,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("GATEWAY_LLM_TAVILY_API_KEY"); v != "" {
 		cfg.LLM.TavilyKey = v
 	}
+	if v := os.Getenv("GATEWAY_LLM_OPENAI_API_KEY"); v != "" {
+		cfg.LLM.OpenAIAPIKey = v
+	}
 	if v := os.Getenv("GATEWAY_CHAT_AGENT_URL"); v != "" {
 		cfg.ChatAgent.URL = v
 	}
@@ -149,4 +155,16 @@ func applyEnvOverrides(cfg *Config) {
 
 func (c *Config) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+}
+
+func (c *Config) GetLLM() LLMConfig {
+	c.llmMu.RLock()
+	defer c.llmMu.RUnlock()
+	return c.LLM
+}
+
+func (c *Config) UpdateLLM(llm LLMConfig) {
+	c.llmMu.Lock()
+	defer c.llmMu.Unlock()
+	c.LLM = llm
 }

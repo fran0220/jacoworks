@@ -189,6 +189,13 @@ pub async fn start_agent(
 
         let (resolved_agent_dir, entry) = resolve_agent_paths(&agent_dir)?;
 
+        // User skills directory: <app_data>/skills
+        let user_skills_dir = app
+            .path()
+            .app_data_dir()
+            .map(|dir| dir.join("skills"))
+            .unwrap_or_default();
+
         let mut cmd = Command::new("node");
         cmd.arg("--enable-source-maps")
             .arg(&entry)
@@ -196,6 +203,7 @@ pub async fn start_agent(
             .env("MEMORY_ENABLED", "true")
             .env("HEARTBEAT_ENABLED", "false")
             .env("CRON_ENABLED", "false")
+            .env("USER_SKILLS_DIR", user_skills_dir.to_string_lossy().as_ref())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -319,6 +327,64 @@ pub fn stop_agent() -> Result<(), String> {
     }
     *proc = None;
     Ok(())
+}
+
+// ───── User skills management ─────────────────────────────────
+
+fn user_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("skills"))
+        .map_err(|error| format!("Failed to resolve app data directory: {}", error))
+}
+
+#[tauri::command]
+pub fn get_user_skills_dir(app: AppHandle) -> Result<String, String> {
+    let dir = user_skills_dir(&app)?;
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create skills directory: {}", e))?;
+    }
+    Ok(dir.display().to_string())
+}
+
+#[tauri::command]
+pub fn delete_user_skill(app: AppHandle, skill_id: String) -> Result<(), String> {
+    if skill_id.is_empty() || skill_id.contains("..") || skill_id.contains('/') {
+        return Err("Invalid skill id".to_string());
+    }
+    let dir = user_skills_dir(&app)?;
+    let skill_dir = dir.join(&skill_id);
+    if !skill_dir.exists() {
+        return Err(format!("Skill '{}' not found", skill_id));
+    }
+    // Ensure it's actually inside the user skills dir
+    let canonical_skill = skill_dir
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve skill path: {}", e))?;
+    let canonical_root = dir
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve skills root: {}", e))?;
+    if !canonical_skill.starts_with(&canonical_root) {
+        return Err("Skill path is outside user skills directory".to_string());
+    }
+    std::fs::remove_dir_all(&skill_dir)
+        .map_err(|e| format!("Failed to delete skill: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reveal_user_skill(app: AppHandle, skill_id: String) -> Result<(), String> {
+    let dir = user_skills_dir(&app)?;
+    let skill_dir = dir.join(&skill_id);
+    if !skill_dir.exists() {
+        // Open the root skills dir if specific skill not found
+        if dir.exists() {
+            return tauri_plugin_opener::reveal_item_in_dir(&dir).map_err(|e| e.to_string());
+        }
+        return Err(format!("Skill '{}' not found", skill_id));
+    }
+    tauri_plugin_opener::reveal_item_in_dir(&skill_dir).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

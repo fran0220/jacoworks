@@ -39,6 +39,7 @@ function isUntitledTitle(title: string): boolean {
 interface UseChatStreamOptions {
   session: ChatSession;
   pendingMessage: string | null;
+  pendingFiles: AttachedFile[];
   clearPending: () => void;
   onSessionUpdate: () => Promise<void>;
 }
@@ -46,6 +47,7 @@ interface UseChatStreamOptions {
 export function useChatStream({
   session,
   pendingMessage,
+  pendingFiles,
   clearPending,
   onSessionUpdate,
 }: UseChatStreamOptions) {
@@ -371,9 +373,10 @@ export function useChatStream({
 
   useEffect(() => {
     if (!pendingMessage || streaming) return;
+    const filesToSend = pendingFiles;
     clearPending();
-    sendMessage(pendingMessage, []);
-  }, [clearPending, pendingMessage, sendMessage, streaming]);
+    sendMessage(pendingMessage, filesToSend);
+  }, [clearPending, pendingMessage, pendingFiles, sendMessage, streaming]);
 
   const handleMessagesScroll = useCallback(() => {
     if (!messagesRef.current) return;

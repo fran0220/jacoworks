@@ -16,12 +16,17 @@ Thumbs.db
 gateway/gateway.yaml
 gateway/gateway-prod.yaml
 gateway/data/
+website/website.toml
 
 # === Go ===
 gateway/jacoworks-gateway
+gateway/gateway
+gateway/bin/
 
 # === Rust / Tauri ===
 desktop/src-tauri/target/
+website/target/
+**/Cargo.lock
 
 # === Node ===
 node_modules/

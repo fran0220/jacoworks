@@ -40,25 +40,100 @@
   background: var(--bg-hover);
 }
 
+/* ===== OpenClaw Pill Button ===== */
+
 .btn-openclaw {
+  position: relative;
   height: var(--size-btn);
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  padding: 0 var(--space-5);
+  width: var(--size-btn);
+  border-radius: var(--radius-full);
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
   color: var(--text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
   transition:
-    border-color var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
 .btn-openclaw:hover {
   color: var(--accent);
-  border-color: var(--accent);
   background: var(--bg-hover);
+}
+
+/* Drawer open → subtle accent tint */
+.btn-openclaw.active {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+/* Expanded state: show inline status text */
+.btn-openclaw.expanded {
+  width: auto;
+  padding: 0 var(--space-5) 0 var(--space-4);
+  background: var(--bg-tertiary);
+}
+
+.btn-openclaw.expanded:hover {
+  background: var(--bg-hover);
+}
+
+/* Ready flash: accent pill */
+.btn-openclaw.ready-flash {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+/* Error state */
+.btn-openclaw.error {
+  color: var(--danger);
+  background: rgba(217, 64, 64, 0.08);
+}
+
+.btn-openclaw.error:hover {
+  background: rgba(217, 64, 64, 0.14);
+}
+
+/* Status text inside expanded pill */
+.oc-status-text {
+  font-size: var(--text-xs);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Green dot when connected (compact state) */
+.btn-openclaw .oc-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* Unread message badge */
+.btn-openclaw .oc-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--danger);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  font-weight: var(--font-bold);
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+  animation: fade-in var(--duration-fast) var(--ease-standard);
 }
 
 @media (max-width: 1023px) {
@@ -66,13 +141,7 @@
     padding: 0 var(--space-6);
   }
 
-  .btn-openclaw span {
-    display: none;
-  }
-
-  .btn-openclaw {
-    width: var(--size-btn);
-    padding: 0;
-    justify-content: center;
+  .oc-status-text {
+    max-width: 120px;
   }
 }

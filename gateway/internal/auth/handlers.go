@@ -58,23 +58,23 @@ func init() {
 
 // --- Handlers ---
 
-// Login handles email/password login.
-// POST /api/auth/login {email, password}
+// Login handles username/password login.
+// POST /api/auth/login {username, password}
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Email    string `json:"email"`
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	if req.Email == "" || req.Password == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email and password required"})
+	if req.Username == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
 		return
 	}
 
-	user, err := h.store.GetUserByEmail(r.Context(), req.Email)
+	user, err := h.store.GetUserByName(r.Context(), req.Username)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
@@ -101,7 +101,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info().Str("user_id", user.ID).Str("email", user.Email).Msg("user logged in")
+	log.Info().Str("user_id", user.ID).Str("name", user.Name).Msg("user logged in")
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"token": token,

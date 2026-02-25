@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# 只在同分支上保留最新一次 CI
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 变更检测：只构建有改动的模块 ──
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.filter.outputs.gateway }}
+      website: ${{ steps.filter.outputs.website }}
+      vm-agent: ${{ steps.filter.outputs.vm-agent }}
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            gateway:
+              - 'gateway/**'
+            website:
+              - 'website/**'
+            vm-agent:
+              - 'vm-agent/**'
+            desktop:
+              - 'desktop/**'
+              - 'vm-agent/**'
+
+  # ── Gateway (Go) ──
+  gateway:
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Build linux binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../artifacts/gateway ./cmd/gateway
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gateway-binary
+          path: artifacts/gateway
+          retention-days: 7
+
+  # ── Website (Rust) ──
+  website:
+    needs: changes
+    if: needs.changes.outputs.website == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: website
+      - run: cargo check
+      - run: cargo test
+      - name: Build release binary
+        run: cargo build --release
+      - run: |
+          mkdir -p ../artifacts/www
+          cp target/release/jacoworks-website ../artifacts/www/
+          cp -r content ../artifacts/www/
+          cp -r static ../artifacts/www/
+          cp -r templates ../artifacts/www/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-bundle
+          path: artifacts/www
+          retention-days: 7
+
+  # ── vm-agent (TypeScript) ──
+  vm-agent:
+    needs: changes
+    if: needs.changes.outputs.vm-agent == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vm-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vm-agent/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  # ── Desktop (Tauri) — 仅 typecheck，Release 时才构建安装包 ──
+  desktop-check:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run check

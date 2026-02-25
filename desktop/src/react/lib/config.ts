@@ -1,7 +1,8 @@
 export const GATEWAY_URL =
-  import.meta.env.VITE_GATEWAY_URL || "http://api.xiaomao.chat:8090";
+  import.meta.env.VITE_GATEWAY_URL || "https://jacoapi.jingao.club";
 
-export const OPENCLAW_WS_URL = import.meta.env.VITE_OPENCLAW_WS_URL || "";
+export const OPENCLAW_WS_URL =
+  import.meta.env.VITE_OPENCLAW_WS_URL || "wss://api.xiaomao.chat:8090";
 
 export const DEFAULT_MODEL = "proxy-claude/claude-opus-4-6";
 

@@ -41,6 +41,10 @@ export default function OcComposer({
         }}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) {
+            return;
+          }
+
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             send();

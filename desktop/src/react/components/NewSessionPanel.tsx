@@ -1,18 +1,70 @@
-import { ArrowRight, ChevronDown, FolderOpen, Paperclip, Plus, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertCircle,
+  ArrowRight,
+  ChevronDown,
+  FileText,
+  FolderOpen,
+  Loader2,
+  Paperclip,
+  Plus,
+  Sparkles,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEventHandler } from "react";
 import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
 import { folderName, selectFolder } from "../lib/cowork";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { createSession } from "../lib/sessions";
 import { useSkills } from "../lib/skills";
-import type { ChatSession } from "../types";
+import type { AttachedFile, ChatSession } from "../types";
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const imageExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
+
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return imageExts.has(ext);
+}
+
+function readAsDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function readAsText(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export default function NewSessionPanel({
   onSessionCreated,
+  initialMessage,
+  onConsumeInitial,
 }: {
-  onSessionCreated: (session: ChatSession, firstMessage: string) => void;
+  onSessionCreated: (session: ChatSession, firstMessage: string, files: AttachedFile[]) => void;
+  initialMessage?: string | null;
+  onConsumeInitial?: () => void;
 }) {
   const [task, setTask] = useState("");
+  const [files, setFiles] = useState<AttachedFile[]>([]);
+  const [readingCount, setReadingCount] = useState(0);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [workspacePath, setWorkspacePath] = useState(() => getSettings().defaultWorkspace);
   const [loading, setLoading] = useState(false);
@@ -34,7 +86,23 @@ export default function NewSessionPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const canSend = task.trim().length > 0 && !loading;
+  // Pre-fill from initialMessage (e.g. "新建技能" or "GitHub 安装")
+  useEffect(() => {
+    if (initialMessage) {
+      setTask(initialMessage);
+      onConsumeInitial?.();
+      // Focus and place cursor at end
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (ta) {
+          ta.focus();
+          ta.selectionStart = ta.selectionEnd = ta.value.length;
+        }
+      });
+    }
+  }, [initialMessage, onConsumeInitial]);
+
+  const canSend = (task.trim().length > 0 || files.length > 0) && !loading;
 
   // Close menus on outside click
   useEffect(() => {
@@ -56,7 +124,7 @@ export default function NewSessionPanel({
     setLoading(true);
     try {
       const session = await createSession({ model, workspacePath: workspacePath || undefined });
-      onSessionCreated(session, task.trim());
+      onSessionCreated(session, task.trim() || "(附件)", files);
     } finally {
       setLoading(false);
     }
@@ -76,17 +144,61 @@ export default function NewSessionPanel({
     }
   };
 
+  const addWarning = useCallback((msg: string) => {
+    setWarnings((prev) => [...prev, msg]);
+    setTimeout(() => setWarnings((prev) => prev.slice(1)), 3000);
+  }, []);
+
   const handleFileSelect = () => {
     fileInputRef.current?.click();
     setPlusMenuOpen(false);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const names = Array.from(files).map((f) => f.name).join(", ");
-    setTask((prev) => prev + (prev ? "\n" : "") + `[附件: ${names}]`);
-    e.target.value = "";
+  const handleFileChange: ChangeEventHandler<HTMLInputElement> = async (event) => {
+    const selected = event.target.files;
+    if (!selected) return;
+
+    const list = Array.from(selected);
+    const rejected = list.filter((f) => f.size > MAX_FILE_SIZE);
+    const accepted = list.filter((f) => f.size <= MAX_FILE_SIZE);
+
+    for (const f of rejected) {
+      addWarning(`${f.name} 超过 10 MB 限制`);
+    }
+
+    if (accepted.length === 0) {
+      event.target.value = "";
+      return;
+    }
+
+    setReadingCount((c) => c + accepted.length);
+
+    const incoming: AttachedFile[] = [];
+    for (const file of accepted) {
+      try {
+        if (isImageFile(file)) {
+          incoming.push({
+            name: file.name,
+            type: "image",
+            data: await readAsDataURL(file),
+            size: file.size,
+          });
+        } else {
+          incoming.push({
+            name: file.name,
+            type: "text",
+            data: await readAsText(file),
+            size: file.size,
+          });
+        }
+      } catch {
+        addWarning(`${file.name} 读取失败`);
+      }
+    }
+
+    setReadingCount((c) => c - accepted.length);
+    setFiles((prev) => [...prev, ...incoming]);
+    event.target.value = "";
   };
 
   const handleSkillInsert = (skillId: string) => {
@@ -104,6 +216,8 @@ export default function NewSessionPanel({
     }
   };
 
+  const hasAttachments = files.length > 0 || readingCount > 0;
+
   return (
     <div className="new-session">
       <div className="ns-header">
@@ -111,6 +225,59 @@ export default function NewSessionPanel({
       </div>
 
       <div className="ns-input-card">
+        {/* Warnings toast */}
+        {warnings.length > 0 && (
+          <div className="composer-warnings">
+            {warnings.map((msg, i) => (
+              <div className="composer-warning" key={`${msg}-${i}`}>
+                <AlertCircle size={14} />
+                <span>{msg}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Attachment area */}
+        {hasAttachments && (
+          <div className="composer-attachments">
+            {files.map((file, index) =>
+              file.type === "image" ? (
+                <div className="attach-thumb" key={`${file.name}-${index}`}>
+                  <img src={file.data} alt={file.name} className="attach-thumb-img" />
+                  <button
+                    className="attach-thumb-remove"
+                    onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                  >
+                    <X size={12} />
+                  </button>
+                  <div className="attach-thumb-name" title={file.name}>{file.name}</div>
+                </div>
+              ) : (
+                <div className="attach-file" key={`${file.name}-${index}`}>
+                  <FileText size={16} className="attach-file-icon" />
+                  <div className="attach-file-info">
+                    <span className="attach-file-name" title={file.name}>{file.name}</span>
+                    <span className="attach-file-size">{formatSize(file.size)}</span>
+                  </div>
+                  <button
+                    className="attach-file-remove"
+                    onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ),
+            )}
+
+            {readingCount > 0 &&
+              Array.from({ length: readingCount }).map((_, i) => (
+                <div className="attach-shimmer" key={`shimmer-${i}`}>
+                  <Loader2 size={16} className="attach-shimmer-spin" />
+                </div>
+              ))}
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
           rows={3}
@@ -118,6 +285,10 @@ export default function NewSessionPanel({
           value={task}
           onChange={(e) => handleTaskChange(e.target.value)}
           onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) {
+              return;
+            }
+
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               handleSend();
@@ -174,6 +345,14 @@ export default function NewSessionPanel({
             </div>
 
             <div className="ns-plus-wrapper" ref={plusMenuRef}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*,.txt,.md,.py,.js,.ts,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css,.go,.rs,.sh,.pdf,.doc,.docx,.xls,.xlsx"
+                onChange={handleFileChange}
+                style={{ display: "none" }}
+              />
               <button
                 className="ns-btn-plus"
                 disabled={loading}
@@ -185,14 +364,6 @@ export default function NewSessionPanel({
 
               {plusMenuOpen && (
                 <div className="ns-plus-menu">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept="image/*,.txt,.md,.py,.js,.ts,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css,.go,.rs,.sh,.pdf,.doc,.docx,.xls,.xlsx"
-                    onChange={handleFileChange}
-                    style={{ display: "none" }}
-                  />
                   <button className="ns-menu-item" onClick={handleFileSelect}>
                     <Paperclip size={18} />
                     <span>附加文件或图片</span>
@@ -205,28 +376,41 @@ export default function NewSessionPanel({
                     </div>
                     <div className="ns-skills-submenu">
                       <div className="ns-skills-submenu-content">
-                        {Array.from(grouped.entries()).map(([group, items]) => (
-                          <div key={group || "_ungrouped"} className="ns-group-hover">
-                            <div className="ns-group-trigger">
-                              <span>{group || "其他"}</span>
-                              <ChevronDown size={14} className="ns-sub-arrow" />
-                            </div>
-                            <div className="ns-group-skills">
-                              <div className="ns-group-skills-content">
-                                {items.map((skill) => (
-                                  <button
-                                    key={skill.id}
-                                    className="ns-skill-item"
-                                    onClick={() => handleSkillInsert(skill.id)}
-                                  >
-                                    <span className="ns-skill-name">/{skill.id}</span>
-                                    <span className="ns-skill-desc">{skill.description}</span>
-                                  </button>
-                                ))}
+                        {Array.from(grouped.entries()).map(([group, items]) =>
+                          group ? (
+                            <div key={group} className="ns-group-hover">
+                              <div className="ns-group-trigger">
+                                <span>{group}</span>
+                                <ChevronDown size={14} className="ns-sub-arrow" />
+                              </div>
+                              <div className="ns-group-skills">
+                                <div className="ns-group-skills-content">
+                                  {items.map((skill) => (
+                                    <button
+                                      key={skill.id}
+                                      className="ns-skill-item"
+                                      onClick={() => handleSkillInsert(skill.id)}
+                                    >
+                                      <span className="ns-skill-name">/{skill.id}</span>
+                                      <span className="ns-skill-desc">{skill.description}</span>
+                                    </button>
+                                  ))}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))}
+                          ) : (
+                            items.map((skill) => (
+                              <button
+                                key={skill.id}
+                                className="ns-skill-item"
+                                onClick={() => handleSkillInsert(skill.id)}
+                              >
+                                <span className="ns-skill-name">/{skill.id}</span>
+                                <span className="ns-skill-desc">{skill.description}</span>
+                              </button>
+                            ))
+                          )
+                        )}
                       </div>
                     </div>
                   </div>

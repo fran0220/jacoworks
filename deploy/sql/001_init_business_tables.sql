@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 -- ============================================================
 
 -- Auth indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_name ON users(name);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_feishu ON users(feishu_open_id) WHERE feishu_open_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token);

@@ -55,6 +55,30 @@ func main() {
 	}
 	defer s.Close()
 
+	// Load settings from DB (overrides YAML values)
+	if dbSettings, err := s.GetAllSettings(ctx); err == nil {
+		llm := cfg.GetLLM()
+		for _, setting := range dbSettings {
+			if setting.Value == "" {
+				continue
+			}
+			switch setting.Key {
+			case "llm_proxy_url":
+				llm.ProxyURL = setting.Value
+			case "llm_proxy_key":
+				llm.ProxyKey = setting.Value
+			case "openai_api_key":
+				llm.OpenAIAPIKey = setting.Value
+			case "exa_api_key":
+				llm.ExaAPIKey = setting.Value
+			case "tavily_api_key":
+				llm.TavilyKey = setting.Value
+			}
+		}
+		cfg.UpdateLLM(llm)
+		log.Info().Msg("loaded settings from database")
+	}
+
 	auditLogger := audit.NewLogger(s.Pool())
 
 	// Initialize LXD client
@@ -141,6 +165,10 @@ func main() {
 	// Admin: invite codes
 	mux.Handle("POST /api/admin/invite-codes", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(createInviteCodeHandler(s)))))
 	mux.Handle("GET /api/admin/invite-codes", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listInviteCodesHandler(s)))))
+
+	// Admin: settings
+	mux.Handle("GET /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(getSettingsHandler(s)))))
+	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger)))))
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -294,9 +322,11 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 			return
 		}
 
+		llm := cfg.GetLLM()
 		envVars := map[string]string{
-			"LLM_PROXY_URL": cfg.LLM.ProxyURL,
-			"LLM_PROXY_KEY": cfg.LLM.ProxyKey,
+			"LLM_PROXY_URL":  llm.ProxyURL,
+			"LLM_PROXY_KEY":  llm.ProxyKey,
+			"OPENAI_API_KEY": llm.OpenAIAPIKey,
 		}
 		deviceKey := wsProxy.GetDeviceKeyInfo()
 		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
@@ -543,9 +573,11 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			return
 		}
 
+		llm := cfg.GetLLM()
 		envVars := map[string]string{
-			"LLM_PROXY_URL": cfg.LLM.ProxyURL,
-			"LLM_PROXY_KEY": cfg.LLM.ProxyKey,
+			"LLM_PROXY_URL":  llm.ProxyURL,
+			"LLM_PROXY_KEY":  llm.ProxyKey,
+			"OPENAI_API_KEY": llm.OpenAIAPIKey,
 		}
 		deviceKey := wsProxy.GetDeviceKeyInfo()
 		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
@@ -577,11 +609,13 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
+		llm := cfg.GetLLM()
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"llm_proxy_url":  cfg.LLM.ProxyURL,
-			"llm_proxy_key":  cfg.LLM.ProxyKey,
-			"exa_api_key":    cfg.LLM.ExaAPIKey,
-			"tavily_api_key": cfg.LLM.TavilyKey,
+			"llm_proxy_url":  llm.ProxyURL,
+			"llm_proxy_key":  llm.ProxyKey,
+			"openai_api_key": llm.OpenAIAPIKey,
+			"exa_api_key":    llm.ExaAPIKey,
+			"tavily_api_key": llm.TavilyKey,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
@@ -594,6 +628,74 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 				{"id": "grok-4.1-fast", "provider": "proxy-grok", "label": "Grok 4.1 Fast"},
 			},
 		})
+	}
+}
+
+func getSettingsHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		settings, err := s.GetAllSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load settings"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	}
+}
+
+func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger) http.HandlerFunc {
+	type updateRequest struct {
+		Settings map[string]string `json:"settings"`
+	}
+
+	allowedKeys := map[string]bool{
+		"llm_proxy_url":  true,
+		"llm_proxy_key":  true,
+		"openai_api_key": true,
+		"exa_api_key":    true,
+		"tavily_api_key": true,
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		admin := auth.GetUser(r.Context())
+		var req updateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		for key, value := range req.Settings {
+			if !allowedKeys[key] {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown setting: " + key})
+				return
+			}
+			if err := s.SetSetting(r.Context(), key, value); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save setting: " + key})
+				return
+			}
+		}
+
+		// Hot-reload: refresh in-memory LLM config from DB
+		llm := cfg.GetLLM()
+		if v, ok := req.Settings["llm_proxy_url"]; ok && v != "" {
+			llm.ProxyURL = v
+		}
+		if v, ok := req.Settings["llm_proxy_key"]; ok && v != "" {
+			llm.ProxyKey = v
+		}
+		if v, ok := req.Settings["openai_api_key"]; ok {
+			llm.OpenAIAPIKey = v
+		}
+		if v, ok := req.Settings["exa_api_key"]; ok {
+			llm.ExaAPIKey = v
+		}
+		if v, ok := req.Settings["tavily_api_key"]; ok {
+			llm.TavilyKey = v
+		}
+		cfg.UpdateLLM(llm)
+
+		al.Log(admin.ID, "update_settings", "settings", "", r.RemoteAddr)
+
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
 

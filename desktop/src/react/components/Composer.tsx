@@ -1,8 +1,9 @@
 import {
+  AlertCircle,
   ChevronDown,
   FileText,
   FolderOpen,
-  Image,
+  Loader2,
   Paperclip,
   Plus,
   SendHorizontal,
@@ -10,7 +11,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEventHandler } from "react";
 import { MODEL_OPTIONS } from "../lib/config";
 import { folderName, selectFolder } from "../lib/cowork";
@@ -70,6 +71,8 @@ export default function Composer({
 }) {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
+  const [readingCount, setReadingCount] = useState(0);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const skills = useSkills();
   const grouped = useMemo(() => {
@@ -121,30 +124,54 @@ export default function Composer({
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
   };
 
+  const addWarning = useCallback((msg: string) => {
+    setWarnings((prev) => [...prev, msg]);
+    setTimeout(() => setWarnings((prev) => prev.slice(1)), 3000);
+  }, []);
+
   const onFileChange: ChangeEventHandler<HTMLInputElement> = async (event) => {
     const selected = event.target.files;
     if (!selected) return;
 
+    const list = Array.from(selected);
+    const rejected = list.filter((f) => f.size > MAX_FILE_SIZE);
+    const accepted = list.filter((f) => f.size <= MAX_FILE_SIZE);
+
+    for (const f of rejected) {
+      addWarning(`${f.name} 超过 10 MB 限制`);
+    }
+
+    if (accepted.length === 0) {
+      event.target.value = "";
+      return;
+    }
+
+    setReadingCount((c) => c + accepted.length);
+
     const incoming: AttachedFile[] = [];
-    for (const file of Array.from(selected)) {
-      if (file.size > MAX_FILE_SIZE) continue;
-      if (isImageFile(file)) {
-        incoming.push({
-          name: file.name,
-          type: "image",
-          data: await readAsDataURL(file),
-          size: file.size,
-        });
-      } else {
-        incoming.push({
-          name: file.name,
-          type: "text",
-          data: await readAsText(file),
-          size: file.size,
-        });
+    for (const file of accepted) {
+      try {
+        if (isImageFile(file)) {
+          incoming.push({
+            name: file.name,
+            type: "image",
+            data: await readAsDataURL(file),
+            size: file.size,
+          });
+        } else {
+          incoming.push({
+            name: file.name,
+            type: "text",
+            data: await readAsText(file),
+            size: file.size,
+          });
+        }
+      } catch {
+        addWarning(`${file.name} 读取失败`);
       }
     }
 
+    setReadingCount((c) => c - accepted.length);
     setFiles((prev) => [...prev, ...incoming]);
     event.target.value = "";
   };
@@ -181,25 +208,61 @@ export default function Composer({
     }
   };
 
+  const hasAttachments = files.length > 0 || readingCount > 0;
+
   return (
     <div className="composer-card">
-      {files.length > 0 && (
-        <div className="composer-attachments">
-          {files.map((file, index) => (
-            <div className="attachment-chip" key={`${file.name}-${index}`}>
-              {file.type === "image" ? <Image size={14} /> : <FileText size={14} />}
-              <span className="attachment-name" title={file.name}>
-                {file.name}
-              </span>
-              <span className="attachment-size">{formatSize(file.size)}</span>
-              <button
-                className="attachment-remove"
-                onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
-              >
-                <X size={12} />
-              </button>
+      {/* Warnings toast */}
+      {warnings.length > 0 && (
+        <div className="composer-warnings">
+          {warnings.map((msg, i) => (
+            <div className="composer-warning" key={`${msg}-${i}`}>
+              <AlertCircle size={14} />
+              <span>{msg}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Attachment area */}
+      {hasAttachments && (
+        <div className="composer-attachments">
+          {files.map((file, index) =>
+            file.type === "image" ? (
+              <div className="attach-thumb" key={`${file.name}-${index}`}>
+                <img src={file.data} alt={file.name} className="attach-thumb-img" />
+                <button
+                  className="attach-thumb-remove"
+                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                >
+                  <X size={12} />
+                </button>
+                <div className="attach-thumb-name" title={file.name}>{file.name}</div>
+              </div>
+            ) : (
+              <div className="attach-file" key={`${file.name}-${index}`}>
+                <FileText size={16} className="attach-file-icon" />
+                <div className="attach-file-info">
+                  <span className="attach-file-name" title={file.name}>{file.name}</span>
+                  <span className="attach-file-size">{formatSize(file.size)}</span>
+                </div>
+                <button
+                  className="attach-file-remove"
+                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ),
+          )}
+
+          {/* Loading shimmer placeholders */}
+          {readingCount > 0 &&
+            Array.from({ length: readingCount }).map((_, i) => (
+              <div className="attach-shimmer" key={`shimmer-${i}`}>
+                <Loader2 size={16} className="attach-shimmer-spin" />
+              </div>
+            ))}
         </div>
       )}
 
@@ -210,6 +273,10 @@ export default function Composer({
         onChange={(e) => handleTextChange(e.target.value)}
         onInput={onInput}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || e.keyCode === 229) {
+            return;
+          }
+
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             onSendClick();
@@ -298,28 +365,41 @@ export default function Composer({
                   </div>
                   <div className="ns-skills-submenu">
                     <div className="ns-skills-submenu-content">
-                      {Array.from(grouped.entries()).map(([group, items]) => (
-                        <div key={group || "_ungrouped"} className="ns-group-hover">
-                          <div className="ns-group-trigger">
-                            <span>{group || "其他"}</span>
-                            <ChevronDown size={14} className="ns-sub-arrow" />
-                          </div>
-                          <div className="ns-group-skills">
-                            <div className="ns-group-skills-content">
-                              {items.map((skill) => (
-                                <button
-                                  key={skill.id}
-                                  className="ns-skill-item"
-                                  onClick={() => handleSkillInsert(skill.id)}
-                                >
-                                  <span className="ns-skill-name">/{skill.id}</span>
-                                  <span className="ns-skill-desc">{skill.description}</span>
-                                </button>
-                              ))}
+                      {Array.from(grouped.entries()).map(([group, items]) =>
+                        group ? (
+                          <div key={group} className="ns-group-hover">
+                            <div className="ns-group-trigger">
+                              <span>{group}</span>
+                              <ChevronDown size={14} className="ns-sub-arrow" />
+                            </div>
+                            <div className="ns-group-skills">
+                              <div className="ns-group-skills-content">
+                                {items.map((skill) => (
+                                  <button
+                                    key={skill.id}
+                                    className="ns-skill-item"
+                                    onClick={() => handleSkillInsert(skill.id)}
+                                  >
+                                    <span className="ns-skill-name">/{skill.id}</span>
+                                    <span className="ns-skill-desc">{skill.description}</span>
+                                  </button>
+                                ))}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        ) : (
+                          items.map((skill) => (
+                            <button
+                              key={skill.id}
+                              className="ns-skill-item"
+                              onClick={() => handleSkillInsert(skill.id)}
+                            >
+                              <span className="ns-skill-name">/{skill.id}</span>
+                              <span className="ns-skill-desc">{skill.description}</span>
+                            </button>
+                          ))
+                        )
+                      )}
                     </div>
                   </div>
                 </div>

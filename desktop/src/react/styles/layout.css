@@ -22,7 +22,25 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.content-row {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.content-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   transition: flex var(--duration-slow) var(--ease-emphasized);
+}
+
+.oc-drawer-active .content-main {
+  min-width: 360px;
 }
 
 /* ===== Agent loading / error ===== */

@@ -1,6 +1,6 @@
 import { AlertCircle } from "lucide-react";
 import { useChatStream } from "../hooks/use-chat-stream";
-import type { ChatSession } from "../types";
+import type { AttachedFile, ChatSession } from "../types";
 import Composer from "./Composer";
 import MessageBubble from "./MessageBubble";
 import StreamingMarkdown from "./StreamingMarkdown";
@@ -9,11 +9,13 @@ import ToolStatus from "./ToolStatus";
 export default function ChatView({
   session,
   pendingMessage,
+  pendingFiles,
   clearPending,
   onSessionUpdate,
 }: {
   session: ChatSession;
   pendingMessage: string | null;
+  pendingFiles: AttachedFile[];
   clearPending: () => void;
   onSessionUpdate: () => Promise<void>;
 }) {
@@ -33,6 +35,7 @@ export default function ChatView({
   } = useChatStream({
     session,
     pendingMessage,
+    pendingFiles,
     clearPending,
     onSessionUpdate,
   });

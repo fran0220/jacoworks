@@ -7,6 +7,7 @@ import Sidebar from "./react/components/Sidebar";
 import TopBar from "./react/components/TopBar";
 import PreviewDrawer from "./react/components/PreviewDrawer";
 import { useAgentBootstrap } from "./react/hooks/use-agent-bootstrap";
+import { useOpenClawConnection } from "./react/hooks/use-openclaw-connection";
 import { useResponsiveSidebar } from "./react/hooks/use-responsive-sidebar";
 import { useSessionState } from "./react/hooks/use-session-state";
 import {
@@ -15,7 +16,6 @@ import {
   logout,
   subscribeAuth,
 } from "./react/lib/auth";
-type AppMode = "local" | "openclaw";
 
 const RpcLogPanel = lazy(() => import("./react/components/RpcLogPanel"));
 const SettingsModal = lazy(() => import("./react/components/SettingsModal"));
@@ -35,16 +35,20 @@ function LazyRpcLogPanel() {
 export default function App() {
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [showSettings, setShowSettings] = useState(false);
-  const [mode, setMode] = useState<AppMode>("local");
+  const [openclawOpen, setOpenclawOpen] = useState(false);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
-  const { agentStarting, agentError, retryAgent } = useAgentBootstrap(authenticated && mode === "local");
+  const { agentStarting, agentError, retryAgent } = useAgentBootstrap(authenticated);
+  const ocConnection = useOpenClawConnection();
   const {
     sessions,
     currentSessionId,
     currentSession,
     pendingMessage,
     setPendingMessage,
+    pendingFiles,
+    setPendingFiles,
     refreshSessions,
     selectSession,
     createNewSession,
@@ -52,19 +56,22 @@ export default function App() {
     deleteSessionById,
   } = useSessionState(authenticated);
 
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
-
   useEffect(
     () =>
       subscribeAuth(() => {
         const nextAuthenticated = isAuthenticated();
         setAuthenticated(nextAuthenticated);
         if (!nextAuthenticated) {
-          setMode("local");
+          setOpenclawOpen(false);
         }
       }),
     [],
   );
+
+  // Sync drawer open state with connection hook for unread tracking
+  useEffect(() => {
+    ocConnection.setDrawerOpen(openclawOpen);
+  }, [openclawOpen, ocConnection.setDrawerOpen]);
 
   useEffect(() => {
     handleOAuthCallback().catch(() => {});
@@ -86,21 +93,6 @@ export default function App() {
 
   if (!authenticated) {
     return <LoginPanel />;
-  }
-
-  if (mode === "openclaw") {
-    return (
-      <Suspense
-        fallback={
-          <div className="agent-loading">
-            <LoaderCircle size={24} className="spinning" />
-            <p>正在进入 OpenClaw...</p>
-          </div>
-        }
-      >
-        <OpenClawApp onBack={() => setMode("local")} />
-      </Suspense>
-    );
   }
 
   if (agentStarting) {
@@ -149,15 +141,11 @@ export default function App() {
         currentSessionId={currentSessionId}
         onSelect={(sessionId) => {
           selectSession(sessionId);
-          if (isMobileLike) {
-            setIsSidebarOpen(false);
-          }
+          if (isMobileLike) setIsSidebarOpen(false);
         }}
         onNew={() => {
           createNewSession();
-          if (isMobileLike) {
-            setIsSidebarOpen(false);
-          }
+          if (isMobileLike) setIsSidebarOpen(false);
         }}
         onClose={() => setIsSidebarOpen(false)}
         onDelete={deleteSessionById}
@@ -167,33 +155,89 @@ export default function App() {
         <TopBar
           title={title}
           sidebarOpen={isSidebarOpen}
-          onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
+          onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
           onOpenSettings={() => setShowSettings(true)}
-          onToggleOpenClaw={() => setMode("openclaw")}
+          ocPhase={ocConnection.phase}
+          ocStatusText={ocConnection.statusText}
+          ocUnreadCount={ocConnection.unreadCount}
+          openclawOpen={openclawOpen}
+          onOpenClawChat={() => {
+            setOpenclawOpen(true);
+            ocConnection.connect();
+          }}
+          onCloseOpenClaw={() => setOpenclawOpen(false)}
         />
 
-        {currentSession ? (
-          <ChatView
-            session={currentSession}
-            pendingMessage={pendingMessage}
-            clearPending={() => setPendingMessage(null)}
-            onSessionUpdate={refreshSessions}
+        <div className={`content-row${openclawOpen ? " oc-drawer-active" : ""}`}>
+          <div className="content-main">
+            {currentSession ? (
+              <ChatView
+                session={currentSession}
+                pendingMessage={pendingMessage}
+                pendingFiles={pendingFiles}
+                clearPending={() => { setPendingMessage(null); setPendingFiles([]); }}
+                onSessionUpdate={refreshSessions}
+              />
+            ) : (
+              <NewSessionPanel
+                onSessionCreated={handleSessionCreated}
+                initialMessage={pendingMessage}
+                onConsumeInitial={() => setPendingMessage(null)}
+              />
+            )}
+          </div>
+
+          <PreviewDrawer
+            filePath={previewPath}
+            workspace={currentSession?.workspacePath}
+            onClose={() => setPreviewPath(null)}
           />
-        ) : (
-          <NewSessionPanel
-            onSessionCreated={handleSessionCreated}
-          />
-        )}
+
+          <div className={`oc-drawer${openclawOpen ? " open" : ""}`}>
+            <div className="oc-drawer-inner">
+              {openclawOpen && (
+                <Suspense
+                  fallback={
+                    <div className="oc-drawer-loading">
+                      <LoaderCircle size={20} className="spinning" />
+                      <span>正在加载 OpenClaw...</span>
+                    </div>
+                  }
+                >
+                  <OpenClawApp
+                    phase={ocConnection.phase}
+                    statusText={ocConnection.statusText}
+                    containerName={ocConnection.containerName}
+                    errorText={ocConnection.errorText}
+                    sseRef={ocConnection.sseRef}
+                    onRetry={ocConnection.retry}
+                    setEventHandler={ocConnection.setEventHandler}
+                    setResponseHandler={ocConnection.setResponseHandler}
+                    onClose={() => setOpenclawOpen(false)}
+                  />
+                </Suspense>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
-      <PreviewDrawer
-        filePath={previewPath}
-        workspace={currentSession?.workspacePath}
-        onClose={() => setPreviewPath(null)}
-      />
+
       <LazyRpcLogPanel />
       {showSettings && (
         <Suspense fallback={null}>
-          <SettingsModal onClose={() => setShowSettings(false)} />
+          <SettingsModal
+            onClose={() => setShowSettings(false)}
+            onCreateSkill={() => {
+              setShowSettings(false);
+              createNewSession();
+              setPendingMessage("/building-skills 我想创建一个技能：");
+            }}
+            onInstallSkill={(url) => {
+              setShowSettings(false);
+              createNewSession();
+              setPendingMessage(`/building-skills 请从这个 GitHub 仓库安装技能：${url}`);
+            }}
+          />
         </Suspense>
       )}
       {AgentationDevTools && (

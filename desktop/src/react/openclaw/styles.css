@@ -1,22 +1,65 @@
-.oc-provision {
-  height: 100vh;
+/* ===== OpenClaw Drawer ===== */
+
+.oc-drawer {
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-10);
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition:
+    width var(--duration-slow) var(--ease-emphasized),
+    min-width var(--duration-slow) var(--ease-emphasized);
 }
 
-.oc-provision-card {
-  width: min(100%, calc(var(--content-width) + var(--space-15)));
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-md);
-  padding: var(--space-11);
+.oc-drawer.open {
+  width: 33.333%;
+  min-width: 320px;
+}
+
+.oc-drawer-inner {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  height: 100%;
+}
+
+.oc-drawer-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-5);
+  justify-content: center;
+  height: 100%;
+  gap: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+/* ===== Provision (inline in drawer) ===== */
+
+.oc-provision {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+}
+
+.oc-provision-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
   text-align: center;
 }
 
@@ -38,18 +81,18 @@
 }
 
 .oc-provision-title {
-  font-size: var(--text-xl);
+  font-size: var(--text-lg);
   font-weight: var(--font-semibold);
   color: var(--text-primary);
 }
 
 .oc-provision-message {
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
 .oc-provision-detail {
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
@@ -58,49 +101,42 @@
   gap: var(--space-4);
 }
 
+/* ===== App Layout (inside drawer) ===== */
+
 .oc-app-layout {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
   overflow: hidden;
 }
 
-.oc-topbar {
-  height: var(--titlebar-height);
+/* ===== Status Strip ===== */
+
+.oc-status-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-6);
   border-bottom: 1px solid var(--border);
-  padding: 0 var(--space-10);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-5);
+  flex-shrink: 0;
 }
 
-.oc-topbar-left,
-.oc-topbar-right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  min-width: 0;
-}
-
-.oc-topbar-back {
-  height: var(--size-btn);
-  border: 1px solid var(--border);
+.oc-drawer-close {
+  margin-left: auto;
+  width: var(--size-btn-sm);
+  height: var(--size-btn-sm);
   border-radius: var(--radius);
-  padding: 0 var(--space-5);
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
+  justify-content: center;
   color: var(--text-secondary);
   transition:
-    border-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard),
     background-color var(--duration-fast) var(--ease-standard);
 }
 
-.oc-topbar-back:hover {
-  border-color: var(--accent);
+.oc-drawer-close:hover {
   color: var(--accent);
   background: var(--bg-hover);
 }
@@ -126,10 +162,22 @@
   background: var(--bg-tertiary);
 }
 
+.oc-connection-badge.reconnecting {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.oc-connection-badge.error {
+  color: var(--danger);
+  background: var(--bg-error);
+}
+
 .oc-container-badge {
   color: var(--text-secondary);
   background: var(--bg-tertiary);
 }
+
+/* ===== Chat View ===== */
 
 .oc-chat-view {
   flex: 1;
@@ -142,10 +190,10 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-8) 0;
+  padding: var(--space-6) 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .oc-empty-state {
@@ -156,7 +204,7 @@
 
 .oc-row {
   display: flex;
-  padding: 0 var(--space-10);
+  padding: 0 var(--space-6);
 }
 
 .oc-row.user {
@@ -164,13 +212,13 @@
 }
 
 .oc-bubble {
-  max-width: 75%;
+  max-width: 85%;
 }
 
 .oc-bubble.user {
   background: var(--bg-user-bubble);
   border-radius: var(--radius-lg);
-  padding: var(--space-5) var(--space-7);
+  padding: var(--space-4) var(--space-6);
 }
 
 .oc-bubble.assistant {
@@ -181,7 +229,7 @@
 .oc-assistant-fallback {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
 }
 
 .oc-assistant-fallback {
@@ -195,7 +243,7 @@
 }
 
 .oc-inline-error {
-  margin: 0 var(--space-10);
+  margin: 0 var(--space-6);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -203,23 +251,26 @@
   font-size: var(--text-sm);
 }
 
+/* ===== Composer ===== */
+
 .oc-composer {
-  margin: var(--space-4) var(--space-10) var(--space-8);
+  margin: var(--space-3) var(--space-6) var(--space-6);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-input);
-  padding: var(--space-5);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .oc-input {
   width: 100%;
-  min-height: var(--space-11);
+  min-height: var(--space-10);
   max-height: var(--space-15);
   resize: none;
   color: var(--text-primary);
+  font-size: var(--text-sm);
   line-height: var(--leading-relaxed);
 }
 
@@ -229,13 +280,14 @@
 }
 
 .oc-action-btn {
-  height: var(--size-btn);
+  height: var(--size-btn-sm);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0 var(--space-6);
+  padding: 0 var(--space-5);
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   transition:
     border-color var(--duration-fast) var(--ease-standard),
@@ -275,22 +327,4 @@
 
 .oc-spinning {
   animation: spin 0.9s var(--ease-linear) infinite;
-}
-
-@media (max-width: 1023px) {
-  .oc-topbar {
-    padding: 0 var(--space-6);
-  }
-
-  .oc-topbar-back {
-    padding: 0 var(--space-4);
-  }
-
-  .oc-row {
-    padding: 0 var(--space-6);
-  }
-
-  .oc-composer {
-    margin: var(--space-4) var(--space-6) var(--space-6);
-  }
 }

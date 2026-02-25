@@ -1,5 +1,7 @@
-import { ChevronDown, Cloud, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
+import { AlertCircle, CheckCircle, ChevronDown, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
+import ClawIcon from "./ClawIcon";
 import { useEffect, useRef, useState } from "react";
+import type { OcConnectionPhase } from "../hooks/use-openclaw-connection";
 import { getUser, logout } from "../lib/auth";
 
 export default function TopBar({
@@ -7,18 +9,53 @@ export default function TopBar({
   sidebarOpen,
   onToggleSidebar,
   onOpenSettings,
-  onToggleOpenClaw,
+  ocPhase,
+  ocStatusText,
+  ocUnreadCount,
+  openclawOpen,
+  onOpenClawChat,
+  onCloseOpenClaw,
 }: {
   title: string;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
-  onToggleOpenClaw: () => void;
+  ocPhase: OcConnectionPhase;
+  ocStatusText: string;
+  ocUnreadCount: number;
+  openclawOpen: boolean;
+  onOpenClawChat: () => void;
+  onCloseOpenClaw: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showReadyFlash, setShowReadyFlash] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const prevPhaseRef = useRef<OcConnectionPhase>(ocPhase);
   const user = getUser();
 
+  const isBusy = ocPhase === "checking" || ocPhase === "provisioning" || ocPhase === "connecting" || ocPhase === "reconnecting";
+  const isError = ocPhase === "error";
+  const isReady = ocPhase === "ready";
+
+  // Flash "已连接" for 2s when transitioning to ready
+  useEffect(() => {
+    if (ocPhase === "ready" && prevPhaseRef.current !== "ready" && prevPhaseRef.current !== "idle") {
+      setShowReadyFlash(true);
+      const timer = window.setTimeout(() => setShowReadyFlash(false), 2000);
+      prevPhaseRef.current = ocPhase;
+      return () => window.clearTimeout(timer);
+    }
+    prevPhaseRef.current = ocPhase;
+  }, [ocPhase]);
+
+  const showExpandedText = isBusy || isError || showReadyFlash;
+
+  let displayText = "";
+  if (showReadyFlash) displayText = "已连接";
+  else if (isError) displayText = "连接失败";
+  else if (isBusy) displayText = ocStatusText;
+
+  // Menu click-outside
   useEffect(() => {
     if (!menuOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
@@ -29,6 +66,22 @@ export default function TopBar({
     document.addEventListener("click", handleClickOutside);
     return () => document.removeEventListener("click", handleClickOutside);
   }, [menuOpen]);
+
+  // Button icon based on phase
+  let icon: React.ReactNode;
+  if (isBusy) icon = <LoaderCircle size={14} className="spinning" />;
+  else if (isError) icon = <AlertCircle size={14} />;
+  else if (showReadyFlash) icon = <CheckCircle size={14} />;
+  else icon = <ClawIcon size={14} />;
+
+  const btnClass = [
+    "btn-openclaw",
+    openclawOpen && "active",
+    showExpandedText && "expanded",
+    isReady && !showReadyFlash && "has-dot",
+    showReadyFlash && "ready-flash",
+    isError && "error",
+  ].filter(Boolean).join(" ");
 
   return (
     <header className="topbar">
@@ -46,10 +99,27 @@ export default function TopBar({
         <h2 className="title">{title}</h2>
       </div>
       <div className="right">
-        <button type="button" className="btn-openclaw" onClick={onToggleOpenClaw}>
-          <Cloud size={14} />
-          <span>OpenClaw</span>
+        <button
+          type="button"
+          className={btnClass}
+          title="OpenClaw"
+          onClick={() => {
+            if (openclawOpen) {
+              onCloseOpenClaw();
+            } else {
+              onOpenClawChat();
+            }
+          }}
+        >
+          {icon}
+          {showExpandedText && <span className="oc-status-text">{displayText}</span>}
+          {isReady && !showReadyFlash && !openclawOpen && ocUnreadCount > 0 ? (
+            <span className="oc-badge">{ocUnreadCount > 99 ? "99+" : ocUnreadCount}</span>
+          ) : (
+            isReady && !showReadyFlash && <span className="oc-dot" />
+          )}
         </button>
+
         <div className="user-menu-wrapper" ref={menuRef}>
           <button
             className="user-menu-trigger"

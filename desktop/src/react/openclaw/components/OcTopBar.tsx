@@ -1,4 +1,4 @@
-import { ArrowLeft, Cloud, PlugZap } from "lucide-react";
+import { Cloud, PlugZap, X } from "lucide-react";
 
 export default function OcTopBar({
   status,
@@ -12,18 +12,17 @@ export default function OcTopBar({
   return (
     <header className="oc-topbar">
       <div className="oc-topbar-left">
-        <button type="button" className="oc-topbar-back" onClick={onBack}>
-          <ArrowLeft size={14} />
-          返回本地模式
-        </button>
-      </div>
-
-      <div className="oc-topbar-right">
         <span className={`oc-connection-badge ${status === "ready" ? "ready" : "connecting"}`}>
           {status === "ready" ? <PlugZap size={12} /> : <Cloud size={12} />}
           {status === "ready" ? "已连接" : "连接中"}
         </span>
         {containerName && <span className="oc-container-badge">{containerName}</span>}
+      </div>
+
+      <div className="oc-topbar-right">
+        <button type="button" className="oc-topbar-close" onClick={onBack} title="关闭 OpenClaw">
+          <X size={14} />
+        </button>
       </div>
     </header>
   );

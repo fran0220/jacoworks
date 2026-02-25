@@ -1,9 +1,8 @@
-import { RefreshCw } from "lucide-react";
+import { Cloud, LoaderCircle, PlugZap, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { OcConnectionPhase } from "../hooks/use-openclaw-connection";
 import OcChatView from "./components/OcChatView";
-import OcTopBar from "./components/OcTopBar";
 import Provision from "./components/Provision";
-import { checkContainerStatus, provisionContainer } from "./lib/api";
 import {
   createOcSession,
   generateOcTitle,
@@ -11,21 +10,10 @@ import {
   listOcSessions,
   updateOcSession,
 } from "./lib/sessions";
-import { OpenClawSSE } from "./lib/sse";
-import { createOcId, type OcEvent, type OcMessage, type OcSession } from "./types";
-
-type AppPhase = "checking" | "provisioning" | "connecting" | "ready" | "error";
+import type { OpenClawSSE } from "./lib/sse";
+import { createOcId, type OcEvent, type OcMessage, type OcRes, type OcSession } from "./types";
 
 const SESSION_KEY = "main";
-const PROVISION_POLL_MS = 2_000;
-const PROVISION_MAX_ATTEMPTS = 60;
-const CONNECT_TIMEOUT_MS = 25_000;
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
@@ -37,13 +25,8 @@ function extractFinalText(payloadMessage: unknown): string {
   const message = asRecord(payloadMessage);
   if (!message) return "";
 
-  if (typeof message.content === "string") {
-    return message.content;
-  }
-
-  if (typeof message.text === "string") {
-    return message.text;
-  }
+  if (typeof message.content === "string") return message.content;
+  if (typeof message.text === "string") return message.text;
 
   if (Array.isArray(message.content)) {
     return message.content
@@ -68,20 +51,36 @@ function responseError(error: unknown): string {
   return "OpenClaw 请求失败";
 }
 
-export default function OpenClawApp({ onBack }: { onBack: () => void }) {
-  const [phase, setPhase] = useState<AppPhase>("checking");
-  const [statusText, setStatusText] = useState("正在检查容器状态...");
-  const [errorText, setErrorText] = useState<string | null>(null);
-  const [containerName, setContainerName] = useState("");
+export default function OpenClawApp({
+  phase,
+  statusText,
+  containerName,
+  errorText,
+  sseRef,
+  onRetry,
+  setEventHandler,
+  setResponseHandler,
+  onClose,
+}: {
+  phase: OcConnectionPhase;
+  statusText: string;
+  containerName: string;
+  errorText: string | null;
+  sseRef: React.MutableRefObject<OpenClawSSE | null>;
+  onRetry: () => void;
+  setEventHandler: (handler: ((event: OcEvent) => void) | null) => void;
+  setResponseHandler: (handler: ((response: OcRes) => void) | null) => void;
+  onClose: () => void;
+}) {
   const [session, setSession] = useState<OcSession | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [bootNonce, setBootNonce] = useState(0);
+  const [messageError, setMessageError] = useState<string | null>(null);
 
-  const sseRef = useRef<OpenClawSSE | null>(null);
   const sessionRef = useRef<OcSession | null>(null);
   const activeAssistantIdRef = useRef<string | null>(null);
-  const activeRequestIdRef = useRef<string | null>(null);
-  const lastDisconnectReasonRef = useRef("未知原因");
+  const sessionLoadedRef = useRef(false);
+
+  const connectionReady = phase === "ready";
 
   const updateSession = useCallback((next: OcSession) => {
     sessionRef.current = next;
@@ -101,30 +100,23 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
     (updater: (s: OcSession) => OcSession, persist = false) => {
       const current = sessionRef.current;
       if (!current) return;
-
       const next = updater(current);
       updateSession(next);
-
-      if (persist) {
-        persistSession(next);
-      }
+      if (persist) persistSession(next);
     },
     [persistSession, updateSession],
   );
 
-  const loadOrCreateSession = useCallback(async (): Promise<string> => {
+  const loadOrCreateSession = useCallback(async () => {
     const existing = await listOcSessions();
     if (existing.length > 0) {
       const latest = existing[0];
       const full = await getOcSession(latest.id);
-      const s = full ?? latest;
-      updateSession(s);
-      return s.id;
+      updateSession(full ?? latest);
+      return;
     }
-
     const created = await createOcSession({ sessionKey: SESSION_KEY });
     updateSession(created);
-    return created.id;
   }, [updateSession]);
 
   const finalizeStreamingMessage = useCallback(
@@ -147,7 +139,6 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
         const firstAssistant = messages.find(
           (m) => m.role === "assistant" && m.content.trim().length > 0,
         );
-
         const nextTitle =
           s.title === "新会话" && firstAssistant
             ? generateOcTitle(firstAssistant.content)
@@ -157,7 +148,6 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
       }, true);
 
       activeAssistantIdRef.current = null;
-      activeRequestIdRef.current = null;
       setIsStreaming(false);
     },
     [patchSession],
@@ -180,6 +170,8 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
     [patchSession],
   );
 
+  // --- Event handlers (registered with hook) ---
+
   const handleOcEvent = useCallback(
     (event: OcEvent) => {
       if (event.event === "agent") {
@@ -191,20 +183,14 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
 
         if (stream === "assistant") {
           const delta = typeof data?.delta === "string" ? data.delta : "";
-          if (delta) {
-            appendAssistantDelta(delta);
-          }
+          if (delta) appendAssistantDelta(delta);
           return;
         }
 
         if (stream === "lifecycle") {
           const p = typeof data?.phase === "string" ? data.phase : "";
-          if (p === "start") {
-            setIsStreaming(true);
-          }
-          if (p === "end") {
-            finalizeStreamingMessage();
-          }
+          if (p === "start") setIsStreaming(true);
+          if (p === "end") finalizeStreamingMessage();
         }
         return;
       }
@@ -213,7 +199,6 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
         const payload = asRecord(event.payload);
         if (!payload) return;
         if (payload.state !== "final") return;
-
         const finalText = extractFinalText(payload.message);
         finalizeStreamingMessage(finalText);
       }
@@ -221,64 +206,36 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
     [appendAssistantDelta, finalizeStreamingMessage],
   );
 
-  const connectAndWaitReady = useCallback(() => {
-    return new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let firstReady = false;
-      const timeout = window.setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error("连接 OpenClaw 超时"));
-      }, CONNECT_TIMEOUT_MS);
+  const handleOcResponse = useCallback((response: OcRes) => {
+    if (!response.error) return;
+    setMessageError(responseError(response.error));
+  }, []);
 
-      const sse = new OpenClawSSE({
-        onReady: () => {
-          firstReady = true;
-          setPhase("ready");
-          setStatusText("OpenClaw 已连接");
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timeout);
-          resolve();
-        },
-        onEvent: handleOcEvent,
-        onResponse: (response) => {
-          if (!response.error) return;
-          setErrorText(responseError(response.error));
-          if (activeRequestIdRef.current && response.id === activeRequestIdRef.current) {
-            finalizeStreamingMessage();
-          }
-        },
-        onDisconnect: (reason) => {
-          setIsStreaming(false);
-          lastDisconnectReasonRef.current = reason || "未知原因";
-          if (!firstReady && !settled) {
-            settled = true;
-            window.clearTimeout(timeout);
-            reject(new Error("连接 OpenClaw 失败，已断开"));
-            return;
-          }
-          setPhase("connecting");
-          setStatusText(`连接断开（${lastDisconnectReasonRef.current}），正在重连...`);
-        },
-        onReconnect: () => {
-          setStatusText(`连接断开（${lastDisconnectReasonRef.current}），正在重连...`);
-        },
-        onError: (error) => {
-          if (!firstReady && !settled) {
-            settled = true;
-            window.clearTimeout(timeout);
-            reject(error);
-            return;
-          }
-          setErrorText(error.message);
-        },
-      });
+  // Register/unregister event handlers
+  useEffect(() => {
+    setEventHandler(handleOcEvent);
+  }, [handleOcEvent, setEventHandler]);
 
-      sseRef.current = sse;
-      sse.connect();
-    });
-  }, [finalizeStreamingMessage, handleOcEvent]);
+  useEffect(() => {
+    setResponseHandler(handleOcResponse);
+  }, [handleOcResponse, setResponseHandler]);
+
+  useEffect(() => {
+    return () => {
+      setEventHandler(null);
+      setResponseHandler(null);
+    };
+  }, [setEventHandler, setResponseHandler]);
+
+  // Load session when connection becomes ready
+  useEffect(() => {
+    if (connectionReady && !sessionLoadedRef.current) {
+      sessionLoadedRef.current = true;
+      loadOrCreateSession().catch(() => {});
+    }
+  }, [connectionReady, loadOrCreateSession]);
+
+  // --- Send / Abort ---
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -287,11 +244,11 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
 
       const sse = sseRef.current;
       if (!sse) {
-        setErrorText("OpenClaw 连接尚未建立");
+        setMessageError("OpenClaw 连接尚未建立");
         return;
       }
 
-      setErrorText(null);
+      setMessageError(null);
 
       if (!sessionRef.current) {
         await loadOrCreateSession();
@@ -325,17 +282,15 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
       setIsStreaming(true);
 
       try {
-        const requestId = await sse.sendChat({
+        await sse.sendChat({
           sessionKey: SESSION_KEY,
           message: messageText,
           idempotencyKey: createOcId(),
         });
-        activeRequestIdRef.current = requestId;
       } catch (error) {
-        setErrorText(error instanceof Error ? error.message : "发送失败");
+        setMessageError(error instanceof Error ? error.message : "发送失败");
         setIsStreaming(false);
         activeAssistantIdRef.current = null;
-        activeRequestIdRef.current = null;
 
         patchSession(
           (s) => ({
@@ -350,140 +305,113 @@ export default function OpenClawApp({ onBack }: { onBack: () => void }) {
         );
       }
     },
-    [loadOrCreateSession, patchSession],
+    [loadOrCreateSession, patchSession, sseRef],
   );
 
   const abortMessage = useCallback(() => {
     void sseRef.current?.abortChat(SESSION_KEY).catch(() => {});
     finalizeStreamingMessage();
-  }, [finalizeStreamingMessage]);
+  }, [finalizeStreamingMessage, sseRef]);
 
-  useEffect(() => {
-    let cancelled = false;
-    sseRef.current?.close();
-    sseRef.current = null;
+  // --- Render ---
 
-    setIsStreaming(false);
-    setErrorText(null);
-    setStatusText("正在检查容器状态...");
-    setPhase("checking");
-
-    const bootstrap = async () => {
-      try {
-        const status = await checkContainerStatus();
-        if (cancelled) return;
-
-        if (status.container_name) {
-          setContainerName(status.container_name);
-        }
-
-        if (!status.provisioned) {
-          setPhase("provisioning");
-          setStatusText("正在分配 OpenClaw 容器...");
-          const provision = await provisionContainer();
-          if (cancelled) return;
-
-          if (provision.container_name) {
-            setContainerName(provision.container_name);
-          }
-
-          let ready = false;
-          for (let i = 0; i < PROVISION_MAX_ATTEMPTS; i += 1) {
-            if (cancelled) return;
-            setStatusText(`容器准备中 (${i + 1}/${PROVISION_MAX_ATTEMPTS})...`);
-            await sleep(PROVISION_POLL_MS);
-
-            const polledStatus = await checkContainerStatus();
-            if (polledStatus.container_name) {
-              setContainerName(polledStatus.container_name);
-            }
-            if (polledStatus.provisioned) {
-              ready = true;
-              break;
-            }
-          }
-
-          if (!ready) {
-            throw new Error("容器分配超时，请稍后重试");
-          }
-        }
-
-        if (cancelled) return;
-        setPhase("connecting");
-        setStatusText("正在连接 OpenClaw...");
-
-        await connectAndWaitReady();
-        if (cancelled) return;
-
-        await loadOrCreateSession();
-      } catch (error) {
-        if (cancelled) return;
-        setPhase("error");
-        setErrorText(error instanceof Error ? error.message : "OpenClaw 初始化失败");
-      }
-    };
-
-    bootstrap().catch(() => {});
-
-    return () => {
-      cancelled = true;
-      sseRef.current?.close();
-      sseRef.current = null;
-    };
-  }, [bootNonce, connectAndWaitReady, loadOrCreateSession]);
+  const statusStrip = (
+    content: React.ReactNode,
+  ) => (
+    <div className="oc-status-strip">
+      {content}
+      <button type="button" className="oc-drawer-close" onClick={onClose} title="关闭 OpenClaw">
+        <X size={14} />
+      </button>
+    </div>
+  );
 
   if (phase === "checking" || phase === "provisioning" || phase === "connecting") {
     return (
-      <Provision
-        phase={phase}
-        message={statusText}
-        detail={containerName ? `容器: ${containerName}` : undefined}
-      />
+      <div className="oc-app-layout">
+        {statusStrip(
+          <span className="oc-connection-badge connecting">
+            <LoaderCircle size={12} className="spinning" />
+            {statusText}
+          </span>,
+        )}
+        <Provision phase={phase} message={statusText} detail={containerName ? `容器: ${containerName}` : undefined} />
+      </div>
     );
   }
 
   if (phase === "error") {
     return (
-      <div className="oc-provision">
-        <div className="oc-provision-card error">
-          <h2 className="oc-provision-title">OpenClaw 启动失败</h2>
-          <p className="oc-provision-message">{errorText || "未知错误"}</p>
-          <div className="oc-error-actions">
-            <button
-              type="button"
-              className="oc-action-btn primary"
-              onClick={() => setBootNonce((v) => v + 1)}
-            >
-              <RefreshCw size={14} />
-              重试
-            </button>
-            <button type="button" className="oc-action-btn" onClick={onBack}>
-              返回本地模式
-            </button>
+      <div className="oc-app-layout">
+        {statusStrip(
+          <span className="oc-connection-badge error">
+            <Cloud size={12} />
+            连接失败
+          </span>,
+        )}
+        <div className="oc-provision">
+          <div className="oc-provision-card error">
+            <h2 className="oc-provision-title">OpenClaw 启动失败</h2>
+            <p className="oc-provision-message">{errorText || "未知错误"}</p>
+            <div className="oc-error-actions">
+              <button type="button" className="oc-action-btn primary" onClick={onRetry}>
+                <RefreshCw size={14} />
+                重试
+              </button>
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
+  if (phase === "idle") {
+    return (
+      <div className="oc-app-layout">
+        {statusStrip(
+          <span className="oc-connection-badge connecting">
+            <Cloud size={12} />
+            等待连接...
+          </span>,
+        )}
+        <div className="oc-provision">
+          <div className="oc-provision-card">
+            <h2 className="oc-provision-title">OpenClaw</h2>
+            <p className="oc-provision-message">正在初始化...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ready | reconnecting
   return (
     <div className="oc-app-layout">
-      <OcTopBar
-        status={phase === "ready" ? "ready" : "connecting"}
-        containerName={containerName}
-        onBack={() => {
-          sseRef.current?.close();
-          onBack();
-        }}
-      />
+      {statusStrip(
+        <>
+          {phase === "reconnecting" ? (
+            <span className="oc-connection-badge reconnecting">
+              <LoaderCircle size={12} className="spinning" />
+              {statusText}
+            </span>
+          ) : (
+            <span className="oc-connection-badge ready">
+              <PlugZap size={12} />
+              已连接
+            </span>
+          )}
+          {containerName && <span className="oc-container-badge">{containerName}</span>}
+        </>,
+      )}
 
       <OcChatView
         session={session}
         isStreaming={isStreaming}
-        errorText={errorText}
+        errorText={messageError}
+        disabled={!connectionReady}
         onSend={(text) => {
           sendMessage(text).catch((error) => {
-            setErrorText(error instanceof Error ? error.message : "发送消息失败");
+            setMessageError(error instanceof Error ? error.message : "发送消息失败");
           });
         }}
         onAbort={abortMessage}

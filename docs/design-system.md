@@ -111,6 +111,7 @@
 
 | Token | 用途 |
 |-------|------|
+| `--font-sans` | 全局默认字体（Maple Mono + 系统字体回退） |
 | `--font-mono` | 代码块、内联代码 |
 | `--font-serif` | Hero 问候语（Georgia） |
 

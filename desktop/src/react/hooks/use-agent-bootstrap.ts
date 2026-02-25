@@ -58,15 +58,12 @@ export function useAgentBootstrap(authenticated: boolean) {
           MEMORY_ENABLED: appSettings.memoryEnabled ? "true" : "false",
         };
 
-        try {
-          const config = await fetchAgentConfig();
-          envVars.LLM_PROXY_URL = config.llm_proxy_url;
-          envVars.LLM_PROXY_KEY = config.llm_proxy_key;
-          if (config.exa_api_key) envVars.EXA_API_KEY = config.exa_api_key;
-          if (config.tavily_api_key) envVars.TAVILY_API_KEY = config.tavily_api_key;
-        } catch (error) {
-          console.warn("[agent] fetchAgentConfig failed, fallback to vm-agent local env", error);
-        }
+        const config = await fetchAgentConfig();
+        envVars.LLM_PROXY_URL = config.llm_proxy_url;
+        envVars.LLM_PROXY_KEY = config.llm_proxy_key;
+        if (config.openai_api_key) envVars.OPENAI_API_KEY = config.openai_api_key;
+        if (config.exa_api_key) envVars.EXA_API_KEY = config.exa_api_key;
+        if (config.tavily_api_key) envVars.TAVILY_API_KEY = config.tavily_api_key;
 
         const agentDir = import.meta.env.VITE_AGENT_DIR || "../vm-agent";
         await invoke("start_agent", {

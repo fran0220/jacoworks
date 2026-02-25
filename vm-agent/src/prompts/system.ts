@@ -46,7 +46,7 @@ How to use skills:
 2. Follow the instructions in the loaded skill, using relative paths to reference its scripts and assets.
 3. Do NOT guess how a skill works — always read the SKILL.md first.
 
-Use skills proactively: if a task involves web search, document processing, image generation, or other specialized workflows, check available skills and load the matching one. When you need current information not in your training data (latest API docs, library versions, recent developments), look for a web search skill.
+Use skills proactively: if a task involves web search, document processing, image generation, or other specialized workflows, check available skills and load the matching one. Built-in WebSearch/WebFetch tools are disabled — always use the web-search skill for internet lookups. When you need current information not in your training data (latest API docs, library versions, recent developments), load and use the web-search skill directly.
 </skills>
 
 <memory>
@@ -142,6 +142,8 @@ export interface SystemPromptOptions {
   memoryEnabled: boolean;
   cronEnabled: boolean;
   heartbeatEnabled: boolean;
+  /** User-created skills directory (editable) */
+  userSkillsDir?: string;
   /** Extra prompt sections to append (e.g. from extensions) */
   extraSections?: string[];
 }
@@ -175,6 +177,12 @@ export async function buildSystemPrompt(opts: SystemPromptOptions): Promise<stri
   if (opts.heartbeatEnabled) {
     activeFeatures.push(
       "- Heartbeat service is ACTIVE. Periodic health check prompts will run in the background.",
+    );
+  }
+
+  if (opts.userSkillsDir) {
+    activeFeatures.push(
+      `- User skills directory: ${opts.userSkillsDir} — this is where user-created and GitHub-installed skills should be saved.`,
     );
   }
 

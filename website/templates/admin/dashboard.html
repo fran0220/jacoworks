@@ -1,0 +1,103 @@
+{% extends "admin/layout.html" %}
+
+{% block title %}仪表盘{% endblock %}
+{% block page_title %}仪表盘{% endblock %}
+
+{% block admin_content %}
+<!-- Stats Cards -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+  <div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm text-gray-500">总用户数</p>
+        <p class="text-3xl font-bold text-gray-900 mt-1">{{ user_count }}</p>
+      </div>
+      <div class="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center text-2xl">👥</div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm text-gray-500">活跃会话</p>
+        <p class="text-3xl font-bold text-gray-900 mt-1">{{ session_count }}</p>
+      </div>
+      <div class="w-12 h-12 bg-green-50 rounded-xl flex items-center justify-center text-2xl">💬</div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm text-gray-500">容器运行</p>
+        <p class="text-3xl font-bold text-gray-900 mt-1">{{ container_count }}</p>
+      </div>
+      <div class="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center text-2xl">🖥️</div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm text-gray-500">待处理反馈</p>
+        <p class="text-3xl font-bold text-gray-900 mt-1">{{ feedback_count }}</p>
+      </div>
+      <div class="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center text-2xl">📝</div>
+    </div>
+  </div>
+</div>
+
+<!-- Quick Actions + Recent Activity -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <!-- Quick Actions -->
+  <div class="bg-white rounded-2xl p-6 shadow-sm">
+    <h3 class="text-lg font-semibold text-gray-900 mb-4">快捷操作</h3>
+    <div class="space-y-3">
+      <a href="/admin/invites"
+         class="flex items-center gap-3 px-4 py-3 rounded-xl bg-cream hover:bg-cream-dark transition-colors">
+        <span>🎫</span>
+        <span class="text-sm font-medium text-gray-700">创建激活码</span>
+      </a>
+      <a href="/admin/releases"
+         class="flex items-center gap-3 px-4 py-3 rounded-xl bg-cream hover:bg-cream-dark transition-colors">
+        <span>📦</span>
+        <span class="text-sm font-medium text-gray-700">发布新版本</span>
+      </a>
+      <a href="/admin/containers"
+         class="flex items-center gap-3 px-4 py-3 rounded-xl bg-cream hover:bg-cream-dark transition-colors">
+        <span>🖥️</span>
+        <span class="text-sm font-medium text-gray-700">管理容器</span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Recent Activity -->
+  <div class="lg:col-span-2 bg-white rounded-2xl p-6 shadow-sm">
+    <h3 class="text-lg font-semibold text-gray-900 mb-4">最近活动</h3>
+    {% if recent_logs.is_empty() %}
+    <p class="text-sm text-gray-400 py-8 text-center">暂无活动记录</p>
+    {% else %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-gray-500 border-b border-gray-100">
+            <th class="pb-3 font-medium">时间</th>
+            <th class="pb-3 font-medium">用户</th>
+            <th class="pb-3 font-medium">操作</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+          {% for log in recent_logs %}
+          <tr>
+            <td class="py-3 text-gray-400">{{ log.created_at }}</td>
+            <td class="py-3 text-gray-700">{{ log.user_id }}</td>
+            <td class="py-3 text-gray-700">{{ log.action }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

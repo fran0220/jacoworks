@@ -127,7 +127,7 @@ export async function createOcSession(options?: { title?: string; model?: string
   const response = await apiFetch("/api/sessions", {
     method: "POST",
     body: JSON.stringify({
-      type: "openclaw",
+      type: "cowork",
       title: options?.title || DEFAULT_TITLE,
       model: options?.model || "",
       workspace_path: "",
@@ -148,7 +148,7 @@ export async function getOcSession(id: string): Promise<OcSession | undefined> {
   if (response.status === 404 || response.status !== 200) return undefined;
 
   const raw = JSON.parse(response.body) as ServerSession;
-  if (raw.type !== "openclaw") return undefined;
+  if (raw.type !== "cowork") return undefined;
   return toOcSession(raw);
 }
 
@@ -158,7 +158,7 @@ export async function listOcSessions(): Promise<OcSession[]> {
 
   const summaries: SessionSummary[] = JSON.parse(response.body) ?? [];
   return summaries
-    .filter((summary) => summary.type === "openclaw")
+    .filter((summary) => summary.type === "cowork")
     .map((summary) => ({
       id: summary.id,
       title: summary.title,

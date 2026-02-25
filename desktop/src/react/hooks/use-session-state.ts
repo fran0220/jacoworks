@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { isAuthenticated } from "../lib/auth";
 import { deleteSession, getSession, listSessions } from "../lib/sessions";
-import type { ChatSession } from "../types";
+import type { AttachedFile, ChatSession } from "../types";
 
 export function useSessionState(authenticated: boolean) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<AttachedFile[]>([]);
 
   const refreshSessions = useCallback(async () => {
     if (!isAuthenticated()) return;
@@ -21,6 +22,7 @@ export function useSessionState(authenticated: boolean) {
     setCurrentSessionId(null);
     setCurrentSession(null);
     setPendingMessage(null);
+    setPendingFiles([]);
   }, [authenticated]);
 
   useEffect(() => {
@@ -58,11 +60,12 @@ export function useSessionState(authenticated: boolean) {
     setCurrentSessionId(null);
   }, []);
 
-  const handleSessionCreated = useCallback((session: ChatSession, firstMessage: string) => {
+  const handleSessionCreated = useCallback((session: ChatSession, firstMessage: string, files: AttachedFile[] = []) => {
     setSessions((prev) => [session, ...prev]);
     setCurrentSession(session);
     setCurrentSessionId(session.id);
     setPendingMessage(firstMessage);
+    setPendingFiles(files);
   }, []);
 
   const deleteSessionById = useCallback(
@@ -82,6 +85,8 @@ export function useSessionState(authenticated: boolean) {
     currentSession,
     pendingMessage,
     setPendingMessage,
+    pendingFiles,
+    setPendingFiles,
     refreshSessions,
     selectSession,
     createNewSession,

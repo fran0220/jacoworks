@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}下载 JAcoworks{% endblock %}
+
+{% block content %}
+<section class="py-16 sm:py-24">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="text-center mb-12">
+      <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">下载 JAcoworks</h1>
+      <p class="mt-4 text-lg text-gray-500">
+        {% if !latest_version.is_empty() %}当前版本: {{ latest_version }}{% else %}即将发布{% endif %}
+        {% if !latest_date.is_empty() %} · {{ latest_date }}{% endif %}
+      </p>
+    </div>
+
+    <!-- Primary Download (auto-detected) -->
+    <div id="primary-download" class="bg-white rounded-2xl shadow-sm p-8 sm:p-12 text-center mb-12">
+      <div id="detected-platform" class="text-gray-500 mb-4">正在检测您的系统…</div>
+      <a id="primary-download-btn" href="#all-platforms"
+         class="inline-flex items-center px-10 py-4 rounded-2xl bg-terra text-white font-semibold text-xl hover:bg-terra-dark transition-colors shadow-lg shadow-terra/20">
+        <svg class="w-6 h-6 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+        <span id="primary-download-text">下载</span>
+      </a>
+      <p class="mt-4 text-sm text-gray-400" id="primary-download-meta"></p>
+    </div>
+
+    <!-- All Platforms -->
+    <div id="all-platforms">
+      <h2 class="text-xl font-semibold text-gray-900 mb-6 text-center">所有平台</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {% for asset in assets %}
+        <a href="{{ asset.download_url }}"
+           data-platform="{{ asset.platform }}"
+           data-file-size="{{ asset.file_size }}"
+           class="bg-white rounded-2xl p-6 text-center hover:shadow-md transition-shadow group">
+          <div class="text-4xl mb-3">
+            {% if asset.platform == "darwin-aarch64" %}🍎
+            {% else if asset.platform == "darwin-x86_64" %}🍎
+            {% else if asset.platform == "windows-x86_64" %}🪟
+            {% else if asset.platform == "linux-x86_64" %}🐧
+            {% else %}💻
+            {% endif %}
+          </div>
+          <h3 class="font-semibold text-gray-900 group-hover:text-terra transition-colors">
+            {% if asset.platform == "darwin-aarch64" %}macOS (Apple Silicon)
+            {% else if asset.platform == "darwin-x86_64" %}macOS (Intel)
+            {% else if asset.platform == "windows-x86_64" %}Windows (64-bit)
+            {% else if asset.platform == "linux-x86_64" %}Linux (AppImage)
+            {% else %}{{ asset.platform }}
+            {% endif %}
+          </h3>
+          {% if !asset.file_size.is_empty() %}
+          <p class="text-sm text-gray-400 mt-2">{{ asset.file_size }}</p>
+          {% endif %}
+        </a>
+        {% endfor %}
+
+        {% if assets.is_empty() %}
+        <!-- Placeholder cards when no assets -->
+        <div class="bg-white rounded-2xl p-6 text-center opacity-60">
+          <div class="text-4xl mb-3">🍎</div>
+          <h3 class="font-semibold text-gray-900">macOS (Apple Silicon)</h3>
+          <p class="text-sm text-gray-400 mt-2">即将发布</p>
+        </div>
+        <div class="bg-white rounded-2xl p-6 text-center opacity-60">
+          <div class="text-4xl mb-3">🍎</div>
+          <h3 class="font-semibold text-gray-900">macOS (Intel)</h3>
+          <p class="text-sm text-gray-400 mt-2">即将发布</p>
+        </div>
+        <div class="bg-white rounded-2xl p-6 text-center opacity-60">
+          <div class="text-4xl mb-3">🪟</div>
+          <h3 class="font-semibold text-gray-900">Windows (64-bit)</h3>
+          <p class="text-sm text-gray-400 mt-2">即将发布</p>
+        </div>
+        <div class="bg-white rounded-2xl p-6 text-center opacity-60">
+          <div class="text-4xl mb-3">🐧</div>
+          <h3 class="font-semibold text-gray-900">Linux (AppImage)</h3>
+          <p class="text-sm text-gray-400 mt-2">即将发布</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Links -->
+    <div class="mt-12 text-center">
+      <a href="https://github.com/fran0220/jacoworks/releases" target="_blank" rel="noopener"
+         class="text-terra hover:text-terra-dark transition-colors text-sm font-medium">
+        查看所有版本 →
+      </a>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  if (typeof detectPlatformDownload === 'function') {
+    detectPlatformDownload();
+  }
+});
+</script>
+{% endblock %}

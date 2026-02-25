@@ -13,6 +13,8 @@ export interface Config {
   primaryProvider: string;
   memoryEnabled: boolean;
   skillsPaths: string[];
+  /** 用户自建技能目录 (可编辑) */
+  userSkillsDir: string;
   heartbeatEnabled: boolean;
   heartbeatIntervalMs: number;
   heartbeatActiveHours?: { start: string; end: string };
@@ -20,18 +22,26 @@ export interface Config {
   toolDenyList: string[];
 }
 
-function defaultMemoryRootDir(): string {
+function defaultAppDataDir(): string {
   if (process.platform === "darwin") {
-    return join(homedir(), "Library", "Application Support", "JAcoworks", "memory");
+    return join(homedir(), "Library", "Application Support", "JAcoworks");
   }
 
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
-    return join(localAppData, "JAcoworks", "memory");
+    return join(localAppData, "JAcoworks");
   }
 
   const xdgDataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-  return join(xdgDataHome, "JAcoworks", "memory");
+  return join(xdgDataHome, "JAcoworks");
+}
+
+function defaultMemoryRootDir(): string {
+  return join(defaultAppDataDir(), "memory");
+}
+
+function defaultUserSkillsDir(): string {
+  return join(defaultAppDataDir(), "skills");
 }
 
 export function parseInterval(str: string): number {
@@ -106,19 +116,12 @@ export function loadConfig(): Config {
     }
   }
 
-  // 中转站配置：LLM_PROXY_KEY > ANTHROPIC_API_KEY
-  const proxyKey =
-    process.env.LLM_PROXY_KEY ||
-    process.env.ANTHROPIC_API_KEY ||
-    "";
+  // 中转站配置：仅从网关下发的环境变量读取，无 fallback
+  const proxyKey = process.env.LLM_PROXY_KEY || "";
+  const proxyUrl = process.env.LLM_PROXY_URL || "";
 
-  const proxyUrl =
-    process.env.LLM_PROXY_URL ||
-    process.env.ANTHROPIC_BASE_URL ||
-    "http://67.230.171.248:8317";
-
-  if (!proxyKey) {
-    console.error("❌ 需要 LLM_PROXY_KEY 或 ANTHROPIC_API_KEY");
+  if (!proxyKey || !proxyUrl) {
+    console.error("❌ 缺少 LLM_PROXY_URL 或 LLM_PROXY_KEY，请在管理后台「系统设置」中配置");
     process.exit(1);
   }
 
@@ -136,6 +139,7 @@ export function loadConfig(): Config {
     primaryProvider: process.env.PRIMARY_PROVIDER || "proxy-claude",
     memoryEnabled: process.env.MEMORY_ENABLED !== "false",
     skillsPaths: resolveSkillsPaths(process.env.SKILLS_PATHS),
+    userSkillsDir: process.env.USER_SKILLS_DIR || defaultUserSkillsDir(),
     heartbeatEnabled: process.env.HEARTBEAT_ENABLED === "true",
     heartbeatIntervalMs: parseInterval(process.env.HEARTBEAT_INTERVAL || "30m"),
     heartbeatActiveHours:
@@ -143,7 +147,7 @@ export function loadConfig(): Config {
         ? { start: heartbeatActiveStart, end: heartbeatActiveEnd }
         : undefined,
     cronEnabled: process.env.CRON_ENABLED === "true",
-    toolDenyList: (process.env.TOOL_DENY_LIST || "")
+    toolDenyList: (process.env.TOOL_DENY_LIST || "WebSearch,WebFetch")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),

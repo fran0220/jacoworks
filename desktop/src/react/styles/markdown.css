@@ -111,11 +111,36 @@ select:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: var(--space-12);
+  height: var(--space-12);
   background: var(--bg-tertiary);
   border-radius: var(--radius);
   flex-shrink: 0;
+}
+
+.markdown-body .file-card.has-thumb .file-card-icon {
+  width: calc(var(--space-13) + var(--space-4) + var(--space-4));
+  height: calc(var(--space-13) + var(--space-4) + var(--space-4));
+  position: relative;
+  overflow: hidden;
+}
+
+
+
+.markdown-body .file-card-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.markdown-body .file-card-thumb.ready {
+  opacity: 1;
+}
+
+.markdown-body .file-card-thumb.thumb-failed {
+  display: none;
 }
 
 .markdown-body .file-card-icon::before {
@@ -125,6 +150,10 @@ select:focus-visible {
   text-transform: uppercase;
   color: var(--accent);
   letter-spacing: 0.5px;
+}
+
+.markdown-body .file-card.has-thumb .file-card-icon::before {
+  content: "";
 }
 
 .markdown-body .file-card-info {
@@ -184,6 +213,13 @@ select:focus-visible {
   background: var(--accent-light);
 }
 
+@media (max-width: 900px) {
+  .markdown-body .file-card.has-thumb .file-card-icon {
+    width: var(--space-13);
+    height: var(--space-13);
+  }
+}
+
 .markdown-body table {
   width: 100%;
   border-collapse: collapse;
@@ -202,4 +238,3 @@ select:focus-visible {
   background: var(--bg-tertiary);
   font-weight: var(--font-semibold);
 }
-

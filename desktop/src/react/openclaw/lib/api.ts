@@ -51,7 +51,7 @@ export async function checkContainerStatus(): Promise<ContainerStatus> {
 
 export async function provisionContainer(): Promise<ProvisionResult> {
   const response = await authedFetch("/api/cowork/provision", { method: "POST" });
-  if (response.status !== 200 && response.status !== 202) {
+  if (response.status < 200 || response.status > 202) {
     throw new Error(parseError(response.body, `容器分配失败 (${response.status})`));
   }
 

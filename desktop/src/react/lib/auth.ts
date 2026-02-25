@@ -88,9 +88,9 @@ async function authFetch(
   return response;
 }
 
-export async function login(userEmail: string, secret: string) {
+export async function login(username: string, secret: string) {
   const response = await authFetch("/api/auth/login", {
-    body: JSON.stringify({ email: userEmail, password: secret }),
+    body: JSON.stringify({ username, password: secret }),
   });
   if (response.status !== 200) {
     const message = parseError(response.body, "登录失败");
@@ -163,6 +163,7 @@ export function logout() {
 export async function fetchAgentConfig(): Promise<{
   llm_proxy_url: string;
   llm_proxy_key: string;
+  openai_api_key?: string;
   exa_api_key?: string;
   tavily_api_key?: string;
 }> {

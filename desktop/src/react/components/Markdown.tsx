@@ -14,9 +14,9 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import "highlight.js/styles/github-dark.css";
 import { marked } from "marked";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { MouseEventHandler } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -33,51 +33,78 @@ hljs.registerLanguage("yaml", yaml);
 
 /* ---- File path detection ---- */
 
-const FILE_EXT_MAP: Record<string, string> = {
-  pdf: "Document · PDF",
-  docx: "Document · DOCX",
-  doc: "Document · DOC",
-  xlsx: "Spreadsheet · XLSX",
-  xls: "Spreadsheet · XLS",
-  pptx: "Presentation · PPTX",
-  txt: "Text · TXT",
-  md: "Document · Markdown",
-  mjs: "Script · MJS",
-  js: "Script · JavaScript",
-  ts: "Script · TypeScript",
-  tsx: "Script · TSX",
-  jsx: "Script · JSX",
-  py: "Script · Python",
-  go: "Source · Go",
-  rs: "Source · Rust",
-  json: "Data · JSON",
-  yaml: "Config · YAML",
-  yml: "Config · YAML",
-  toml: "Config · TOML",
-  html: "Web · HTML",
-  css: "Style · CSS",
-  sql: "Query · SQL",
-  csv: "Data · CSV",
-  png: "Image · PNG",
-  jpg: "Image · JPEG",
-  jpeg: "Image · JPEG",
-  gif: "Image · GIF",
-  svg: "Image · SVG",
-  zip: "Archive · ZIP",
-  tar: "Archive · TAR",
-  gz: "Archive · GZ",
-  sh: "Script · Shell",
-  log: "Log · LOG",
-  xml: "Data · XML",
+const FILE_SUFFIX_MAP: Array<{ suffix: string; ext: string; typeLabel: string; kind: string }> = [
+  { suffix: ".tar.gz", ext: "TAR.GZ", typeLabel: "Archive · TAR.GZ", kind: "archive" },
+  { suffix: ".tgz", ext: "TGZ", typeLabel: "Archive · TGZ", kind: "archive" },
+];
+
+const FILE_EXT_MAP: Record<string, { typeLabel: string; kind: string }> = {
+  pdf: { typeLabel: "Document · PDF", kind: "pdf" },
+  docx: { typeLabel: "Document · DOCX", kind: "document" },
+  doc: { typeLabel: "Document · DOC", kind: "document" },
+  xlsx: { typeLabel: "Spreadsheet · XLSX", kind: "document" },
+  xls: { typeLabel: "Spreadsheet · XLS", kind: "document" },
+  pptx: { typeLabel: "Presentation · PPTX", kind: "document" },
+  txt: { typeLabel: "Text · TXT", kind: "text" },
+  md: { typeLabel: "Document · Markdown", kind: "text" },
+  mjs: { typeLabel: "Script · MJS", kind: "code" },
+  js: { typeLabel: "Script · JavaScript", kind: "code" },
+  ts: { typeLabel: "Script · TypeScript", kind: "code" },
+  tsx: { typeLabel: "Script · TSX", kind: "code" },
+  jsx: { typeLabel: "Script · JSX", kind: "code" },
+  py: { typeLabel: "Script · Python", kind: "code" },
+  go: { typeLabel: "Source · Go", kind: "code" },
+  rs: { typeLabel: "Source · Rust", kind: "code" },
+  json: { typeLabel: "Data · JSON", kind: "code" },
+  yaml: { typeLabel: "Config · YAML", kind: "code" },
+  yml: { typeLabel: "Config · YAML", kind: "code" },
+  toml: { typeLabel: "Config · TOML", kind: "code" },
+  html: { typeLabel: "Web · HTML", kind: "code" },
+  css: { typeLabel: "Style · CSS", kind: "code" },
+  sql: { typeLabel: "Query · SQL", kind: "code" },
+  csv: { typeLabel: "Data · CSV", kind: "code" },
+  png: { typeLabel: "Image · PNG", kind: "image" },
+  jpg: { typeLabel: "Image · JPEG", kind: "image" },
+  jpeg: { typeLabel: "Image · JPEG", kind: "image" },
+  gif: { typeLabel: "Image · GIF", kind: "image" },
+  svg: { typeLabel: "Image · SVG", kind: "image" },
+  webp: { typeLabel: "Image · WEBP", kind: "image" },
+  bmp: { typeLabel: "Image · BMP", kind: "image" },
+  mp4: { typeLabel: "Video · MP4", kind: "video" },
+  mov: { typeLabel: "Video · MOV", kind: "video" },
+  m4v: { typeLabel: "Video · M4V", kind: "video" },
+  webm: { typeLabel: "Video · WEBM", kind: "video" },
+  mp3: { typeLabel: "Audio · MP3", kind: "audio" },
+  wav: { typeLabel: "Audio · WAV", kind: "audio" },
+  m4a: { typeLabel: "Audio · M4A", kind: "audio" },
+  aac: { typeLabel: "Audio · AAC", kind: "audio" },
+  ogg: { typeLabel: "Audio · OGG", kind: "audio" },
+  flac: { typeLabel: "Audio · FLAC", kind: "audio" },
+  zip: { typeLabel: "Archive · ZIP", kind: "archive" },
+  tar: { typeLabel: "Archive · TAR", kind: "archive" },
+  fig: { typeLabel: "Design · FIG", kind: "design" },
+  sketch: { typeLabel: "Design · SKETCH", kind: "design" },
+  psd: { typeLabel: "Design · PSD", kind: "design" },
+  sh: { typeLabel: "Script · Shell", kind: "code" },
+  log: { typeLabel: "Log · LOG", kind: "code" },
+  xml: { typeLabel: "Data · XML", kind: "code" },
 };
 
-function getFileInfo(text: string): { name: string; ext: string; typeLabel: string } | null {
+function getFileInfo(text: string): { name: string; ext: string; typeLabel: string; kind: string } | null {
   if (!text.includes(".")) return null;
-  const ext = text.split(".").pop()?.toLowerCase();
-  if (!ext || !FILE_EXT_MAP[ext]) return null;
   if (!text.includes("/") && !text.includes("\\")) return null;
   const name = text.split("/").pop() || text.split("\\").pop() || text;
-  return { name, ext: ext.toUpperCase(), typeLabel: FILE_EXT_MAP[ext] };
+  const lowerName = name.toLowerCase();
+
+  for (const item of FILE_SUFFIX_MAP) {
+    if (lowerName.endsWith(item.suffix)) {
+      return { name, ext: item.ext, typeLabel: item.typeLabel, kind: item.kind };
+    }
+  }
+
+  const ext = name.split(".").pop()?.toLowerCase();
+  if (!ext || !FILE_EXT_MAP[ext]) return null;
+  return { name, ext: ext.toUpperCase(), typeLabel: FILE_EXT_MAP[ext].typeLabel, kind: FILE_EXT_MAP[ext].kind };
 }
 
 /* ---- Marked renderer ---- */
@@ -110,8 +137,15 @@ renderer.codespan = ({ text }) => {
     return `<code>${text}</code>`;
   }
   const escaped = decoded.replace(/"/g, "&quot;");
-  return `<div class="file-card" data-file-path="${escaped}">
-    <div class="file-card-icon" data-ext="${fileInfo.ext}"></div>
+  const escapedName = fileInfo.name.replace(/"/g, "&quot;");
+  const iconInner = fileInfo.kind === "image"
+    ? `<img class="file-card-thumb" data-file-path="${escaped}" alt="${escapedName}" loading="lazy" decoding="async" />`
+    : "";
+
+  return `<div class="file-card${fileInfo.kind === "image" ? " has-thumb" : ""}" data-file-path="${escaped}" data-kind="${fileInfo.kind}">
+    <div class="file-card-icon${fileInfo.kind === "image" ? " image-icon" : ""}" data-ext="${fileInfo.ext}">
+      ${iconInner}
+    </div>
     <div class="file-card-info">
       <span class="file-card-name">${fileInfo.name}</span>
       <span class="file-card-type">${fileInfo.typeLabel}</span>
@@ -151,17 +185,92 @@ export default function Markdown({
   content: string;
   workspacePath?: string;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const thumbUrlCacheRef = useRef<Map<string, string>>(new Map());
+
   const html = useMemo(
     () =>
       DOMPurify.sanitize(marked.parse(content) as string, {
         ADD_TAGS: ["pre", "code", "img"],
         ADD_ATTR: [
-          "class", "id", "data-code-id", "data-file-path", "data-ext",
-          "src", "alt", "width", "height", "loading", "title",
+          "class", "id", "data-code-id", "data-file-path", "data-ext", "data-kind",
+          "src", "alt", "width", "height", "loading", "title", "decoding",
         ],
       }),
     [content],
   );
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const thumbs = Array.from(
+      root.querySelectorAll<HTMLImageElement>(".file-card-thumb[data-file-path]"),
+    );
+    if (!thumbs.length) return;
+
+    let disposed = false;
+
+    const loadThumb = async (node: HTMLImageElement) => {
+      if (disposed || node.dataset.thumbLoaded === "1") return;
+
+      const filePath = node.getAttribute("data-file-path");
+      if (!filePath) return;
+
+      node.dataset.thumbLoaded = "1";
+
+      let assetUrl = thumbUrlCacheRef.current.get(filePath);
+      if (!assetUrl) {
+        try {
+          const resolved = await invoke<string>("resolve_file_path", {
+            path: filePath,
+            workspace: workspacePath || null,
+          });
+          assetUrl = convertFileSrc(resolved);
+          thumbUrlCacheRef.current.set(filePath, assetUrl);
+        } catch {
+          node.classList.add("thumb-failed");
+          return;
+        }
+      }
+
+      if (disposed) return;
+      node.onload = () => node.classList.add("ready");
+      node.onerror = () => node.classList.add("thumb-failed");
+      node.src = assetUrl;
+    };
+
+    if ("IntersectionObserver" in window) {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const node = entry.target as HTMLImageElement;
+            observer.unobserve(node);
+            void loadThumb(node);
+          }
+        },
+        { rootMargin: "120px 0px" },
+      );
+
+      for (const thumb of thumbs) {
+        observer.observe(thumb);
+      }
+
+      return () => {
+        disposed = true;
+        observer.disconnect();
+      };
+    }
+
+    for (const thumb of thumbs) {
+      void loadThumb(thumb);
+    }
+
+    return () => {
+      disposed = true;
+    };
+  }, [html, workspacePath]);
 
   const onClick: MouseEventHandler<HTMLDivElement> = (event) => {
     const target = event.target as HTMLElement;
@@ -210,5 +319,5 @@ export default function Markdown({
     }
   };
 
-  return <div className="markdown-body" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div ref={rootRef} className="markdown-body" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }

@@ -1,3 +1,19 @@
+@font-face {
+        font-family: 'Maple Mono';
+        src: url('./assets/fonts/MapleMono-VF.woff2') format('woff2');
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+}
+
+@font-face {
+        font-family: 'Maple Mono';
+        src: url('./assets/fonts/MapleMono-Italic-VF.woff2') format('woff2');
+        font-weight: 100 900;
+        font-style: italic;
+        font-display: swap;
+}
+
 :root {
 	/* ===== Colors — 暖色奶油基调 ===== */
 	--bg-primary: #F5F0EB;
@@ -79,8 +95,11 @@
 	--leading-relaxed: 1.6;
 	--leading-loose: 1.7;
 
-	--font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-	--font-serif: Georgia, 'Noto Serif SC', serif;
+	--font-sans:
+                'Maple Mono', 'Maple Mono NF', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+        --font-mono: 'Maple Mono', 'Maple Mono NF', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+        --font-serif: Georgia, 'Noto Serif SC', serif;
 
 	/* ===== Border Radius ===== */
 	--radius-xs: 6px;
@@ -142,10 +161,8 @@ html,
 body {
 	height: 100%;
 	overflow: hidden;
-	font-family:
-		-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
-		'Microsoft YaHei', sans-serif;
-	font-size: var(--text-base);
+	font-family: var(--font-sans);
+        font-size: var(--text-base);
 	line-height: var(--leading-relaxed);
 	color: var(--text-primary);
 	background-color: var(--bg-primary);

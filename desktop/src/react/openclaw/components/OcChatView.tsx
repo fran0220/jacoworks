@@ -8,12 +8,14 @@ export default function OcChatView({
   session,
   isStreaming,
   errorText,
+  disabled,
   onSend,
   onAbort,
 }: {
   session: OcSession | null;
   isStreaming: boolean;
   errorText: string | null;
+  disabled?: boolean;
   onSend: (text: string) => void;
   onAbort: () => void;
 }) {
@@ -47,7 +49,7 @@ export default function OcChatView({
         )}
       </div>
 
-      <OcComposer isStreaming={isStreaming} onSend={onSend} onAbort={onAbort} />
+      <OcComposer disabled={disabled} isStreaming={isStreaming} onSend={onSend} onAbort={onAbort} />
     </div>
   );
 }
