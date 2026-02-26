@@ -10,7 +10,6 @@
     "core:event:allow-listen",
     "opener:default",
     "dialog:default",
-    "deep-link:default",
     "updater:default"
   ]
 }
