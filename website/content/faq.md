@@ -18,7 +18,7 @@ JAcoworks 在本地模式下，你的文件内容仅在本地处理。只有与 
 
 | 平台 | 最低版本 |
 |------|---------|
-| macOS | 12 Monterey 及以上 (Intel / Apple Silicon) |
+| macOS | 12 Monterey 及以上 (Apple Silicon) |
 | Windows | 10 (1809) 及以上，64 位 |
 | Linux | Ubuntu 22.04 / Fedora 38 及以上 (x86_64 / aarch64) |
 

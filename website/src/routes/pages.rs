@@ -71,7 +71,6 @@ pub async fn download(State(state): State<AppState>) -> Result<impl IntoResponse
 fn platform_label(platform: &str) -> String {
     match platform {
         "darwin-aarch64" => "macOS (Apple Silicon)",
-        "darwin-x86_64" => "macOS (Intel)",
         "windows-x86_64" => "Windows (64-bit)",
         "linux-x86_64" => "Linux (x86_64)",
         other => other,

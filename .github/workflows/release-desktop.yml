@@ -29,7 +29,6 @@ jobs:
         run: |
           mkdir -p dist
           bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin
-          bun build --compile --target=bun-darwin-x64 src/index.ts --outfile dist/vm-agent-x86_64-apple-darwin
           bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/vm-agent-x86_64-unknown-linux-gnu
           bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
           ls -lh dist/vm-agent-*
@@ -50,11 +49,6 @@ jobs:
             label: macOS-arm64
             platform: darwin-aarch64
             sidecar: vm-agent-aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
-            label: macOS-x64
-            platform: darwin-x86_64
-            sidecar: vm-agent-x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
@@ -261,24 +255,12 @@ jobs:
               # 推断平台
               PLATFORM=''
               case \"\$FILENAME\" in
-                *.dmg)
-                  if echo \"\$FILENAME\" | grep -qi 'aarch64\\|arm64'; then
-                    PLATFORM='darwin-aarch64'
-                  elif echo \"\$FILENAME\" | grep -qi 'x64\\|x86_64'; then
-                    PLATFORM='darwin-x86_64'
-                  else
-                    PLATFORM='darwin-aarch64'
-                  fi
-                  ;;
+                *.dmg)           PLATFORM='darwin-aarch64' ;;
                 *.exe|*.msi)     PLATFORM='windows-x86_64' ;;
                 *.deb|*.AppImage) PLATFORM='linux-x86_64' ;;
                 *.tar.gz)
                   if echo \"\$FILENAME\" | grep -qi 'darwin\\|macos\\|apple'; then
-                    if echo \"\$FILENAME\" | grep -qi 'aarch64\\|arm64'; then
-                      PLATFORM='darwin-aarch64'
-                    else
-                      PLATFORM='darwin-x86_64'
-                    fi
+                    PLATFORM='darwin-aarch64'
                   elif echo \"\$FILENAME\" | grep -qi 'linux'; then
                     PLATFORM='linux-x86_64'
                   fi

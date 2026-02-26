@@ -16,7 +16,6 @@
   // ===== Platform Detection for Download Page =====
   const PLATFORM_LABELS = {
     'darwin-aarch64': 'macOS (Apple Silicon)',
-    'darwin-x86_64': 'macOS (Intel)',
     'windows-x86_64': 'Windows (64-bit)',
     'linux-x86_64': 'Linux (AppImage)',
   };
@@ -57,18 +56,8 @@
     return 'unknown';
   }
 
-  function resolveMacPlatform(assets, architecture) {
-    if (architecture === 'arm64' && assets['darwin-aarch64']) {
-      return 'darwin-aarch64';
-    }
-    if (architecture === 'x86_64' && assets['darwin-x86_64']) {
-      return 'darwin-x86_64';
-    }
-
-    var hasAppleSilicon = Boolean(assets['darwin-aarch64']);
-    var hasIntel = Boolean(assets['darwin-x86_64']);
-    if (hasAppleSilicon && !hasIntel) return 'darwin-aarch64';
-    if (!hasAppleSilicon && hasIntel) return 'darwin-x86_64';
+  function resolveMacPlatform(assets) {
+    if (assets['darwin-aarch64']) return 'darwin-aarch64';
     return null;
   }
 
@@ -126,13 +115,7 @@
     }
 
     if (info.osFamily === 'darwin') {
-      if (info.architecture === 'arm64') {
-        info.platform = 'darwin-aarch64';
-      } else if (info.architecture === 'x86_64' && info.confidence === 'high') {
-        info.platform = 'darwin-x86_64';
-      } else {
-        info.platform = 'unknown';
-      }
+      info.platform = 'darwin-aarch64';
     }
 
     return info;
@@ -152,7 +135,7 @@
     if (info.platform !== 'unknown' && assets[info.platform]) {
       resolvedPlatform = info.platform;
     } else if (info.osFamily === 'darwin') {
-      resolvedPlatform = resolveMacPlatform(assets, info.architecture);
+      resolvedPlatform = resolveMacPlatform(assets);
     } else if (info.osFamily === 'windows' && assets['windows-x86_64']) {
       resolvedPlatform = 'windows-x86_64';
     } else if (info.osFamily === 'linux' && assets['linux-x86_64']) {
@@ -174,17 +157,6 @@
     btnEl.setAttribute('href', '#all-platforms');
     btnTextEl.textContent = '查看所有版本';
     metaEl.textContent = '';
-
-    if (
-      info.osFamily === 'darwin' &&
-      assets['darwin-aarch64'] &&
-      assets['darwin-x86_64']
-    ) {
-      detectedEl.textContent = '检测到 macOS，请先选择 Apple Silicon 或 Intel';
-      btnTextEl.textContent = '选择 macOS 版本';
-      metaEl.textContent = '不同芯片架构安装包不通用';
-      return;
-    }
 
     if (info.osFamily === 'windows') {
       detectedEl.textContent = '检测到 Windows，请从下方选择可用安装包';

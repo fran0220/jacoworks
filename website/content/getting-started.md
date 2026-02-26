@@ -6,7 +6,7 @@
 
 | 平台 | 最低版本 | 建议配置 |
 |------|---------|---------|
-| macOS | 12 Monterey 及以上 | Apple Silicon (M1+) / Intel, 8GB 内存 |
+| macOS | 12 Monterey 及以上 | Apple Silicon (M1+), 8GB 内存 |
 | Windows | 10 (1809) 及以上 | 64 位, 8GB 内存 |
 | Linux | Ubuntu 22.04 / Fedora 38 及以上 | x86_64 或 aarch64, 8GB 内存 |
 
