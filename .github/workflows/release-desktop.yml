@@ -187,7 +187,7 @@ jobs:
           HOST="${SSH_USER}@${SSH_HOST}"
           SSH="ssh -i ~/.ssh/deploy_key"
           SCP="scp -i ~/.ssh/deploy_key"
-          REMOTE="/opt/jacoworks/releases/${VERSION}"
+          REMOTE="/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/${VERSION}"
 
           # 创建版本目录
           $SSH "$HOST" "mkdir -p ${REMOTE}"
@@ -221,7 +221,7 @@ jobs:
 
           HOST="${SSH_USER}@${SSH_HOST}"
           SSH="ssh -i ~/.ssh/deploy_key"
-          REMOTE="/opt/jacoworks/releases/${VERSION}"
+          REMOTE="/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/${VERSION}"
 
           # 在 jingao 上通过 psql 写入 releases 表
           $SSH "$HOST" "
