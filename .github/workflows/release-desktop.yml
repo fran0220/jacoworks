@@ -29,7 +29,6 @@ jobs:
         run: |
           mkdir -p dist
           bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin
-          bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/vm-agent-x86_64-unknown-linux-gnu
           bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
           ls -lh dist/vm-agent-*
       - uses: actions/upload-artifact@v4
@@ -54,11 +53,6 @@ jobs:
             label: Windows-x64
             platform: windows-x86_64
             sidecar: vm-agent-x86_64-pc-windows-msvc.exe
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            label: Linux-x64
-            platform: linux-x86_64
-            sidecar: vm-agent-x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -76,13 +70,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
-
-      # Linux 系统依赖
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       # 下载 sidecar 二进制
       - uses: actions/download-artifact@v4
@@ -257,12 +244,9 @@ jobs:
               case \"\$FILENAME\" in
                 *.dmg)           PLATFORM='darwin-aarch64' ;;
                 *.exe|*.msi)     PLATFORM='windows-x86_64' ;;
-                *.deb|*.AppImage) PLATFORM='linux-x86_64' ;;
                 *.tar.gz)
                   if echo \"\$FILENAME\" | grep -qi 'darwin\\|macos\\|apple'; then
                     PLATFORM='darwin-aarch64'
-                  elif echo \"\$FILENAME\" | grep -qi 'linux'; then
-                    PLATFORM='linux-x86_64'
                   fi
                   ;;
               esac
