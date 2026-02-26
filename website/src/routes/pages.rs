@@ -38,6 +38,7 @@ pub async fn download(State(state): State<AppState>) -> Result<impl IntoResponse
         let raw_assets = release::list_assets(&state.db, &rel.id).await?;
         let views: Vec<AssetView> = raw_assets
             .iter()
+            .filter(|a| !a.platform.contains("updater"))
             .map(|a| AssetView {
                 platform: a.platform.clone(),
                 platform_label: platform_label(&a.platform),

@@ -141,9 +141,7 @@ jobs:
           if [ -d "${BUNDLE_DIR}/nsis" ]; then
             cp ${BUNDLE_DIR}/nsis/*.exe dist-upload/ 2>/dev/null || true
           fi
-          if [ -d "${BUNDLE_DIR}/msi" ]; then
-            cp ${BUNDLE_DIR}/msi/*.msi dist-upload/ 2>/dev/null || true
-          fi
+          # MSI 不收集，仅提供 NSIS EXE 安装包
           if [ -d "${BUNDLE_DIR}/deb" ]; then
             cp ${BUNDLE_DIR}/deb/*.deb dist-upload/ 2>/dev/null || true
           fi
@@ -251,7 +249,7 @@ jobs:
               PLATFORM=''
               case \"\$FILENAME\" in
                 *.dmg)           PLATFORM='darwin-aarch64' ;;
-                *.exe|*.msi)     PLATFORM='windows-x86_64' ;;
+                *.exe)           PLATFORM='windows-x86_64' ;;
                 *.tar.gz)
                   if echo \"\$FILENAME\" | grep -qi 'darwin\\|macos\\|apple'; then
                     PLATFORM='darwin-aarch64'

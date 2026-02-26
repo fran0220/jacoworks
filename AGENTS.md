@@ -163,7 +163,7 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/auth/login` | 邮箱密码登录 |
+| POST | `/api/auth/login` | 用户名/密码登录 (username 支持用户名或邮箱) |
 | POST | `/api/auth/activate` | 激活码注册 |
 | GET | `/api/auth/feishu[/callback]` | 飞书 SSO |
 | POST | `/api/auth/logout` | 登出 |

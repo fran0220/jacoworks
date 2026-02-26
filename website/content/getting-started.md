@@ -16,30 +16,22 @@
 
 ### macOS
 
-1. 前往 [JAcoworks 官网](https://jacoworks.com) 下载 `.dmg` 安装包
+1. 前往 [下载页面](https://jaco.jingao.club/download) 下载 `.dmg` 安装包
 2. 打开 `.dmg` 文件，将 JAcoworks 拖入「应用程序」文件夹
-3. 首次打开时，系统可能提示「无法验证开发者」：
-   - 打开「系统设置 → 隐私与安全性」
-   - 找到 JAcoworks 相关提示，点击「仍要打开」
+3. 首次打开可能提示「已损坏，无法打开」，在终端执行：
+   ```bash
+   sudo xattr -cr /Applications/JAcoworks.app
+   ```
 
 ### Windows
 
-1. 前往 [JAcoworks 官网](https://jacoworks.com) 下载 `.msi` 安装包
+1. 前往 [下载页面](https://jaco.jingao.club/download) 下载 `.exe` 安装包
 2. 双击运行安装程序，按向导完成安装
 3. 安装完成后，从开始菜单或桌面快捷方式启动
 
 ### Linux
 
-1. 前往 [JAcoworks 官网](https://jacoworks.com) 下载 `.AppImage` 或 `.deb` 包
-2. AppImage 方式：
-   ```bash
-   chmod +x JAcoworks-*.AppImage
-   ./JAcoworks-*.AppImage
-   ```
-3. Debian/Ubuntu 方式：
-   ```bash
-   sudo dpkg -i jacoworks_*.deb
-   ```
+> Linux 版本即将发布，敬请期待。
 
 ## 首次启动
 
@@ -47,7 +39,7 @@
 
 JAcoworks 目前支持两类账号：
 
-- **激活码账号**：通过激活码注册后使用邮箱/密码登录
+- **激活码账号**：通过激活码注册后使用用户名/密码登录
 - **京奥内部账号**：通过飞书登录（无需激活码）
 
 如需注册激活码账号，请先获取激活码：
@@ -71,7 +63,7 @@ JAcoworks 目前支持两类账号：
 
 支持两种登录方式：
 
-- **邮箱密码**: 适用于激活码注册账号
+- **用户名 + 密码**: 适用于激活码注册账号
 - **飞书 SSO**: 适用于京奥内部账号（仅京奥内部可用）
 
 ## 创建第一个对话
