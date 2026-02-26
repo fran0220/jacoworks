@@ -107,9 +107,9 @@ jobs:
           SSH="ssh -i ~/.ssh/deploy_key"
           REMOTE="/opt/jacoworks/www"
 
-          $SSH "$HOST" "sudo systemctl stop jacoworks-website 2>/dev/null || true"
+          $SSH "$HOST" "sudo systemctl stop jacoworks-website 2>/dev/null || true; rm -rf /tmp/jacoworks-website"
           scp -i ~/.ssh/deploy_key target/release/jacoworks-website "$HOST:/tmp/jacoworks-website"
-          $SSH "$HOST" "sudo mv /tmp/jacoworks-website $REMOTE/jacoworks-website"
+          $SSH "$HOST" "sudo mv -f /tmp/jacoworks-website $REMOTE/jacoworks-website"
           rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" content/ "$HOST:/tmp/www-content/"
           rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" static/ "$HOST:/tmp/www-static/"
           rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" templates/ "$HOST:/tmp/www-templates/"
