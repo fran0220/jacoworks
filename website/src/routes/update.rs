@@ -34,9 +34,17 @@ pub async fn check(
         return Ok(axum::http::StatusCode::NO_CONTENT.into_response());
     }
 
-    // Map target/arch to platform string (e.g. "darwin-aarch64")
-    let platform = format!("{target}-{arch}");
-    let asset = release::get_asset_for_platform(&state.db, &latest.id, &platform).await?;
+    // Tauri sends target="darwin-aarch64" arch="aarch64", so try target first,
+    // then fall back to "{target}-{arch}" for legacy compatibility.
+    let asset = release::get_updater_asset(&state.db, &latest.id, &target).await?;
+    let platform = target.clone();
+    let asset = match asset {
+        Some(a) => Some(a),
+        None => {
+            let fallback = format!("{target}-{arch}");
+            release::get_updater_asset(&state.db, &latest.id, &fallback).await?
+        }
+    };
 
     let asset = match asset {
         Some(a) => a,

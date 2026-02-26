@@ -159,6 +159,20 @@ pub async fn get_asset_for_platform(
     Ok(asset)
 }
 
+/// Find updater asset: try "{platform}-updater" first, then exact "{platform}".
+pub async fn get_updater_asset(
+    pool: &sqlx::PgPool,
+    release_id: &str,
+    platform: &str,
+) -> Result<Option<ReleaseAsset>, AppError> {
+    let updater_platform = format!("{platform}-updater");
+    let asset = get_asset_for_platform(pool, release_id, &updater_platform).await?;
+    if asset.is_some() {
+        return Ok(asset);
+    }
+    get_asset_for_platform(pool, release_id, platform).await
+}
+
 pub async fn increment_download_count(pool: &sqlx::PgPool, asset_id: &str) -> Result<(), AppError> {
     sqlx::query("UPDATE release_assets SET download_count = download_count + 1 WHERE id = $1")
         .bind(asset_id)
