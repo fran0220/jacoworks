@@ -54,6 +54,7 @@ jobs:
             platform: windows-x86_64
             sidecar: vm-agent-x86_64-pc-windows-msvc.exe
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
