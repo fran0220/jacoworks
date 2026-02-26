@@ -12,6 +12,7 @@
 JINGAO_HOST   ?= jingao
 GATEWAY_PORT  ?= 8847
 WEBSITE_PORT  ?= 9527
+REPO_DIR      ?= /opt/jacoworks/repo
 
 # ─── 帮助 ───
 help: ## 显示所有可用命令
@@ -47,14 +48,14 @@ dev-desktop: ## 启动 Desktop 开发模式 (Tauri + Vite HMR)
 	cd desktop && cargo tauri dev
 
 # ═══════════════════════════════════════════
-#  构建
+#  构建 (本地)
 # ═══════════════════════════════════════════
 
 build: build-gateway build-website build-agent ## 构建所有服务端组件
 
-build-gateway: ## 构建 Gateway (linux/amd64)
-	cd gateway && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/gateway-linux ./cmd/gateway
-	@echo "✅ gateway/bin/gateway-linux"
+build-gateway: ## 构建 Gateway (本地)
+	cd gateway && go build -ldflags="-s -w" -o bin/gateway ./cmd/gateway
+	@echo "✅ gateway/bin/gateway"
 
 build-website: ## 构建 Website (release)
 	cd website && cargo build --release
@@ -69,32 +70,45 @@ build-desktop: build-agent ## 构建 Desktop 安装包 (当前平台)
 	@echo "✅ Desktop 安装包在 desktop/src-tauri/target/release/bundle/"
 
 # ═══════════════════════════════════════════
-#  手动部署 (SSH 到 jingao)
+#  部署 (SSH 到 jingao, 远程 git pull + 编译)
 # ═══════════════════════════════════════════
 
 deploy: deploy-gateway deploy-website ## 部署所有服务到 jingao
 
-deploy-gateway: build-gateway ## 部署 Gateway 到 jingao
-	@echo "📦 部署 Gateway → $(JINGAO_HOST)..."
-	scp gateway/bin/gateway-linux $(JINGAO_HOST):/opt/jacoworks/gateway.new
+deploy-sync: ## 同步代码到 jingao (git pull)
+	@echo "📥 同步代码到 jingao..."
+	ssh $(JINGAO_HOST) "cd $(REPO_DIR) && git fetch origin && git reset --hard origin/main"
+	@echo "✅ 代码已同步"
+
+deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
+	@echo "📦 部署 Gateway → $(JINGAO_HOST) (远程编译)..."
 	ssh $(JINGAO_HOST) " \
-		systemctl stop jacoworks-gateway && \
-		mv /opt/jacoworks/gateway.new /opt/jacoworks/gateway && \
-		chmod +x /opt/jacoworks/gateway && \
-		systemctl start jacoworks-gateway"
+		cd $(REPO_DIR)/gateway && \
+		export PATH=\$$PATH:/usr/local/go/bin && \
+		CGO_ENABLED=0 go build -ldflags='-s -w' -o /tmp/jacoworks-gateway ./cmd/gateway && \
+		sudo systemctl stop jacoworks-gateway && \
+		sudo mv /tmp/jacoworks-gateway /opt/jacoworks/gateway && \
+		sudo chmod +x /opt/jacoworks/gateway && \
+		sudo systemctl start jacoworks-gateway && \
+		sleep 2 && \
+		curl -sf http://localhost:8847/health"
 	@echo "✅ Gateway 已部署"
 
-deploy-website: build-website ## 部署 Website 到 jingao
-	@echo "📦 部署 Website → $(JINGAO_HOST)..."
-	ssh $(JINGAO_HOST) "systemctl stop jacoworks-website 2>/dev/null || true"
-	scp website/target/release/jacoworks-website $(JINGAO_HOST):/opt/jacoworks/www/jacoworks-website.new
-	rsync -avz --delete website/content/ $(JINGAO_HOST):/opt/jacoworks/www/content/
-	rsync -avz --delete website/static/ $(JINGAO_HOST):/opt/jacoworks/www/static/
-	rsync -avz --delete website/templates/ $(JINGAO_HOST):/opt/jacoworks/www/templates/
+deploy-website: deploy-sync ## 部署 Website 到 jingao (远程编译)
+	@echo "📦 部署 Website → $(JINGAO_HOST) (远程编译)..."
 	ssh $(JINGAO_HOST) " \
-		mv /opt/jacoworks/www/jacoworks-website.new /opt/jacoworks/www/jacoworks-website && \
-		chmod +x /opt/jacoworks/www/jacoworks-website && \
-		systemctl start jacoworks-website"
+		source ~/.cargo/env && \
+		cd $(REPO_DIR)/website && \
+		cargo build --release && \
+		sudo systemctl stop jacoworks-website && \
+		sudo cp target/release/jacoworks-website /opt/jacoworks/www/jacoworks-website && \
+		sudo rsync -a content/ /opt/jacoworks/www/content/ && \
+		sudo rsync -a static/ /opt/jacoworks/www/static/ && \
+		sudo rsync -a templates/ /opt/jacoworks/www/templates/ && \
+		sudo chmod +x /opt/jacoworks/www/jacoworks-website && \
+		sudo systemctl start jacoworks-website && \
+		sleep 2 && \
+		curl -sf http://localhost:9527/"
 	@echo "✅ Website 已部署"
 
 # ═══════════════════════════════════════════
