@@ -151,9 +151,9 @@ func main() {
 	defer channelPool.Close()
 	sseHandler := openclaw.NewSSEHandler(channelPool)
 
-	// Initialize Feishu Bot handler
+	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
-	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, lxdClient, freezer, cfg.LXD.OpenClawPort)
+	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, channelPool)
 
 	mux := http.NewServeMux()
 
@@ -674,7 +674,11 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			return
 		}
 
-		if err := s.UpdateContainer(r.Context(), user.ID, containerName, ip, containerToken); err != nil {
+		// Use background context — HTTP request context may already be canceled
+		// after the long-running ProvisionContainer call.
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer bgCancel()
+		if err := s.UpdateContainer(bgCtx, user.ID, containerName, ip, containerToken); err != nil {
 			log.Error().Err(err).Str("container", containerName).Str("user_id", user.ID).Msg("persist self-provisioned container failed")
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "container provisioned but failed to persist state"})
 			return

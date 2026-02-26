@@ -1,8 +1,9 @@
 package feishubot
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,39 +15,37 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/fran0220/jacoworks/gateway/internal/lxd"
+	"github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
 const (
 	maxReplyLength     = 3000
-	containerTimeout   = 120 * time.Second
-	defaultModel       = "claude-sonnet-4-6"
-	systemPrompt       = "你是 JAPilot，京奥电竞的 AI 助手。简洁、专业地回答用户问题。"
+	responseTimeout    = 120 * time.Second
+	channelReadyWait   = 30 * time.Second
+	defaultSessionKey  = "main"
 	dedupTTL           = 30 * time.Minute
 	dedupCleanInterval = 10 * time.Minute
 )
 
 var mentionPattern = regexp.MustCompile(`@_user_\d+\s*`)
 
-// Handler processes Feishu webhook events and routes messages to OpenClaw containers.
+// Handler processes Feishu webhook events and routes messages to OpenClaw containers
+// via the shared ChannelPool (WebSocket protocol), enabling conversation sync with desktop.
 type Handler struct {
-	client       *Client
-	store        *store.Store
-	lxdClient    *lxd.SSHClient
-	freezer      *lxd.Freezer
-	openclawPort int
+	client      *Client
+	store       *store.Store
+	channelPool *openclaw.ChannelPool
 
-	processedEvents sync.Map // event_id → time.Time
+	chatLocks       sync.Map // userID → *sync.Mutex (single-flight per user)
+	processedEvents sync.Map // event_id → time.Time (webhook dedup)
 }
 
-func NewHandler(client *Client, s *store.Store, lxdClient *lxd.SSHClient, freezer *lxd.Freezer, openclawPort int) *Handler {
+func NewHandler(client *Client, s *store.Store, channelPool *openclaw.ChannelPool) *Handler {
 	h := &Handler{
-		client:       client,
-		store:        s,
-		lxdClient:    lxdClient,
-		freezer:      freezer,
-		openclawPort: openclawPort,
+		client:      client,
+		store:       s,
+		channelPool: channelPool,
 	}
 	go h.cleanupLoop()
 	return h
@@ -55,8 +54,8 @@ func NewHandler(client *Client, s *store.Store, lxdClient *lxd.SSHClient, freeze
 // --- Feishu event structures ---
 
 type feishuEvent struct {
-	Schema string       `json:"schema"`
-	Header feishuHeader `json:"header"`
+	Schema string          `json:"schema"`
+	Header feishuHeader    `json:"header"`
 	Event  json.RawMessage `json:"event"`
 	// url_verification fields
 	Type      string `json:"type"`
@@ -182,28 +181,21 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 		return
 	}
 
-	// Get container info
-	info, err := h.store.GetContainerInfo(ctx, user.ID)
-	if err != nil {
-		log.Warn().Str("user_id", user.ID).Msg("feishu bot: no container")
-		h.client.ReplyText(messageID, "您的 AI 容器尚未创建。请先在桌面端进入 OpenClaw 模式完成初始化。")
-		return
-	}
+	// Single-flight: one chat at a time per user
+	lock := h.getChatLock(user.ID)
+	lock.Lock()
+	defer lock.Unlock()
 
-	// Ensure container is running
-	if err := h.ensureRunning(ctx, info, user.ID); err != nil {
-		log.Error().Err(err).Str("container", info.ContainerName).Msg("feishu bot: container unavailable")
-		h.client.ReplyText(messageID, "AI 容器暂时不可用，请稍后重试。")
-		return
-	}
-
-	// Route message to container
-	response, err := h.routeToContainer(info, text)
+	// Route message via OpenClaw channel (shared with desktop)
+	response, err := h.routeViaChannel(ctx, user.ID, text)
 	if err != nil {
-		log.Error().Err(err).Str("user_id", user.ID).Msg("feishu bot: route to container failed")
+		log.Error().Err(err).Str("user_id", user.ID).Msg("feishu bot: route via channel failed")
 		h.client.ReplyText(messageID, "AI 处理消息时出错，请稍后重试。")
 		return
 	}
+
+	// Save to DB session for desktop visibility
+	h.syncSessionMessages(ctx, user.ID, text, response)
 
 	// Truncate if too long
 	if len(response) > maxReplyLength {
@@ -225,93 +217,295 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 		Msg("feishu bot: replied")
 }
 
-// --- Container routing ---
+// --- Channel routing (replaces HTTP routeToContainer) ---
 
-func (h *Handler) routeToContainer(info *store.ContainerInfo, message string) (string, error) {
-	reqBody, _ := json.Marshal(map[string]interface{}{
-		"model": defaultModel,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": message},
-		},
-		"stream": false,
+// routeViaChannel sends a message through the shared OpenClaw ChannelPool and
+// collects the streaming response. This uses the same WS protocol as the desktop,
+// ensuring conversation context (sessionKey) is shared between both channels.
+func (h *Handler) routeViaChannel(ctx context.Context, userID, message string) (string, error) {
+	channel, _, err := h.channelPool.GetOrCreate(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("get channel: %w", err)
+	}
+
+	// Subscribe to events (lastSeq=0 → no replay of old events)
+	_, updates, unsubscribe := channel.Subscribe(0)
+	defer unsubscribe()
+
+	// Wait for channel to be connected if not already
+	if !channel.Status().Connected {
+		if err := waitForReady(updates); err != nil {
+			return "", err
+		}
+	}
+
+	// Generate unique request ID for correlation
+	requestID := generateRequestID()
+
+	// Build chat.send params (same protocol as desktop)
+	params, _ := json.Marshal(map[string]interface{}{
+		"sessionKey":     defaultSessionKey,
+		"message":        message,
+		"deliver":        true,
+		"idempotencyKey": requestID,
 	})
 
-	url := fmt.Sprintf("http://%s:%d/v1/chat/completions", info.ContainerIP, h.openclawPort)
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+info.ContainerToken)
-
-	client := &http.Client{Timeout: containerTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request container: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("container returned %d: %s", resp.StatusCode, string(respBody))
+	// Send the request through the shared channel
+	if err := channel.SendRequest("chat.send", params, requestID); err != nil {
+		return "", fmt.Errorf("send chat.send: %w", err)
 	}
 
-	var chatResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
-	}
-
-	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("empty response from container")
-	}
-
-	return strings.TrimSpace(chatResp.Choices[0].Message.Content), nil
+	// Collect streaming response
+	return collectResponse(updates, requestID)
 }
 
-func (h *Handler) ensureRunning(ctx context.Context, info *store.ContainerInfo, userID string) error {
-	if h.lxdClient == nil {
-		return nil
+// waitForReady blocks until the channel emits proxy.ready or times out.
+func waitForReady(updates <-chan openclaw.SSEEvent) error {
+	timeout := time.After(channelReadyWait)
+	for {
+		select {
+		case event, ok := <-updates:
+			if !ok {
+				return fmt.Errorf("channel closed while waiting for ready")
+			}
+			if event.Event == "proxy.ready" {
+				return nil
+			}
+			if event.Event == "proxy.error" {
+				return fmt.Errorf("channel error while connecting")
+			}
+		case <-timeout:
+			return fmt.Errorf("channel ready timeout (%v)", channelReadyWait)
+		}
+	}
+}
+
+// collectResponse waits for the chat.send response and collects streaming assistant
+// content. It uses requestID gating: events before our request is accepted are skipped.
+// Prefers chat.final text when available (authoritative), falls back to accumulated deltas.
+func collectResponse(updates <-chan openclaw.SSEEvent, requestID string) (string, error) {
+	var deltaBuf strings.Builder
+	requestAccepted := false
+	timeout := time.After(responseTimeout)
+
+	for {
+		select {
+		case event, ok := <-updates:
+			if !ok {
+				if deltaBuf.Len() > 0 {
+					return strings.TrimSpace(deltaBuf.String()), nil
+				}
+				return "", fmt.Errorf("channel closed during response collection")
+			}
+
+			switch event.Event {
+			case "response":
+				accepted, errMsg := parseResponseEvent(event.Data, requestID)
+				if errMsg != "" {
+					return "", fmt.Errorf("chat.send rejected: %s", errMsg)
+				}
+				if accepted {
+					requestAccepted = true
+				}
+
+			case "agent":
+				if !requestAccepted {
+					continue
+				}
+				stream, delta, phase := parseAgentEvent(event.Data)
+				switch stream {
+				case "assistant":
+					if delta != "" {
+						deltaBuf.WriteString(delta)
+					}
+				case "lifecycle":
+					if phase == "end" {
+						return strings.TrimSpace(deltaBuf.String()), nil
+					}
+				}
+
+			case "chat":
+				if !requestAccepted {
+					continue
+				}
+				if finalText := parseChatFinalEvent(event.Data); finalText != "" {
+					return strings.TrimSpace(finalText), nil
+				}
+			}
+
+		case <-timeout:
+			if deltaBuf.Len() > 0 {
+				return strings.TrimSpace(deltaBuf.String()), nil
+			}
+			return "", fmt.Errorf("response timeout (%v)", responseTimeout)
+		}
+	}
+}
+
+// --- DB session sync ---
+
+// syncSessionMessages appends the user message and assistant reply to the user's
+// cowork session in the database, so the desktop can see feishu conversations.
+func (h *Handler) syncSessionMessages(ctx context.Context, userID, userMessage, assistantReply string) {
+	if assistantReply == "" {
+		return
 	}
 
-	status, err := h.lxdClient.Status(info.ContainerName)
+	sessionID, err := h.findOrCreateCoworkSession(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("check status: %w", err)
+		log.Error().Err(err).Str("user_id", userID).Msg("feishu bot: session sync failed")
+		return
 	}
 
-	if h.freezer != nil {
-		h.freezer.Touch(info.ContainerName)
+	sess, err := h.store.GetSession(ctx, userID, sessionID)
+	if err != nil {
+		log.Error().Err(err).Str("session_id", sessionID).Msg("feishu bot: get session failed")
+		return
 	}
 
-	switch strings.ToUpper(status.Status) {
-	case "RUNNING":
-		return nil
-	case "FROZEN":
-		log.Info().Str("container", info.ContainerName).Msg("feishu bot: unfreezing container")
-		if err := h.lxdClient.Unfreeze(info.ContainerName); err != nil {
-			return err
-		}
-		return h.store.UpdateContainerStatusByName(ctx, info.ContainerName, "running")
-	case "STOPPED":
-		log.Info().Str("container", info.ContainerName).Msg("feishu bot: starting container")
-		if err := h.lxdClient.Start(info.ContainerName); err != nil {
-			return err
-		}
-		ip, err := h.lxdClient.GetIP(info.ContainerName)
-		if err != nil {
-			return err
-		}
-		info.ContainerIP = ip
-		return h.store.UpdateContainerIP(ctx, userID, ip)
-	default:
-		return fmt.Errorf("container in unexpected state: %s", status.Status)
+	var messages []map[string]interface{}
+	if len(sess.Messages) > 0 {
+		_ = json.Unmarshal(sess.Messages, &messages)
 	}
+
+	now := time.Now().UnixMilli()
+	messages = append(messages,
+		map[string]interface{}{
+			"id": generateMsgID(), "role": "user",
+			"content": userMessage, "createdAt": now, "status": "final",
+		},
+		map[string]interface{}{
+			"id": generateMsgID(), "role": "assistant",
+			"content": assistantReply, "createdAt": now, "status": "final",
+		},
+	)
+
+	msgJSON, _ := json.Marshal(messages)
+	msgStr := string(msgJSON)
+
+	title := sess.Title
+	if title == "" || title == "新对话" || title == "新会话" {
+		title = truncateTitle(userMessage)
+	}
+
+	if _, err := h.store.UpdateSession(ctx, userID, sessionID, store.SessionUpdate{
+		Messages: &msgStr,
+		Title:    &title,
+	}); err != nil {
+		log.Error().Err(err).Str("session_id", sessionID).Msg("feishu bot: save messages failed")
+	}
+}
+
+func (h *Handler) findOrCreateCoworkSession(ctx context.Context, userID string) (string, error) {
+	sessions, err := h.store.ListSessions(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+
+	for _, s := range sessions {
+		if s.Type == "cowork" {
+			return s.ID, nil
+		}
+	}
+
+	sess, err := h.store.CreateSession(ctx, userID, "cowork", "", "")
+	if err != nil {
+		return "", err
+	}
+	return sess.ID, nil
+}
+
+// --- Event parsing helpers ---
+
+// parseResponseEvent checks if a "response" event matches our requestID.
+// Returns (accepted, errorMessage).
+func parseResponseEvent(data []byte, requestID string) (bool, string) {
+	var env struct {
+		ID    string          `json:"id"`
+		OK    bool            `json:"ok"`
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(data, &env) != nil {
+		return false, ""
+	}
+	if env.ID != requestID {
+		return false, ""
+	}
+	if len(env.Error) > 0 && string(env.Error) != "null" {
+		var errObj struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(env.Error, &errObj) == nil && errObj.Message != "" {
+			return false, errObj.Message
+		}
+		return false, string(env.Error)
+	}
+	return env.OK, ""
+}
+
+// parseAgentEvent extracts stream type, delta text, and lifecycle phase from an agent event.
+func parseAgentEvent(data []byte) (stream, delta, phase string) {
+	var env struct {
+		Payload struct {
+			Stream string `json:"stream"`
+			Data   struct {
+				Delta string `json:"delta"`
+				Phase string `json:"phase"`
+			} `json:"data"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(data, &env) != nil {
+		return "", "", ""
+	}
+	return env.Payload.Stream, env.Payload.Data.Delta, env.Payload.Data.Phase
+}
+
+// parseChatFinalEvent extracts the final message text from a chat event with state:"final".
+func parseChatFinalEvent(data []byte) string {
+	var env struct {
+		Payload struct {
+			State   string `json:"state"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(data, &env) != nil || env.Payload.State != "final" {
+		return ""
+	}
+
+	raw := env.Payload.Message.Content
+	if len(raw) == 0 {
+		return ""
+	}
+
+	// Content can be a plain string
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+
+	// Or an array of content parts [{text: "..."}, ...]
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) == nil {
+		var buf strings.Builder
+		for _, p := range parts {
+			buf.WriteString(p.Text)
+		}
+		return buf.String()
+	}
+
+	return ""
 }
 
 // --- Helpers ---
+
+func (h *Handler) getChatLock(userID string) *sync.Mutex {
+	v, _ := h.chatLocks.LoadOrStore(userID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
 
 func (h *Handler) cleanupLoop() {
 	ticker := time.NewTicker(dedupCleanInterval)
@@ -325,6 +519,31 @@ func (h *Handler) cleanupLoop() {
 			return true
 		})
 	}
+}
+
+func generateRequestID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return "feishu-" + hex.EncodeToString(b)
+}
+
+func generateMsgID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func truncateTitle(text string) string {
+	cleaned := strings.NewReplacer("\n", " ", "*", "", "_", "", "~", "", "`", "", "#", "").Replace(text)
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return "飞书对话"
+	}
+	runes := []rune(cleaned)
+	if len(runes) <= 20 {
+		return cleaned
+	}
+	return string(runes[:20]) + "..."
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
