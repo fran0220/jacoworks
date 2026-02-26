@@ -11,11 +11,12 @@ gateway/                         Go 管理网关 (jingao :8847, OpenResty 反代
     config/config.go             YAML + env override, ChatAgentConfig
     auth/{middleware,handlers}.go Goth 飞书 SSO + bcrypt + 激活码
     auth/feishu/                 Goth Feishu Provider
-    store/{pg,users,sessions,containers,invites,settings}.go  PostgreSQL (pgx/v5)
+    store/{pg,users,sessions,containers,invites,settings,memory,skills}.go  PostgreSQL (pgx/v5)
     proxy/handler.go             ReverseProxy (OpenClaw HTTP + ChatAgent)
     cowork/handler.go            文件操作 (upload/download/changes)
     openclaw/ws_proxy.go         WebSocket 代理 (Ed25519 设备密钥)
-    lxd/{client,ssh_client,freezer}.go  LXD 容器生命周期
+    lxd/{client,ssh_client,freezer}.go  LXD 容器生命周期 + 记忆/技能文件推拉
+    feishubot/{client,handler}.go  飞书 Bot webhook + 消息路由到容器
     audit/logger.go
 
 vm-agent/                        本地 Agent sidecar (Pi SDK + RPC stdio)
@@ -174,6 +175,10 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 | POST | `/api/cowork/provision` | 自助分配 LXD 容器 |
 | GET | `/ws/openclaw` | WebSocket 代理 → 容器 :18789 |
 | POST | `/api/cowork/{sid}/upload` | 上传项目 |
+| POST | `/api/memory/sync` | 记忆双向同步 (manifest + push/pull) |
+| POST | `/api/skills/upload` | 技能文件上传 |
+| GET | `/api/skills/checksum` | 技能文件校验和 |
+| POST | `/api/feishu/webhook` | 飞书 Bot webhook (无需认证) |
 | GET | `/api/admin/settings` | 读取系统设置 (LLM 密钥等) |
 | PUT | `/api/admin/settings` | 更新系统设置 + 热重载内存配置 |
 | * | `/api/admin/...` | 管理: invite-codes, containers, provision |
@@ -200,7 +205,7 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 
 ## 5. 数据库
 
-PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_init_business_tables.sql` + `002_website_tables.sql` + `003_system_settings.sql`
+PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_init_business_tables.sql` + `002_website_tables.sql` + `003_system_settings.sql` + `004_memory_and_skills.sql`
 
 | 表 | 关键字段 |
 |-----|------|
@@ -211,6 +216,8 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_
 | `invite_codes` | code PK, role, max_uses, used_count |
 | `audit_logs` | user_id, action, detail JSONB |
 | `system_settings` | key TEXT PK, value TEXT, description TEXT (LLM 密钥等运行时配置) |
+| `user_memory` | user_id + file_path UNIQUE, content TEXT, checksum TEXT |
+| `skill_files` | owner + file_path UNIQUE, content TEXT, checksum TEXT (owner='system' 或 user_id) |
 | `releases` | id TEXT PK, version UNIQUE, notes, pub_date, is_latest BOOL |
 | `release_assets` | release_id → releases, platform, download_url, signature, file_size, download_count |
 | `feedback` | id TEXT PK, name, email, category, message, status, admin_reply |
@@ -280,25 +287,36 @@ base_url = "https://jaco.jingao.club"
 | 工作流 | 触发 | 作用 |
 |--------|------|------|
 | `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job (go vet/test, cargo check/test, tsc) |
-| `deploy.yml` | push main (gateway/** 或 website/**) | 交叉编译 → SSH 部署 jingao → 健康检查 |
 | `release-desktop.yml` | git tag `v*` | 构建 vm-agent sidecar → 跨平台 Tauri (macOS/Win/Linux) → GitHub Release |
+
+> **注意**: 自动部署已移除。gateway/website 通过 `make deploy` 手动部署 (SSH 到 jingao 远程 git pull + 本地编译)。
 
 ### GitHub Secrets
 
 | Secret | 说明 |
 |--------|------|
 | `JINGAO_HOST` | jingao 服务器 IP (82.156.239.212) |
-| `JINGAO_SSH_KEY` | SSH 私钥 (ed25519), 对应 jingao authorized_keys |
+| `JINGAO_SSH_KEY` | SSH 私钥, 对应 jingao authorized_keys |
 | `JINGAO_SSH_USER` | SSH 用户名 (ubuntu) |
 | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名私钥 (minisign, ~/.tauri/jacoworks.key) |
 | `TAURI_SIGNING_KEY_PASSWORD` | 签名密钥密码 (jacoworks-updater-2026) |
 
 ### 部署策略
 
-- **gateway / website**: 原地替换 (stop → swap binary → start → health check), 非蓝绿
+- **gateway / website**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板访问 GitHub) → 本地编译 → 重启
 - **desktop**: git tag 触发跨平台构建 → GitHub Release (draft → publish)
 - **vm-agent**: 打包进 desktop sidecar, 不独立部署
-- 手动部署: `make deploy-gateway` / `make deploy-website`
+
+### jingao GitHub 访问
+
+jingao 通过 jpdata (10.0.1.254) 做 SSH ProxyJump 访问 GitHub (GFW 限制直连)：
+```
+# jingao ~/.ssh/config
+Host github.com
+    ProxyJump root@10.0.1.254
+    IdentityFile ~/.ssh/id_ed25519
+```
+jingao 的 deploy key 已添加到 GitHub 仓库。代码仓库: `/opt/jacoworks/repo`
 
 ## 9. 本地开发
 
@@ -343,8 +361,11 @@ make dev-website       # Rust 官网 → localhost:9527
 make dev-agent         # vm-agent 热重载 (调试用)
 make dev-desktop       # Tauri 桌面端 (Vite HMR)
 make check             # 全量 lint + typecheck + test
-make build             # 构建所有服务端组件 (linux/amd64)
-make deploy            # 手动 SSH 部署到 jingao
+make build             # 构建所有服务端组件
+make deploy            # SSH jingao 远程 git pull + 编译 + 重启
+make deploy-gateway    # 仅部署 Gateway
+make deploy-website    # 仅部署 Website
+make deploy-sync       # 仅同步代码 (git pull)
 make clean             # 清理构建产物
 ```
 
@@ -356,26 +377,31 @@ make clean             # 清理构建产物
 3. make dev-website    # 终端 2
 4. make dev-desktop    # 终端 3 (连本地 gateway)
 5. make check          # 提交前检查
-6. git push            # CI 自动跑, merge main 自动部署
+6. git push            # CI 自动跑检查
+7. make deploy         # 手动部署到 jingao (远程编译)
 ```
 
 ## 10. 待完成
 
 - [x] TLS (OpenResty + Let's Encrypt via 1Panel)
-- [x] CI/CD (GitHub Actions: ci + deploy + release-desktop)
+- [x] CI/CD (GitHub Actions: ci + release-desktop)
 - [x] 本地开发环境 (SSH 隧道 + Makefile + 配置模板)
 - [x] 官网 admin 登录 bcrypt 支持 (对齐网关, 自动检测哈希格式)
 - [x] LLM 密钥集中管理 (system_settings 表 + 网关热重载 + admin UI)
 - [x] 移除本地 fallback (vm-agent/desktop 仅从网关获取 LLM 配置)
-- [ ] 飞书 SSO 联调 (需飞书开放平台凭证)
-- [ ] vm-agent 编译为单二进制 (bun build --compile)
+- [x] 飞书 SSO 联调 (凭证已配置, Goth Provider 热重载已修复)
+- [x] 飞书 Bot 消息路由 (feishubot 包, webhook → 容器路由)
 - [x] 向量记忆系统 (OpenAI Embedding API + 本地 JSON 向量缓存, 与 OpenClaw 同架构)
-- [ ] 预制技能 (shared/skills/)
-- [ ] 移动端 / 语音 / 文件上传
-- [ ] 飞书 Bot 消息路由
+- [x] 记忆/技能同步 (gateway API + 容器冻结前拉取 + 解冻后推送)
 - [x] Tauri updater 签名密钥 (minisign 密钥对 + pubkey 写入 tauri.conf.json)
 - [x] GitHub Secrets 配置 (JINGAO_HOST/SSH_KEY/SSH_USER + TAURI_SIGNING_*)
 - [x] 官网下载页对接 releases 表 + 平台检测
+- [x] jingao GitHub 访问 (jpdata SSH ProxyJump + deploy key)
+- [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
+- [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
+- [ ] vm-agent 编译为单二进制 (bun build --compile)
+- [ ] 预制技能 (shared/skills/)
+- [ ] 移动端 / 语音 / 文件上传
 - [ ] 首次 Tauri 构建 + 发布流程打通 (git tag v0.1.0 端到端验证)
 - [ ] 桌面端接入 tauri-plugin-updater (运行时自动检查更新)
 
