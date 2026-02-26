@@ -9,6 +9,7 @@ use crate::models::release;
 use crate::AppState;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct AssetView {
     id: String,
     platform: String,
@@ -19,6 +20,7 @@ struct AssetView {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct ReleaseView {
     id: String,
     version: String,

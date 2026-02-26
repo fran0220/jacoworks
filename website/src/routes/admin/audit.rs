@@ -7,6 +7,7 @@ use crate::error::{render_template, AppError};
 use crate::models::audit;
 use crate::AppState;
 
+#[allow(dead_code)]
 struct AuditLogView {
     id: i64,
     user_id: String,

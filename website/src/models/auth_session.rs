@@ -36,6 +36,7 @@ pub async fn get_session_by_token(
     Ok(row)
 }
 
+#[allow(dead_code)]
 pub async fn delete_auth_session(pool: &sqlx::PgPool, token: &str) -> Result<(), AppError> {
     sqlx::query("DELETE FROM auth_sessions WHERE token = $1")
         .bind(token)

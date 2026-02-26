@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Response};
 pub enum AppError {
     Database(sqlx::Error),
     NotFound(String),
+    #[allow(dead_code)]
     BadRequest(String),
     Unauthorized,
     Internal(String),

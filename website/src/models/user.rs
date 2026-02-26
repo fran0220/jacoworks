@@ -31,6 +31,7 @@ pub async fn get_user(pool: &sqlx::PgPool, id: &str) -> Result<Option<User>, App
     Ok(user)
 }
 
+#[allow(dead_code)]
 pub async fn get_user_by_email(pool: &sqlx::PgPool, email: &str) -> Result<Option<User>, AppError> {
     let user = sqlx::query_as::<_, User>(
         "SELECT id, name, email, role, created_at, updated_at FROM users WHERE email = $1",

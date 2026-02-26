@@ -14,14 +14,6 @@ pub struct InviteCode {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, sqlx::FromRow, Serialize)]
-pub struct InviteCodeUsage {
-    pub id: String,
-    pub code: String,
-    pub user_id: String,
-    pub used_at: DateTime<Utc>,
-}
-
 pub async fn list_invite_codes(pool: &sqlx::PgPool) -> Result<Vec<InviteCode>, AppError> {
     let codes = sqlx::query_as::<_, InviteCode>(
         "SELECT code, role, max_uses, used_count, created_by, note, expires_at, created_at FROM invite_codes ORDER BY created_at DESC",
@@ -62,15 +54,3 @@ pub async fn revoke_invite_code(pool: &sqlx::PgPool, code: &str) -> Result<(), A
     Ok(())
 }
 
-pub async fn list_usages(
-    pool: &sqlx::PgPool,
-    code: &str,
-) -> Result<Vec<InviteCodeUsage>, AppError> {
-    let usages = sqlx::query_as::<_, InviteCodeUsage>(
-        "SELECT id::text, code, user_id, used_at FROM invite_code_usages WHERE code = $1 ORDER BY used_at DESC",
-    )
-    .bind(code)
-    .fetch_all(pool)
-    .await?;
-    Ok(usages)
-}

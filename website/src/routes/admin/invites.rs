@@ -9,6 +9,7 @@ use crate::models::invite;
 use crate::AppState;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct InviteCodeView {
     code: String,
     role: String,

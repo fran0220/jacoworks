@@ -8,6 +8,7 @@ use crate::AppState;
 
 #[derive(Template)]
 #[template(path = "feedback.html")]
+#[allow(dead_code)]
 struct FeedbackTemplate {
     success: bool,
     error: Option<String>,
