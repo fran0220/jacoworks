@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getToken } from "../../lib/auth";
 import { GATEWAY_URL } from "../../lib/config";
 import { httpFetch } from "../../lib/transport";
@@ -20,9 +22,19 @@ export interface OpenClawSSEHandlers {
   onReconnect?: (delayMs: number, attempt: number) => void;
 }
 
-function buildStreamUrl(token: string) {
+interface SseEventPayload {
+  event: string;
+  data: string;
+  id?: string;
+}
+
+interface SseClosedPayload {
+  error: string;
+}
+
+function buildStreamUrl() {
   const base = GATEWAY_URL.replace(/\/$/, "");
-  return `${base}/api/oc/stream?token=${encodeURIComponent(token)}`;
+  return `${base}/api/oc/stream`;
 }
 
 function parseJson<T>(raw: string): T | null {
@@ -39,10 +51,12 @@ function parseHttpError(body: string, fallback: string) {
 }
 
 export class OpenClawSSE {
-  private source: EventSource | null = null;
+  private connected = false;
   private shouldReconnect = false;
   private ready = false;
   private reconnectAttempt = 0;
+  private unlistenEvent: UnlistenFn | null = null;
+  private unlistenClosed: UnlistenFn | null = null;
 
   constructor(private handlers: OpenClawSSEHandlers = {}) {}
 
@@ -52,7 +66,7 @@ export class OpenClawSSE {
 
   connect() {
     this.shouldReconnect = true;
-    if (this.source) {
+    if (this.connected) {
       return;
     }
     this.openSource();
@@ -61,10 +75,7 @@ export class OpenClawSSE {
   close() {
     this.shouldReconnect = false;
     this.ready = false;
-    if (this.source) {
-      this.source.close();
-    }
-    this.source = null;
+    this.cleanup();
   }
 
   async sendChat(params: { sessionKey: string; message: string; idempotencyKey?: string }) {
@@ -82,67 +93,94 @@ export class OpenClawSSE {
     return this.sendCommand("chat.abort", payload);
   }
 
-  private openSource() {
+  private async openSource() {
     const token = getToken();
     if (!token) {
       this.handlers.onError?.(new Error("未找到登录 token，请重新登录"));
       return;
     }
 
-    const source = new EventSource(buildStreamUrl(token));
-    this.source = source;
+    try {
+      this.unlistenEvent = await listen<SseEventPayload>("oc-sse-event", ({ payload }) => {
+        this.handleSseEvent(payload);
+      });
 
-    source.addEventListener("proxy.ready", () => {
-      this.ready = true;
-      this.reconnectAttempt = 0;
-      this.handlers.onReady?.();
-    });
+      this.unlistenClosed = await listen<SseClosedPayload>("oc-sse-closed", ({ payload }) => {
+        this.handleSseClosed(payload);
+      });
 
-    source.addEventListener("agent", (event) => {
-      const frame = parseJson<OcEvent>((event as MessageEvent<string>).data);
-      if (!frame) return;
-      this.handlers.onEvent?.(frame);
-    });
+      await invoke("sse_connect", {
+        url: buildStreamUrl(),
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-    source.addEventListener("chat", (event) => {
-      const frame = parseJson<OcEvent>((event as MessageEvent<string>).data);
-      if (!frame) return;
-      this.handlers.onEvent?.(frame);
-    });
+      this.connected = true;
+    } catch (err) {
+      this.cleanup();
+      this.handlers.onError?.(new Error(err instanceof Error ? err.message : String(err)));
+      this.scheduleReconnect();
+    }
+  }
 
-    source.addEventListener("response", (event) => {
-      const frame = parseJson<OcRes>((event as MessageEvent<string>).data);
-      if (!frame) return;
-      this.handlers.onResponse?.(frame);
-    });
-
-    source.addEventListener("proxy.error", (event) => {
-      const frame = parseJson<{ error?: string }>((event as MessageEvent<string>).data);
-      this.handlers.onError?.(new Error(frame?.error || "OpenClaw 代理错误"));
-    });
-
-    source.onerror = () => {
-      if (source !== this.source) return;
-
-      const wasReady = this.ready;
-      this.ready = false;
-      this.handlers.onDisconnect?.(wasReady ? "连接中断" : "连接失败");
-
-      if (!this.shouldReconnect) {
-        return;
+  private handleSseEvent(payload: SseEventPayload) {
+    switch (payload.event) {
+      case "proxy.ready":
+        this.ready = true;
+        this.reconnectAttempt = 0;
+        this.handlers.onReady?.();
+        break;
+      case "agent":
+      case "chat": {
+        const frame = parseJson<OcEvent>(payload.data);
+        if (frame) this.handlers.onEvent?.(frame);
+        break;
       }
-
-      this.reconnectAttempt += 1;
-      this.handlers.onReconnect?.(RECONNECT_NOTICE_DELAY_MS, this.reconnectAttempt);
-
-      if (source.readyState === EventSource.CLOSED) {
-        this.source = null;
-        window.setTimeout(() => {
-          if (!this.shouldReconnect || this.source) return;
-          this.openSource();
-        }, RECONNECT_NOTICE_DELAY_MS);
+      case "response": {
+        const frame = parseJson<OcRes>(payload.data);
+        if (frame) this.handlers.onResponse?.(frame);
+        break;
       }
-    };
+      case "proxy.error": {
+        const frame = parseJson<{ error?: string }>(payload.data);
+        this.handlers.onError?.(new Error(frame?.error || "OpenClaw 代理错误"));
+        break;
+      }
+    }
+  }
+
+  private handleSseClosed(payload: SseClosedPayload) {
+    const wasReady = this.ready;
+    this.ready = false;
+    this.connected = false;
+
+    this.unlistenEvent?.();
+    this.unlistenEvent = null;
+    this.unlistenClosed?.();
+    this.unlistenClosed = null;
+
+    this.handlers.onDisconnect?.(wasReady ? "连接中断" : payload.error || "连接失败");
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect() {
+    if (!this.shouldReconnect) return;
+
+    this.reconnectAttempt += 1;
+    this.handlers.onReconnect?.(RECONNECT_NOTICE_DELAY_MS, this.reconnectAttempt);
+
+    window.setTimeout(() => {
+      if (!this.shouldReconnect || this.connected) return;
+      this.openSource();
+    }, RECONNECT_NOTICE_DELAY_MS);
+  }
+
+  private cleanup() {
+    this.connected = false;
+    this.unlistenEvent?.();
+    this.unlistenEvent = null;
+    this.unlistenClosed?.();
+    this.unlistenClosed = null;
+    invoke("sse_close").catch(() => {});
   }
 
   private async sendCommand<TParams extends object>(method: string, params: TParams) {

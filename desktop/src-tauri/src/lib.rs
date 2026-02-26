@@ -458,6 +458,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             stream::http_fetch,
+            stream::sse_connect,
+            stream::sse_close,
             cowork::select_directory,
             cowork::tar_directory,
             cowork::extract_tar,
