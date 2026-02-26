@@ -119,7 +119,7 @@ deploy/
   release-desktop.yml              git tag v* 触发跨平台 Tauri 构建 → GitHub Release
 
 Makefile                           根目录统一命令入口 (dev/build/deploy/check)
-shared/skills/                   预制技能包 (待填充)
+vm-agent/skills/                 预制技能包 (创作/办公/工具)
 docs/design-system.md            Design Token 完整规范
 docs/ci-cd.md                    CI/CD 与本地开发完整指南
 tasks/                           lessons.md next-steps.md
@@ -400,7 +400,7 @@ make clean             # 清理构建产物
 - [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
 - [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
 - [ ] vm-agent 编译为单二进制 (bun build --compile)
-- [ ] 预制技能 (shared/skills/)
+- [x] 预制技能 (vm-agent/skills/ — 创作/办公/工具 三大类)
 - [ ] 移动端 / 语音 / 文件上传
 - [ ] 首次 Tauri 构建 + 发布流程打通 (git tag v0.1.0 端到端验证)
 - [ ] 桌面端接入 tauri-plugin-updater (运行时自动检查更新)

@@ -432,6 +432,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|_app| {
+            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = _app.deep_link().register_all();
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             stream::http_fetch,
             cowork::select_directory,

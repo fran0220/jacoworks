@@ -75,7 +75,7 @@ export async function syncSkills(): Promise<void> {
         ? JSON.parse(checksumRes.body)
         : { system: "", user: "" };
 
-    // Builtin skills: shared/skills/ resolved relative to agent workspace
+    // Builtin skills: vm-agent/skills/ resolved relative to agent workspace
     // The agent dir is resolved by sidecar; we use a known relative path
     const builtinDir = await resolveBuiltinSkillsDir();
     if (builtinDir) {
@@ -114,10 +114,9 @@ export async function syncSkills(): Promise<void> {
 
 async function resolveBuiltinSkillsDir(): Promise<string | null> {
   try {
-    // shared/skills/ is sibling to vm-agent in the repo.
-    // resolve_file_path can find it relative to agent workspace.
+    // skills/ is inside vm-agent directory (agent workspace).
     const resolved: string = await invoke("resolve_file_path", {
-      path: "../shared/skills",
+      path: "skills",
     });
     return resolved;
   } catch {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
 import { getSettings } from "../lib/config";
 import { setSkills } from "../lib/skills";
+import { syncSkills } from "../lib/skill-sync";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -65,18 +66,29 @@ export function useAgentBootstrap(authenticated: boolean) {
         if (config.exa_api_key) envVars.EXA_API_KEY = config.exa_api_key;
         if (config.tavily_api_key) envVars.TAVILY_API_KEY = config.tavily_api_key;
 
-        const agentDir = import.meta.env.VITE_AGENT_DIR || "../vm-agent";
         await invoke("start_agent", {
-          agentDir,
+          agentDir: import.meta.env.VITE_AGENT_DIR || "../vm-agent",
           envVars,
         });
+
+        // Agent started — sync skills to gateway in background
+        syncSkills().catch((err) =>
+          console.warn("[boot] skills sync failed:", err),
+        );
       })(),
       20_000,
       "Agent 启动超时，请点击右下角 RPC 日志排查",
     )
       .catch((err) => {
         if (cancelled) return;
-        setAgentError(err instanceof Error ? err.message : "Agent 启动失败");
+        const message =
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "Agent 启动失败";
+        console.error("[agent-boot] startup failed:", err);
+        setAgentError(message);
       })
       .finally(() => {
         if (cancelled) return;

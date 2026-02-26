@@ -207,10 +207,13 @@ fn collect_files_recursive(
 
 type SharedStdin = Arc<Mutex<ChildStdin>>;
 
+type SharedStderrBuf = Arc<Mutex<Vec<String>>>;
+
 struct AgentProcess {
     child: Child,
     stdin: SharedStdin,
     workspace: PathBuf,
+    stderr_buf: SharedStderrBuf,
 }
 
 static AGENT_PROCESS: std::sync::LazyLock<Mutex<Option<AgentProcess>>> =
@@ -228,6 +231,75 @@ pub fn agent_workspace() -> Option<PathBuf> {
 pub struct AgentStatus {
     pub running: bool,
     pub transport: String,
+}
+
+// ───── Sidecar binary resolution ──────────────────────────────
+
+/// Extract bundled skills.tar.gz to app_data/builtin-skills/ if not already present.
+fn ensure_builtin_skills(app: &AppHandle) -> Option<PathBuf> {
+    let app_data = app.path().app_data_dir().ok()?;
+    let skills_dir = app_data.join("builtin-skills");
+    let version_marker = skills_dir.join(".version");
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    // Skip extraction if skills dir exists and version matches
+    if version_marker.exists() {
+        if let Ok(v) = std::fs::read_to_string(&version_marker) {
+            if v.trim() == current_version {
+                return Some(skills_dir);
+            }
+        }
+    }
+
+    let resource_dir = app.path().resource_dir().ok()?;
+    let archive_path = resource_dir.join("resources").join("skills.tar.gz");
+    if !archive_path.exists() || archive_path.metadata().map(|m| m.len()).unwrap_or(0) < 100 {
+        return None; // Placeholder or missing
+    }
+
+    // Extract skills archive
+    if skills_dir.exists() {
+        let _ = std::fs::remove_dir_all(&skills_dir);
+    }
+    std::fs::create_dir_all(&skills_dir).ok()?;
+
+    let file = std::fs::File::open(&archive_path).ok()?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    if archive.unpack(&skills_dir).is_err() {
+        let _ = std::fs::remove_dir_all(&skills_dir);
+        return None;
+    }
+
+    // Write version marker
+    let _ = std::fs::write(&version_marker, current_version);
+    Some(skills_dir)
+}
+
+/// Look for the bun-compiled sidecar binary next to the main executable.
+/// Returns None in dev mode (binary not bundled).
+fn find_sidecar_binary() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+
+    // Tauri may bundle as "vm-agent" (stripped triple) or "vm-agent-{triple}"
+    let triple = env!("TARGET_TRIPLE");
+    let candidates = if cfg!(windows) {
+        vec![
+            format!("vm-agent-{}.exe", triple),
+            "vm-agent.exe".to_string(),
+        ]
+    } else {
+        vec![format!("vm-agent-{}", triple), "vm-agent".to_string()]
+    };
+
+    for name in candidates {
+        let path = dir.join(&name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn emit_json_or_log(app: &AppHandle, line: &str, source: &str) -> bool {
@@ -331,8 +403,6 @@ pub async fn start_agent(
             *proc = None;
         }
 
-        let (resolved_agent_dir, entry) = resolve_agent_paths(&agent_dir)?;
-
         // User skills directory: <app_data>/skills
         let user_skills_dir = app
             .path()
@@ -340,11 +410,37 @@ pub async fn start_agent(
             .map(|dir| dir.join("skills"))
             .unwrap_or_default();
 
-        let mut cmd = Command::new("node");
-        cmd.arg("--enable-source-maps")
-            .arg(&entry)
-            .current_dir(&resolved_agent_dir)
-            .env("MEMORY_ENABLED", "true")
+        // Dual mode: production (compiled binary) vs dev (node + dist/index.js)
+        let (mut cmd, resolved_agent_dir) = if let Some(binary) = find_sidecar_binary() {
+            // Production: bun-compiled sidecar binary
+            let bin_dir = binary.parent().unwrap_or(Path::new(".")).to_path_buf();
+            let mut c = Command::new(&binary);
+            c.current_dir(&bin_dir);
+
+            // PI_PACKAGE_DIR: resource dir contains pi-meta/package.json
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let pi_meta = resource_dir.join("resources").join("pi-meta");
+                if pi_meta.exists() {
+                    c.env("PI_PACKAGE_DIR", pi_meta.to_string_lossy().as_ref());
+                }
+            }
+            // Bundled builtin skills (extracted from skills.tar.gz)
+            if let Some(skills_dir) = ensure_builtin_skills(&app) {
+                c.env("SKILLS_PATHS", skills_dir.to_string_lossy().as_ref());
+            }
+
+            (c, bin_dir)
+        } else {
+            // Dev fallback: node + dist/index.js
+            let (resolved_dir, entry) = resolve_agent_paths(&agent_dir)?;
+            let mut c = Command::new("node");
+            c.arg("--enable-source-maps")
+                .arg(&entry)
+                .current_dir(&resolved_dir);
+            (c, resolved_dir)
+        };
+
+        cmd.env("MEMORY_ENABLED", "true")
             .env("HEARTBEAT_ENABLED", "false")
             .env("CRON_ENABLED", "false")
             .env("USER_SKILLS_DIR", user_skills_dir.to_string_lossy().as_ref())
@@ -393,12 +489,21 @@ pub async fn start_agent(
         });
 
         let app_stderr = app.clone();
+        let stderr_buf: SharedStderrBuf = Arc::new(Mutex::new(Vec::new()));
+        let stderr_buf_writer = stderr_buf.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
+                }
+                // Keep last 10 stderr lines for diagnostics on crash
+                if let Ok(mut buf) = stderr_buf_writer.lock() {
+                    if buf.len() >= 10 {
+                        buf.remove(0);
+                    }
+                    buf.push(trimmed.to_string());
                 }
                 let _ = emit_json_or_log(&app_stderr, trimmed, "stderr");
             }
@@ -408,6 +513,7 @@ pub async fn start_agent(
             child,
             stdin: Arc::new(Mutex::new(stdin)),
             workspace: resolved_agent_dir.clone(),
+            stderr_buf,
         });
     }
 
@@ -427,8 +533,23 @@ pub async fn start_agent(
         };
 
         if !is_running(existing) {
+            let exit_info = match existing.child.try_wait() {
+                Ok(Some(status)) => format!(" (exit {})", status),
+                _ => String::new(),
+            };
+            let stderr_tail = existing
+                .stderr_buf
+                .lock()
+                .ok()
+                .map(|buf| buf.join(" | "))
+                .unwrap_or_default();
             *proc = None;
-            return Err("Agent exited during startup".to_string());
+            let detail = if stderr_tail.is_empty() {
+                format!("Agent exited during startup{}", exit_info)
+            } else {
+                format!("Agent exited during startup{}: {}", exit_info, stderr_tail)
+            };
+            return Err(detail);
         }
 
         if Instant::now() >= deadline {

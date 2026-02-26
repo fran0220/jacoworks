@@ -26,9 +26,11 @@ reqwest = { version = "0.12", features = ["stream", "json", "multipart"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-deep-link = "2"
 open = "5"
 flate2 = "1"
 tar = "0.4"
 walkdir = "2"
 base64 = "0.22"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tauri-plugin-updater = "2"

@@ -65,7 +65,15 @@ build-agent: ## 构建 vm-agent
 	cd vm-agent && npm run build
 	@echo "✅ vm-agent/dist/"
 
-build-desktop: build-agent ## 构建 Desktop 安装包 (当前平台)
+compile-agent: ## 编译 vm-agent 为单二进制 (bun compile, 当前平台)
+	cd vm-agent && npm run compile
+	@mkdir -p desktop/src-tauri/binaries
+	@cp vm-agent/dist/vm-agent desktop/src-tauri/binaries/vm-agent-$$(rustc -vV | grep host | cut -d' ' -f2)
+	@tar -czf desktop/src-tauri/resources/skills.tar.gz -C vm-agent/skills .
+	@echo "✅ Sidecar binary → desktop/src-tauri/binaries/"
+	@echo "✅ Skills archive → desktop/src-tauri/resources/skills.tar.gz"
+
+build-desktop: compile-agent ## 构建 Desktop 安装包 (当前平台)
 	cd desktop && cargo tauri build
 	@echo "✅ Desktop 安装包在 desktop/src-tauri/target/release/bundle/"
 

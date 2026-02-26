@@ -85,6 +85,36 @@
   color: var(--danger);
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: var(--text-sm);
+  text-align: center;
+  justify-content: center;
+}
+
+.update-banner button {
+  padding: var(--space-0-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--text-on-accent);
+  background: transparent;
+  color: var(--text-on-accent);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.update-banner button:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.update-banner--done {
+  background: var(--success, #2d7d46);
+}
+
 .spinning {
   animation: spin 0.9s var(--ease-linear) infinite;
 }

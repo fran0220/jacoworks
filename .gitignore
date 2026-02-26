@@ -36,6 +36,10 @@ desktop/dist/
 vm-agent/dist/
 vm-agent/memory/
 
+# === Sidecar binaries (built by bun compile) ===
+desktop/src-tauri/binaries/vm-agent-*
+desktop/src-tauri/resources/skills.tar.gz
+
 # === Vite ===
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*

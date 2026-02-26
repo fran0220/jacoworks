@@ -260,7 +260,7 @@ channels: {
 
 ### 5.3 预制技能 (10 个)
 
-在 `shared/skills/` 创建，通过 `skills.load.extraDirs` 挂载到所有容器：
+在 `vm-agent/skills/` 创建，通过 `skills.load.extraDirs` 挂载到所有容器：
 1. document-writer (文档写作)
 2. excel-analyst (Excel 分析)
 3. ppt-generator (PPT 生成)

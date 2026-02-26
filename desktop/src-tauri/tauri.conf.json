@@ -40,9 +40,21 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "externalBin": [
+      "binaries/vm-agent"
+    ],
+    "resources": {
+      "resources/pi-meta/package.json": "resources/pi-meta/package.json",
+      "resources/skills.tar.gz": "resources/skills.tar.gz"
+    }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["jacoworks"]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://jaco.jingao.club/api/update/{{target}}/{{arch}}/{{current_version}}"

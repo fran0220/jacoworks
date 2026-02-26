@@ -58,13 +58,13 @@ Instructions go here.
 
 ### 简单技能（仅说明）
 ```
-shared/skills/my-skill/
+vm-agent/skills/my-skill/
 └── SKILL.md
 ```
 
 ### 带脚本的技能
 ```
-shared/skills/my-skill/
+vm-agent/skills/my-skill/
 ├── SKILL.md
 └── scripts/
     └── my-script.sh
@@ -72,7 +72,7 @@ shared/skills/my-skill/
 
 ### 复杂技能（渐进式加载）
 ```
-shared/skills/my-skill/
+vm-agent/skills/my-skill/
 ├── SKILL.md           # 概览，500 行以内
 ├── reference/
 │   ├── api.md         # 详细 API 文档
@@ -145,7 +145,7 @@ JAcoworks 中技能从以下位置加载：
 
 | 位置 | 类型 | 说明 |
 |------|------|------|
-| `shared/skills/` | 内置 (builtin) | 项目预制技能，所有用户共享，不可编辑 |
+| `vm-agent/skills/` | 内置 (builtin) | 项目预制技能，所有用户共享，不可编辑 |
 | `$USER_SKILLS_DIR` | 自建 (user) | 用户创建/安装的技能，可编辑和删除 |
 
 **用户技能目录** (`USER_SKILLS_DIR`) 默认路径：
@@ -153,7 +153,7 @@ JAcoworks 中技能从以下位置加载：
 - Windows: `%LOCALAPPDATA%/JAcoworks/skills/`
 - Linux: `~/.local/share/JAcoworks/skills/`
 
-> **重要**：用户自建技能和从 GitHub 安装的技能都应放到 `$USER_SKILLS_DIR`，不要放到 `shared/skills/`。
+> **重要**：用户自建技能和从 GitHub 安装的技能都应放到 `$USER_SKILLS_DIR`，不要放到 `vm-agent/skills/`。
 > 可通过环境变量 `USER_SKILLS_DIR` 查看实际路径，或调用 Tauri 命令 `get_user_skills_dir` 获取。
 
 创建或安装技能后需要重启 Agent（新建会话即可）才能生效。

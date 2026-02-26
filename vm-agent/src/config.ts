@@ -95,11 +95,11 @@ function resolveSkillsPaths(envVal?: string): string[] {
   if (envVal) {
     return envVal.split(",").map((s) => s.trim()).filter(Boolean);
   }
-  // Default: look for shared/skills relative to vm-agent's parent (monorepo root)
-  const monorepoRoot = resolve(dirname(new URL(import.meta.url).pathname), "../..");
+  // Default: look for skills/ relative to vm-agent root
+  const vmAgentRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
   const defaultPaths = [
-    join(monorepoRoot, "shared", "skills"), // JAcoworks/shared/skills
-    "/shared/skills",                        // container fallback
+    join(vmAgentRoot, "skills"),   // vm-agent/skills (monorepo & bundled)
+    "/shared/skills",              // container fallback
   ];
   return defaultPaths;
 }

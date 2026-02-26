@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
 import { selectFolder } from "../lib/cowork";
 import { getSettings, updateSettings } from "../lib/config";
 import { useSkills, setSkills, type SkillDefinition } from "../lib/skills";
@@ -84,17 +85,9 @@ function GeneralTab() {
   const handleCheckUpdate = async () => {
     setUpdateStatus("checking");
     try {
-      const res = await fetch(
-        "https://api.github.com/repos/fran0220/jacoworks/releases/latest",
-      );
-      if (!res.ok) throw new Error("fetch failed");
-      const data = await res.json();
-      const latest = (data.tag_name || "").replace(/^v/, "");
-      if (latest && latest !== version) {
+      const update = await check();
+      if (update) {
         setUpdateStatus("available");
-        if (isTauri()) {
-          await openUrl(data.html_url);
-        }
       } else {
         setUpdateStatus("latest");
       }
@@ -105,7 +98,7 @@ function GeneralTab() {
 
   const handleOpenReleases = async () => {
     if (isTauri()) {
-      await openUrl("https://github.com/fran0220/jacoworks/releases");
+      await openUrl("https://jaco.jingao.club/download");
     }
   };
 
@@ -175,7 +168,7 @@ function GeneralTab() {
             <div className="settings-hint">
               无法自动检查 ·{" "}
               <button className="settings-link" onClick={handleOpenReleases}>
-                前往 GitHub Releases
+                前往下载页面
               </button>
             </div>
           )}

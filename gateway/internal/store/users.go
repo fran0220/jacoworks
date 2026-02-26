@@ -94,8 +94,18 @@ func (s *Store) FindOrCreateFeishuUser(ctx context.Context, feishuOpenID, name, 
 		return user, nil
 	}
 
-	// Create new user (no password, SSO only)
-	return s.CreateUser(ctx, name, email, "", "user")
+	// Create new user with feishu_open_id (no password, SSO only)
+	user = &User{}
+	err = s.pool.QueryRow(ctx,
+		`INSERT INTO users (name, email, password_hash, role, feishu_open_id)
+		 VALUES ($1, $2, '', 'user', $3)
+		 RETURNING id, name, email, password_hash, role, feishu_open_id, created_at, updated_at`,
+		name, email, feishuOpenID,
+	).Scan(&user.ID, &user.Name, &user.Email, &user.PasswordHash, &user.Role, &user.FeishuOpenID, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create feishu user: %w", err)
+	}
+	return user, nil
 }
 
 // --- Auth Sessions ---

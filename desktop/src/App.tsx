@@ -8,6 +8,7 @@ import TopBar from "./react/components/TopBar";
 import PreviewDrawer from "./react/components/PreviewDrawer";
 import { useAgentBootstrap } from "./react/hooks/use-agent-bootstrap";
 import { useOpenClawConnection } from "./react/hooks/use-openclaw-connection";
+import { useUpdater } from "./react/hooks/use-updater";
 import { useResponsiveSidebar } from "./react/hooks/use-responsive-sidebar";
 import { useSessionState } from "./react/hooks/use-session-state";
 import {
@@ -41,6 +42,7 @@ export default function App() {
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
   const { agentStarting, agentError, retryAgent } = useAgentBootstrap(authenticated);
   const ocConnection = useOpenClawConnection();
+  const updater = useUpdater();
   const {
     sessions,
     currentSessionId,
@@ -125,6 +127,23 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {updater.phase === "available" && updater.info && (
+        <div className="update-banner">
+          <span>新版本 {updater.info.version} 可用</span>
+          <button onClick={updater.doInstall}>下载更新</button>
+        </div>
+      )}
+      {updater.phase === "downloading" && (
+        <div className="update-banner">
+          <LoaderCircle size={14} className="spinning" />
+          <span>正在下载更新…</span>
+        </div>
+      )}
+      {updater.phase === "done" && (
+        <div className="update-banner update-banner--done">
+          <span>更新完成，请重启应用生效</span>
+        </div>
+      )}
       {isSidebarOpen && isMobileLike && (
         <button
           type="button"

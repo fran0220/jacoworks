@@ -599,7 +599,7 @@ export function listAvailableSkills(): SkillInfo[] {
     }
   }
 
-  // Built-in skills (shared/skills/ etc.)
+  // Built-in skills (vm-agent/skills/ etc.)
   for (const dir of config.skillsPaths) {
     loadFrom(dir, "builtin");
   }
