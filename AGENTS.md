@@ -280,16 +280,90 @@ base_url = "https://jaco.jingao.club"
 | WG relay (jpdata) | 185.200.65.233 | :51820 WireGuard hub, xTom Japan Tokyo |
 | Oracle 主机 | 161.33.28.249 | Oracle Linux 9.7 ARM, 4 vCPU, 22GB RAM, 200GB Disk |
 
-## 8. CI/CD
+## 8. CI/CD 与桌面端发布
 
 ### 流水线
 
 | 工作流 | 触发 | 作用 |
 |--------|------|------|
 | `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job (go vet/test, cargo check/test, tsc) |
-| `release-desktop.yml` | git tag `v*` | 构建 vm-agent sidecar → 跨平台 Tauri (macOS/Win/Linux) → GitHub Release |
+| `release-desktop.yml` | git tag `v*` | 构建 vm-agent sidecar → Windows Tauri 构建 → GitHub Release + jingao 分发 |
 
 > **注意**: 自动部署已移除。gateway/website 通过 `make deploy` 手动部署 (SSH 到 jingao 远程 git pull + 本地编译)。
+
+### 桌面端发布流程 (混合模式)
+
+**macOS: 本地构建** | **Windows: CI 构建**
+
+macOS 因 Apple 公证耗时不稳定，改为本地构建 + 手动公证。Windows 保留 CI 自动构建。
+
+#### macOS 本地构建步骤
+
+```bash
+# 1. 构建 sidecar
+cd vm-agent && npm ci && bun build --compile src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin
+
+# 2. 准备资源
+mkdir -p ../desktop/src-tauri/binaries
+cp dist/vm-agent-aarch64-apple-darwin ../desktop/src-tauri/binaries/
+tar -czf ../desktop/src-tauri/resources/skills.tar.gz -C skills .
+
+# 3. 构建 Tauri (签名, 跳过公证)
+cd ../desktop
+APPLE_SIGNING_IDENTITY="Developer ID Application: fan Z (9UUWCMKMDH)" \
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/jacoworks.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="jacoworks-updater-2026" \
+npm run tauri build -- --target aarch64-apple-darwin
+
+# 4. 生成 updater 签名
+BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle"
+cd "${BUNDLE}/macos" && tar -czf JAcoworks.app.tar.gz JAcoworks.app
+cd - && TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/jacoworks.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="jacoworks-updater-2026" \
+npx tauri signer sign "${BUNDLE}/macos/JAcoworks.app.tar.gz"
+
+# 5. 手动公证 (可选, 后台异步)
+xcrun notarytool submit "${BUNDLE}/dmg/JAcoworks_*.dmg" \
+  --apple-id "zhangfan0220@gmail.com" \
+  --password "<app-specific-password>" \
+  --team-id "9UUWCMKMDH" --wait
+# 公证通过后 staple:
+xcrun stapler staple "${BUNDLE}/dmg/JAcoworks_*.dmg"
+```
+
+#### 完整发布流程
+
+```bash
+# 1. 版本号 bump
+#    - desktop/src-tauri/tauri.conf.json (version)
+#    - desktop/src-tauri/Cargo.toml (version)
+
+# 2. 提交 + 打 tag
+git add -A && git commit -m "release: vX.Y.Z"
+git tag vX.Y.Z && git push origin main --tags
+#    → CI 自动构建 Windows + sidecar
+
+# 3. 本地构建 macOS (上述步骤)
+
+# 4. 下载 Windows CI 产物
+gh run download <run-id> --repo fran0220/jacoworks --name desktop-windows-x86_64 --dir /tmp/win-artifacts
+
+# 5. 上传到 jingao 分发
+scp <macOS产物> <Windows产物> jingao:/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/vX.Y.Z/
+
+# 6. 注册数据库 (releases + release_assets 表)
+ssh jingao "PGPASSWORD=... psql -h 127.0.0.1 -U postgres -d jacoworks -c \"INSERT INTO releases ...\""
+
+# 7. 创建 GitHub Release
+gh release create vX.Y.Z --repo fran0220/jacoworks --title "JAcoworks vX.Y.Z" <所有产物>
+```
+
+#### 关键注意事项
+
+- **Entitlements**: Bun 编译的 sidecar 需要 JIT 权限 (`Entitlements.plist`: `allow-jit` + `allow-unsigned-executable-memory`)
+- **公证**: 使用 App-Specific Password (非 Apple ID 密码), 格式 `xxxx-xxxx-xxxx-xxxx`, 在 appleid.apple.com 生成
+- **分发路径**: jingao 上 OpenResty 容器内 `/www/sites/jaco.jingao.club/releases/` (宿主机 `/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/`)
+- **构建矩阵**: macOS ARM64 + Windows x64 (Linux 已移除)
 
 ### GitHub Secrets
 
@@ -299,13 +373,20 @@ base_url = "https://jaco.jingao.club"
 | `JINGAO_SSH_KEY` | SSH 私钥, 对应 jingao authorized_keys |
 | `JINGAO_SSH_USER` | SSH 用户名 (ubuntu) |
 | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名私钥 (minisign, ~/.tauri/jacoworks.key) |
-| `TAURI_SIGNING_KEY_PASSWORD` | 签名密钥密码 (jacoworks-updater-2026) |
+| `TAURI_SIGNING_KEY_PASSWORD` | 签名密钥密码 |
+| `APPLE_CERTIFICATE` | Developer ID Application .p12 (base64) |
+| `APPLE_CERTIFICATE_PASSWORD` | .p12 密码 |
+| `APPLE_SIGNING_IDENTITY` | Developer ID Application: fan Z (9UUWCMKMDH) |
+| `APPLE_ID` | zhangfan0220@gmail.com |
+| `APPLE_PASSWORD` | App-Specific Password (appleid.apple.com 生成) |
+| `APPLE_TEAM_ID` | 9UUWCMKMDH |
 
 ### 部署策略
 
 - **gateway / website**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板访问 GitHub) → 本地编译 → 重启
-- **desktop**: git tag 触发跨平台构建 → GitHub Release (draft → publish)
-- **vm-agent**: 打包进 desktop sidecar, 不独立部署
+- **desktop macOS**: 本地构建 + 签名 + 手动公证 → 上传 jingao + GitHub Release
+- **desktop Windows**: CI 自动构建 → 手动下载产物 → 上传 jingao + GitHub Release
+- **vm-agent**: bun build --compile 打包进 desktop sidecar, 不独立部署
 
 ### jingao GitHub 访问
 
@@ -399,10 +480,14 @@ make clean             # 清理构建产物
 - [x] jingao GitHub 访问 (jpdata SSH ProxyJump + deploy key)
 - [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
 - [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
-- [ ] vm-agent 编译为单二进制 (bun build --compile)
+- [x] vm-agent 编译为单二进制 (bun build --compile)
 - [x] 预制技能 (vm-agent/skills/ — 创作/办公/工具 三大类)
+- [x] Apple 代码签名 (Developer ID Application 证书 + Entitlements JIT 权限)
+- [x] 桌面端发布流程打通 (macOS 本地构建 + Windows CI + jingao 分发 + DB 注册)
+- [ ] Apple 公证 (notarization) 端到端验证
+- [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
+- [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
 - [ ] 移动端 / 语音 / 文件上传
-- [ ] 首次 Tauri 构建 + 发布流程打通 (git tag v0.1.0 端到端验证)
 - [ ] 桌面端接入 tauri-plugin-updater (运行时自动检查更新)
 
 ## 11. 开发规范与约束
