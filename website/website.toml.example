@@ -11,6 +11,8 @@ url = "postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/jacoworks"
 
 [gateway]
 url = "http://localhost:8847"
+# Public URL for browser redirects (Feishu SSO). Omit to use `url`.
+public_url = "https://jacoapi.jingao.club"
 admin_token = "your-admin-token"
 
 [site]

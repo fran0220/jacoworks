@@ -71,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(admin_login_page).post(admin_login_action),
         )
         .route("/admin/logout", post(admin_logout_action))
+        .route("/admin/feishu/callback", get(admin_feishu_callback))
         // Admin sub-router (all routes require AdminUser)
         .nest("/admin", routes::admin::admin_routes())
         // Static files
@@ -99,12 +100,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[derive(Template)]
 #[template(path = "admin/login.html")]
+#[allow(dead_code)]
 struct AdminLoginTemplate {
     error: Option<String>,
+    feishu_url: Option<String>,
 }
 
-async fn admin_login_page() -> Result<impl axum::response::IntoResponse, error::AppError> {
-    error::render_template(&AdminLoginTemplate { error: None })
+async fn admin_login_page(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<impl axum::response::IntoResponse, error::AppError> {
+    error::render_template(&AdminLoginTemplate {
+        error: None,
+        feishu_url: build_feishu_url(&state.config),
+    })
 }
 
 async fn admin_login_action(
@@ -117,6 +125,7 @@ async fn admin_login_action(
         Err(error::AppError::Unauthorized) => {
             let html = error::render_template(&AdminLoginTemplate {
                 error: Some("邮箱或密码错误".to_string()),
+                feishu_url: build_feishu_url(&state.config),
             })?;
             return Ok(html.into_response());
         }
@@ -144,6 +153,75 @@ async fn admin_logout_action(cookies: tower_cookies::Cookies) -> impl axum::resp
 struct LoginForm {
     email: String,
     password: String,
+}
+
+/// Build the Feishu SSO URL that redirects to the Gateway's OAuth endpoint.
+fn build_feishu_url(config: &config::Config) -> Option<String> {
+    let gw_public = config
+        .gateway
+        .public_url
+        .as_deref()
+        .unwrap_or(&config.gateway.url);
+    let callback = format!("{}/admin/feishu/callback", config.site.base_url);
+    let encoded = urlencoding::encode(&callback);
+    Some(format!("{gw_public}/api/auth/feishu?redirect={encoded}"))
+}
+
+/// Handle the Feishu OAuth callback from Gateway.
+/// The Gateway creates an auth_session in the shared DB and redirects here with ?token=xxx.
+#[derive(serde::Deserialize)]
+struct FeishuCallbackParams {
+    token: Option<String>,
+    error: Option<String>,
+}
+
+async fn admin_feishu_callback(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    cookies: tower_cookies::Cookies,
+    axum::extract::Query(params): axum::extract::Query<FeishuCallbackParams>,
+) -> Result<axum::response::Response, error::AppError> {
+    if let Some(err) = &params.error {
+        tracing::warn!("Feishu SSO error: {err}");
+        let html = error::render_template(&AdminLoginTemplate {
+            error: Some(format!("飞书登录失败: {err}")),
+            feishu_url: build_feishu_url(&state.config),
+        })?;
+        return Ok(html.into_response());
+    }
+
+    let token = params.token.as_deref().unwrap_or("");
+    if token.is_empty() {
+        let html = error::render_template(&AdminLoginTemplate {
+            error: Some("飞书登录失败: 未收到令牌".to_string()),
+            feishu_url: build_feishu_url(&state.config),
+        })?;
+        return Ok(html.into_response());
+    }
+
+    // Look up the auth_session created by Gateway in the shared DB
+    let session = models::auth_session::get_session_by_token(&state.db, token).await?;
+    let (user_id, role) = match session {
+        Some(s) => s,
+        None => {
+            let html = error::render_template(&AdminLoginTemplate {
+                error: Some("飞书登录失败: 会话无效".to_string()),
+                feishu_url: build_feishu_url(&state.config),
+            })?;
+            return Ok(html.into_response());
+        }
+    };
+
+    if role != "admin" {
+        let html = error::render_template(&AdminLoginTemplate {
+            error: Some("该飞书账号没有管理员权限".to_string()),
+            feishu_url: build_feishu_url(&state.config),
+        })?;
+        return Ok(html.into_response());
+    }
+
+    tracing::info!(user_id, "admin logged in via Feishu SSO");
+    auth::set_session_cookie(&cookies, token);
+    Ok(axum::response::Redirect::to("/admin").into_response())
 }
 
 async fn shutdown_signal() {

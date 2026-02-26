@@ -28,6 +28,8 @@ pub struct DatabaseConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct GatewayConfig {
     pub url: String,
+    /// Public URL for browser redirects (e.g. Feishu SSO). Falls back to `url`.
+    pub public_url: Option<String>,
     pub admin_token: String,
 }
 
