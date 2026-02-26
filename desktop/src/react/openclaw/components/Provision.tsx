@@ -1,16 +1,23 @@
-import { LoaderCircle, Server } from "lucide-react";
+import { LoaderCircle, Server, X } from "lucide-react";
 
 export default function Provision({
   phase,
   message,
   detail,
+  onClose,
 }: {
   phase: "checking" | "provisioning" | "connecting";
   message: string;
   detail?: string;
+  onClose?: () => void;
 }) {
   return (
     <div className="oc-provision">
+      {onClose && (
+        <button type="button" className="oc-drawer-close oc-provision-close" onClick={onClose} title="关闭 OpenClaw">
+          <X size={14} />
+        </button>
+      )}
       <div className="oc-provision-card">
         <div className="oc-provision-icon-wrap">
           <Server size={16} />

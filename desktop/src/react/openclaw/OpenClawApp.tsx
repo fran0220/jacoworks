@@ -1,4 +1,4 @@
-import { Cloud, LoaderCircle, PlugZap, RefreshCw, X } from "lucide-react";
+import { Cloud, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { OcConnectionPhase } from "../hooks/use-openclaw-connection";
 import OcChatView from "./components/OcChatView";
@@ -329,13 +329,7 @@ export default function OpenClawApp({
   if (phase === "checking" || phase === "provisioning" || phase === "connecting") {
     return (
       <div className="oc-app-layout">
-        {statusStrip(
-          <span className="oc-connection-badge connecting">
-            <LoaderCircle size={12} className="spinning" />
-            {statusText}
-          </span>,
-        )}
-        <Provision phase={phase} message={statusText} detail={containerName ? `容器: ${containerName}` : undefined} />
+        <Provision phase={phase} message={statusText} detail={containerName ? `容器: ${containerName}` : undefined} onClose={onClose} />
       </div>
     );
   }
@@ -389,15 +383,10 @@ export default function OpenClawApp({
     <div className="oc-app-layout">
       {statusStrip(
         <>
-          {phase === "reconnecting" ? (
+          {phase === "reconnecting" && (
             <span className="oc-connection-badge reconnecting">
               <LoaderCircle size={12} className="spinning" />
               {statusText}
-            </span>
-          ) : (
-            <span className="oc-connection-badge ready">
-              <PlugZap size={12} />
-              已连接
             </span>
           )}
           {containerName && <span className="oc-container-badge">{containerName}</span>}

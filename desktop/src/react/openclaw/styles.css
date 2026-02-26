@@ -46,6 +46,13 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-8);
+  position: relative;
+}
+
+.oc-provision-close {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
 }
 
 .oc-provision-card {

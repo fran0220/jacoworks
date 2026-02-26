@@ -18,7 +18,9 @@ import {
   subscribeAuth,
 } from "./react/lib/auth";
 
-const RpcLogPanel = lazy(() => import("./react/components/RpcLogPanel"));
+const RpcLogPanel = import.meta.env.DEV
+  ? lazy(() => import("./react/components/RpcLogPanel"))
+  : null;
 const SettingsModal = lazy(() => import("./react/components/SettingsModal"));
 const OpenClawApp = lazy(() => import("./react/openclaw/OpenClawApp"));
 const AgentationDevTools = import.meta.env.DEV
@@ -26,6 +28,7 @@ const AgentationDevTools = import.meta.env.DEV
   : null;
 
 function LazyRpcLogPanel() {
+  if (!RpcLogPanel) return null;
   return (
     <Suspense fallback={null}>
       <RpcLogPanel />
