@@ -32,7 +32,6 @@ pub fn admin_routes() -> Router<AppState> {
                 .post(releases::update)
                 .delete(releases::delete),
         )
-        .route("/releases/{id}/upload", post(releases::upload))
         .route("/releases/{id}/assets", post(releases::upload_asset))
         .route(
             "/releases/{id}/assets/{asset_id}",

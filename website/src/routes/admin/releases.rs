@@ -1,12 +1,14 @@
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::response::{IntoResponse, Redirect};
+use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::auth::AdminUser;
 use crate::error::{render_template, AppError};
 use crate::models::release;
 use crate::AppState;
 
+#[derive(Clone)]
 struct AssetView {
     id: String,
     platform: String,
@@ -16,6 +18,7 @@ struct AssetView {
     download_count: i32,
 }
 
+#[derive(Clone)]
 struct ReleaseView {
     id: String,
     version: String,
@@ -24,6 +27,7 @@ struct ReleaseView {
     pub_date: String,
     created_at: String,
     is_latest: bool,
+    asset_count: usize,
     assets: Vec<AssetView>,
 }
 
@@ -35,6 +39,13 @@ struct ReleasesTemplate {
     releases: Vec<ReleaseView>,
 }
 
+#[derive(Template)]
+#[template(path = "admin/partials/releases_list.html")]
+struct ReleasesListTemplate {
+    releases: Vec<ReleaseView>,
+}
+
+#[derive(Clone)]
 struct ReleaseEditView {
     id: String,
     version: String,
@@ -47,6 +58,20 @@ struct ReleaseEditTemplate {
     admin_name: String,
     active_page: String,
     release: ReleaseEditView,
+    release_id: String,
+    assets: Vec<AssetView>,
+}
+
+#[derive(Template)]
+#[template(path = "admin/partials/release_edit_panel.html")]
+struct ReleaseEditPanelTemplate {
+    release: ReleaseEditView,
+}
+
+#[derive(Template)]
+#[template(path = "admin/partials/release_assets_list.html")]
+struct ReleaseAssetsListTemplate {
+    release_id: String,
     assets: Vec<AssetView>,
 }
 
@@ -54,29 +79,7 @@ pub async fn list(
     State(state): State<AppState>,
     admin: AdminUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let raw_releases = release::list_releases(&state.db).await?;
-    let mut releases = Vec::new();
-
-    for r in raw_releases {
-        let raw_assets = release::list_assets(&state.db, &r.id).await?;
-        let assets: Vec<AssetView> = raw_assets.iter().map(|a| asset_view(a)).collect();
-        let notes = r.notes.clone().unwrap_or_default();
-        let notes_preview = if notes.len() > 100 {
-            format!("{}…", &notes[..100])
-        } else {
-            notes.clone()
-        };
-        releases.push(ReleaseView {
-            id: r.id,
-            version: r.version,
-            notes,
-            notes_preview,
-            pub_date: r.pub_date.format("%Y-%m-%d").to_string(),
-            created_at: r.created_at.format("%Y-%m-%d %H:%M").to_string(),
-            is_latest: r.is_latest,
-            assets,
-        });
-    }
+    let releases = load_release_views(&state).await?;
 
     render_template(&ReleasesTemplate {
         admin_name: admin.0.name.clone(),
@@ -94,10 +97,16 @@ pub struct CreateReleaseForm {
 pub async fn create(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     axum::Form(form): axum::Form<CreateReleaseForm>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     release::create_release(&state.db, &form.version, form.notes.as_deref()).await?;
-    Ok(Redirect::to("/admin/releases"))
+
+    if is_htmx_request(&headers) {
+        return render_releases_list(&state).await;
+    }
+
+    Ok(Redirect::to("/admin/releases").into_response())
 }
 
 pub async fn edit_form(
@@ -105,20 +114,14 @@ pub async fn edit_form(
     admin: AdminUser,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let r = release::get_release(&state.db, &id)
-        .await?
-        .ok_or(AppError::NotFound("Release not found".into()))?;
-    let raw_assets = release::list_assets(&state.db, &r.id).await?;
-    let assets: Vec<AssetView> = raw_assets.iter().map(|a| asset_view(a)).collect();
+    let release = load_release_edit_view(&state, &id).await?;
+    let assets = load_asset_views(&state, &id).await?;
 
     render_template(&ReleaseEditTemplate {
         admin_name: admin.0.name.clone(),
         active_page: "releases".into(),
-        release: ReleaseEditView {
-            id: r.id,
-            version: r.version,
-            notes: r.notes.unwrap_or_default(),
-        },
+        release_id: release.id.clone(),
+        release,
         assets,
     })
 }
@@ -132,15 +135,17 @@ pub struct UpdateReleaseForm {
 pub async fn update(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     Path(id): Path<String>,
     axum::Form(form): axum::Form<UpdateReleaseForm>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     release::update_release(&state.db, &id, &form.version, form.notes.as_deref()).await?;
-    Ok(Redirect::to(&format!("/admin/releases/{}/edit", id)))
-}
 
-pub async fn upload(_admin: AdminUser, Path(id): Path<String>) -> impl IntoResponse {
-    Redirect::to(&format!("/admin/releases/{id}/edit"))
+    if is_htmx_request(&headers) {
+        return render_release_edit_panel(&state, &id).await;
+    }
+
+    Ok(Redirect::to(&format!("/admin/releases/{}/edit", id)).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -154,9 +159,10 @@ pub struct UploadAssetForm {
 pub async fn upload_asset(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     Path(id): Path<String>,
     axum::Form(form): axum::Form<UploadAssetForm>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     release::create_asset(
         &state.db,
         &id,
@@ -166,34 +172,138 @@ pub async fn upload_asset(
         parse_file_size(form.file_size.as_deref()),
     )
     .await?;
-    Ok(Redirect::to(&format!("/admin/releases/{}/edit", id)))
+
+    if is_htmx_request(&headers) {
+        return render_release_assets_list(&state, &id).await;
+    }
+
+    Ok(Redirect::to(&format!("/admin/releases/{}/edit", id)).into_response())
 }
 
 pub async fn delete_asset(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     Path((release_id, asset_id)): Path<(String, String)>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     release::delete_asset(&state.db, &asset_id).await?;
-    Ok(Redirect::to(&format!("/admin/releases/{release_id}/edit")))
+
+    if is_htmx_request(&headers) {
+        return render_release_assets_list(&state, &release_id).await;
+    }
+
+    Ok(Redirect::to(&format!("/admin/releases/{release_id}/edit")).into_response())
 }
 
 pub async fn set_latest(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     release::set_latest(&state.db, &id).await?;
-    Ok(Redirect::to("/admin/releases"))
+
+    if is_htmx_request(&headers) {
+        return render_releases_list(&state).await;
+    }
+
+    Ok(Redirect::to("/admin/releases").into_response())
 }
 
 pub async fn delete(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     release::delete_release(&state.db, &id).await?;
-    Ok(Redirect::to("/admin/releases"))
+
+    if is_htmx_request(&headers) {
+        return render_releases_list(&state).await;
+    }
+
+    Ok(Redirect::to("/admin/releases").into_response())
+}
+
+async fn render_releases_list(state: &AppState) -> Result<Response, AppError> {
+    let releases = load_release_views(state).await?;
+    let html = ReleasesListTemplate { releases }
+        .render()
+        .map_err(|e| AppError::Internal(format!("template render error: {e}")))?;
+    Ok(axum::response::Html(html).into_response())
+}
+
+async fn render_release_edit_panel(state: &AppState, id: &str) -> Result<Response, AppError> {
+    let release = load_release_edit_view(state, id).await?;
+    let html = ReleaseEditPanelTemplate { release }
+        .render()
+        .map_err(|e| AppError::Internal(format!("template render error: {e}")))?;
+    Ok(axum::response::Html(html).into_response())
+}
+
+async fn render_release_assets_list(state: &AppState, id: &str) -> Result<Response, AppError> {
+    let assets = load_asset_views(state, id).await?;
+    let html = ReleaseAssetsListTemplate {
+        release_id: id.to_string(),
+        assets,
+    }
+    .render()
+    .map_err(|e| AppError::Internal(format!("template render error: {e}")))?;
+    Ok(axum::response::Html(html).into_response())
+}
+
+async fn load_release_views(state: &AppState) -> Result<Vec<ReleaseView>, AppError> {
+    let raw_releases = release::list_releases(&state.db).await?;
+    let mut releases = Vec::new();
+
+    for r in raw_releases {
+        let raw_assets = release::list_assets(&state.db, &r.id).await?;
+        let assets: Vec<AssetView> = raw_assets.iter().map(asset_view).collect();
+        let notes = r.notes.clone().unwrap_or_default();
+        let notes_preview = if notes.len() > 100 {
+            format!("{}…", &notes[..100])
+        } else {
+            notes.clone()
+        };
+        let asset_count = assets.len();
+        releases.push(ReleaseView {
+            id: r.id,
+            version: r.version,
+            notes,
+            notes_preview,
+            pub_date: r.pub_date.format("%Y-%m-%d").to_string(),
+            created_at: r.created_at.format("%Y-%m-%d %H:%M").to_string(),
+            is_latest: r.is_latest,
+            asset_count,
+            assets,
+        });
+    }
+
+    Ok(releases)
+}
+
+async fn load_release_edit_view(state: &AppState, id: &str) -> Result<ReleaseEditView, AppError> {
+    let r = release::get_release(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound("Release not found".into()))?;
+    Ok(ReleaseEditView {
+        id: r.id,
+        version: r.version,
+        notes: r.notes.unwrap_or_default(),
+    })
+}
+
+async fn load_asset_views(state: &AppState, release_id: &str) -> Result<Vec<AssetView>, AppError> {
+    let raw_assets = release::list_assets(&state.db, release_id).await?;
+    Ok(raw_assets.iter().map(asset_view).collect())
+}
+
+fn is_htmx_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("HX-Request")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn asset_view(a: &release::ReleaseAsset) -> AssetView {

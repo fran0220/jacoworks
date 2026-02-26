@@ -7,6 +7,7 @@ export interface Config {
   gatewayToken: string;
   proxyUrl: string;
   proxyKey: string;
+  openaiApiKey: string;
   workspaceDir: string;
   memoryRootDir: string;
   primaryModel: string;
@@ -133,6 +134,7 @@ export function loadConfig(): Config {
     gatewayToken: process.env.GATEWAY_TOKEN || "",
     proxyUrl,
     proxyKey,
+    openaiApiKey: process.env.OPENAI_API_KEY || "",
     workspaceDir: process.env.WORKSPACE_DIR || process.cwd(),
     memoryRootDir: process.env.MEMORY_ROOT_DIR || defaultMemoryRootDir(),
     primaryModel: process.env.PRIMARY_MODEL || "claude-sonnet-4-6",

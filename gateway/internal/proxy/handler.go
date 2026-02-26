@@ -207,7 +207,10 @@ func (h *Handler) ensureRunning(ctx context.Context, containerName, userID strin
 		return nil
 	case "FROZEN":
 		log.Info().Str("container", containerName).Str("user_id", userID).Msg("unfreezing container")
-		return h.lxdClient.Unfreeze(containerName)
+		if err := h.lxdClient.Unfreeze(containerName); err != nil {
+			return err
+		}
+		return h.store.UpdateContainerStatusByName(ctx, containerName, "running")
 	case "STOPPED":
 		log.Info().Str("container", containerName).Str("user_id", userID).Msg("starting stopped container")
 		if err := h.lxdClient.Start(containerName); err != nil {

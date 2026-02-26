@@ -25,6 +25,15 @@ interface ServerSession {
   model?: string;
 }
 
+function parseError(body: string, fallback: string) {
+  try {
+    const data = JSON.parse(body) as { error?: string; message?: string };
+    return data.error || data.message || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 async function apiFetch(
   path: string,
   options: { method?: string; body?: string } = {},
@@ -139,14 +148,21 @@ export async function updateSession(id: string, data: Partial<ChatSession>) {
   if (data.model !== undefined) payload.model = data.model;
   if (data.workspacePath !== undefined) payload.workspace_path = data.workspacePath;
 
-  await apiFetch(`/api/sessions/${id}`, {
+  const response = await apiFetch(`/api/sessions/${id}`, {
     method: "PUT",
     body: JSON.stringify(payload),
   });
+
+  if (response.status !== 200) {
+    throw new Error(parseError(response.body, `更新会话失败 (${response.status})`));
+  }
 }
 
 export async function deleteSession(id: string) {
-  await apiFetch(`/api/sessions/${id}`, { method: "DELETE" });
+  const response = await apiFetch(`/api/sessions/${id}`, { method: "DELETE" });
+  if (response.status !== 204) {
+    throw new Error(parseError(response.body, `删除会话失败 (${response.status})`));
+  }
 }
 
 export function generateTitle(firstAssistantMessage: string): string {

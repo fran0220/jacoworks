@@ -41,5 +41,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://jaco.jingao.club/api/update/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3QzVGODQ5ODYwMkEyRjMKUldUem9nS0dTZmpGUi9kaDRzMGR4TmdKZXBITWNieCszTXZiYnlQT29kTWdoT0MrZ2s3Wms1K0YK"
+    }
   }
 }

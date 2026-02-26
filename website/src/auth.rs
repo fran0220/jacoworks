@@ -20,7 +20,10 @@ pub async fn admin_login(db: &sqlx::PgPool, email: &str, password: &str) -> Resu
     .await?;
 
     let user = row.ok_or(AppError::Unauthorized)?;
-    let stored = user.password_hash.as_deref().ok_or(AppError::Unauthorized)?;
+    let stored = user
+        .password_hash
+        .as_deref()
+        .ok_or(AppError::Unauthorized)?;
 
     let valid = if stored.starts_with("$2a$") || stored.starts_with("$2b$") {
         bcrypt::verify(password, stored).unwrap_or(false)

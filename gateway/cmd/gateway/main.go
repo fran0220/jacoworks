@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/cowork"
+	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	"github.com/fran0220/jacoworks/gateway/internal/lxd"
 	"github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/proxy"
@@ -73,9 +75,15 @@ func main() {
 				llm.ExaAPIKey = setting.Value
 			case "tavily_api_key":
 				llm.TavilyKey = setting.Value
+			case "feishu_client_id":
+				cfg.Auth.FeishuClientID = setting.Value
+			case "feishu_client_secret":
+				cfg.Auth.FeishuClientSecret = setting.Value
+			case "admin_token":
+				cfg.Auth.AdminToken = setting.Value
 			}
-		}
-		cfg.UpdateLLM(llm)
+			}
+			cfg.UpdateLLM(llm)
 		log.Info().Msg("loaded settings from database")
 	}
 
@@ -92,6 +100,35 @@ func main() {
 	freezer := lxd.NewFreezer(lxdClient, 30*time.Minute, 5*time.Minute)
 	freezer.Start()
 	defer freezer.Stop()
+
+	// Pull memory files from container before freezing
+	freezer.SetOnBeforeFreeze(func(containerName string) {
+		ctx := context.Background()
+		userID, err := s.GetUserIDByContainerName(ctx, containerName)
+		if err != nil {
+			log.Error().Err(err).Str("container", containerName).Msg("freeze: lookup user failed")
+			return
+		}
+		files, err := lxdClient.PullMemoryFiles(containerName)
+		if err != nil {
+			log.Error().Err(err).Str("container", containerName).Msg("freeze: pull memory failed")
+			return
+		}
+		for filePath, content := range files {
+			ck := store.ContentChecksum(content)
+			if err := s.UpsertMemoryFile(ctx, userID, filePath, content, ck); err != nil {
+				log.Error().Err(err).Str("container", containerName).Str("file", filePath).Msg("freeze: save memory failed")
+			}
+		}
+		if len(files) > 0 {
+			log.Info().Str("container", containerName).Int("files", len(files)).Msg("freeze: memory pulled")
+		}
+	})
+	freezer.SetOnAfterFreeze(func(containerName string) {
+		if err := s.UpdateContainerStatusByName(context.Background(), containerName, "frozen"); err != nil {
+			log.Error().Err(err).Str("container", containerName).Msg("freeze: update frozen status failed")
+		}
+	})
 
 	// Initialize Goth providers
 	if cfg.Auth.FeishuClientID != "" {
@@ -114,7 +151,14 @@ func main() {
 	defer channelPool.Close()
 	sseHandler := openclaw.NewSSEHandler(channelPool)
 
+	// Initialize Feishu Bot handler
+	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
+	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, lxdClient, freezer, cfg.LXD.OpenClawPort)
+
 	mux := http.NewServeMux()
+
+	// Feishu webhook (no auth — Feishu platform calls this)
+	mux.HandleFunc("POST /api/feishu/webhook", feishuBotHandler.HandleWebhook)
 
 	// Auth endpoints (no auth required)
 	mux.HandleFunc("POST /api/auth/login", authHandlers.Login)
@@ -138,6 +182,13 @@ func main() {
 	// Authenticated: agent config
 	mux.Handle("GET /api/agent/config", authMiddleware.Authenticate(http.HandlerFunc(agentConfigHandler(cfg))))
 
+	// Authenticated: memory sync
+	mux.Handle("POST /api/memory/sync", authMiddleware.Authenticate(http.HandlerFunc(memorySyncHandler(s))))
+
+	// Authenticated: skills sync
+	mux.Handle("POST /api/skills/upload", authMiddleware.Authenticate(http.HandlerFunc(skillsUploadHandler(s))))
+	mux.Handle("GET /api/skills/checksum", authMiddleware.Authenticate(http.HandlerFunc(skillsChecksumHandler(s))))
+
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
 	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, lxdClient, auditLogger, cfg, wsProxy))))
@@ -156,8 +207,8 @@ func main() {
 
 	// Admin: container management
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(lxdClient)))))
-	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(lxdClient, auditLogger)))))
-	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(lxdClient, auditLogger)))))
+	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(lxdClient, s, auditLogger)))))
+	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(lxdClient, s, auditLogger)))))
 
 	// Admin: user management (container provisioning after activation)
 	mux.Handle("POST /api/admin/provision", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(provisionContainerHandler(s, lxdClient, auditLogger, cfg, wsProxy)))))
@@ -168,7 +219,7 @@ func main() {
 
 	// Admin: settings
 	mux.Handle("GET /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(getSettingsHandler(s)))))
-	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger)))))
+	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger, feishuBotClient)))))
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -203,8 +254,7 @@ func main() {
 var allowedOrigins = map[string]bool{
 	"http://localhost:1420":        true,
 	"tauri://localhost":            true,
-	"http://192.168.31.162:8090":   true,
-	"http://api.xiaomao.chat:8090": true,
+	"https://jaco.jingao.club":     true,
 }
 
 func isAllowedOrigin(origin string) bool {
@@ -269,7 +319,7 @@ func listContainersHandler(client *lxd.SSHClient) http.HandlerFunc {
 	}
 }
 
-func startContainerHandler(client *lxd.SSHClient, al *audit.Logger) http.HandlerFunc {
+func startContainerHandler(client *lxd.SSHClient, s *store.Store, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		user := auth.GetUser(r.Context())
@@ -277,17 +327,25 @@ func startContainerHandler(client *lxd.SSHClient, al *audit.Logger) http.Handler
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 			return
 		}
+		if err := s.UpdateContainerStatusByName(r.Context(), id, "running"); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 		al.Log(user.ID, "container_start", "container", id, r.RemoteAddr)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "started", "container": id})
 	}
 }
 
-func stopContainerHandler(client *lxd.SSHClient, al *audit.Logger) http.HandlerFunc {
+func stopContainerHandler(client *lxd.SSHClient, s *store.Store, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		user := auth.GetUser(r.Context())
 		if err := client.Stop(id); err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := s.UpdateContainerStatusByName(r.Context(), id, "stopped"); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		al.Log(user.ID, "container_stop", "container", id, r.RemoteAddr)
@@ -314,7 +372,11 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 
 		admin := auth.GetUser(r.Context())
 
-		containerToken, _ := generateToken()
+		containerToken, err := generateToken()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate container token"})
+			return
+		}
 		containerName := containerNameForUser(req.UserID)
 
 		if err := s.CreateContainer(r.Context(), req.UserID, containerName, containerToken); err != nil {
@@ -341,7 +403,11 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 			return
 		}
 
-		s.UpdateContainer(r.Context(), req.UserID, containerName, ip, containerToken)
+		if err := s.UpdateContainer(r.Context(), req.UserID, containerName, ip, containerToken); err != nil {
+			log.Error().Err(err).Str("container", containerName).Str("user_id", req.UserID).Msg("persist provisioned container failed")
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "container provisioned but failed to persist state"})
+			return
+		}
 		al.Log(admin.ID, "provision_container", "container", containerName, r.RemoteAddr)
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"user_id":   req.UserID,
@@ -363,7 +429,10 @@ func createInviteCodeHandler(s *store.Store) http.HandlerFunc {
 		admin := auth.GetUser(r.Context())
 
 		var req createRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
 
 		if req.Role == "" {
 			req.Role = "user"
@@ -452,7 +521,10 @@ func createSessionHandler(s *store.Store, lxdClient *lxd.SSHClient) http.Handler
 		}
 
 		var req createSessionRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
 
 		sess, err := s.CreateSession(r.Context(), user.ID, req.Type, req.WorkspacePath, req.Model)
 		if err != nil {
@@ -462,12 +534,18 @@ func createSessionHandler(s *store.Store, lxdClient *lxd.SSHClient) http.Handler
 
 		if req.Type == "cowork" {
 			dir := filepath.Join("/data/cowork", user.ID, sess.ID)
-			os.MkdirAll(dir, 0755)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				log.Warn().Err(err).Str("user_id", user.ID).Str("session_id", sess.ID).Str("dir", dir).Msg("create cowork workspace directory failed")
+			}
 
-			info, _ := s.GetContainerInfo(r.Context(), user.ID)
-			if info != nil && info.ContainerName != "" {
+			info, err := s.GetContainerInfo(r.Context(), user.ID)
+			if err != nil {
+				log.Warn().Err(err).Str("user_id", user.ID).Str("session_id", sess.ID).Msg("load container info for cowork mount failed")
+			} else if info != nil && info.ContainerName != "" {
 				device := "cw-" + sess.ID[:12]
-				lxdClient.MountDisk(info.ContainerName, device, dir, "/home/agent/cowork")
+				if err := lxdClient.MountDisk(info.ContainerName, device, dir, "/home/agent/cowork"); err != nil {
+					log.Warn().Err(err).Str("container", info.ContainerName).Str("session_id", sess.ID).Str("device", device).Msg("mount cowork workspace into container failed")
+				}
 			}
 		}
 
@@ -565,7 +643,11 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			return
 		}
 
-		containerToken, _ := generateToken()
+		containerToken, err := generateToken()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate container token"})
+			return
+		}
 		containerName := containerNameForUser(user.ID)
 
 		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken); err != nil {
@@ -592,8 +674,42 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			return
 		}
 
-		s.UpdateContainer(r.Context(), user.ID, containerName, ip, containerToken)
+		if err := s.UpdateContainer(r.Context(), user.ID, containerName, ip, containerToken); err != nil {
+			log.Error().Err(err).Str("container", containerName).Str("user_id", user.ID).Msg("persist self-provisioned container failed")
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "container provisioned but failed to persist state"})
+			return
+		}
 		al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
+
+		// Push memory + skills to newly provisioned container
+		go func() {
+			bgCtx := context.Background()
+			// Push memory
+			memFiles, err := s.GetAllMemoryFiles(bgCtx, user.ID)
+			if err == nil && len(memFiles) > 0 {
+				fileMap := make(map[string]string, len(memFiles))
+				for _, f := range memFiles {
+					fileMap[f.FilePath] = f.Content
+				}
+				if err := lxdClient.PushMemoryFiles(containerName, fileMap); err != nil {
+					log.Error().Err(err).Str("container", containerName).Msg("provision: push memory failed")
+				}
+			}
+			// Push skills (system + user)
+			for _, owner := range []string{"system", user.ID} {
+				skillFiles, err := s.GetSkillFiles(bgCtx, owner)
+				if err == nil && len(skillFiles) > 0 {
+					fileMap := make(map[string]string, len(skillFiles))
+					for _, f := range skillFiles {
+						fileMap[f.FilePath] = f.Content
+					}
+					if err := lxdClient.PushSkillFiles(containerName, fileMap); err != nil {
+						log.Error().Err(err).Str("container", containerName).Msg("provision: push skills failed")
+					}
+				}
+			}
+		}()
+
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"status":         "ready",
 			"container_name": containerName,
@@ -642,17 +758,20 @@ func getSettingsHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger) http.HandlerFunc {
+func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger, feishuBot *feishubot.Client) http.HandlerFunc {
 	type updateRequest struct {
 		Settings map[string]string `json:"settings"`
 	}
 
 	allowedKeys := map[string]bool{
-		"llm_proxy_url":  true,
-		"llm_proxy_key":  true,
-		"openai_api_key": true,
-		"exa_api_key":    true,
-		"tavily_api_key": true,
+		"llm_proxy_url":        true,
+		"llm_proxy_key":        true,
+		"openai_api_key":       true,
+		"exa_api_key":          true,
+		"tavily_api_key":       true,
+		"feishu_client_id":     true,
+		"feishu_client_secret": true,
+		"admin_token":          true,
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -693,9 +812,297 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger)
 		}
 		cfg.UpdateLLM(llm)
 
+		if v, ok := req.Settings["feishu_client_id"]; ok {
+			cfg.Auth.FeishuClientID = v
+		}
+		if v, ok := req.Settings["feishu_client_secret"]; ok {
+			cfg.Auth.FeishuClientSecret = v
+		}
+		if v, ok := req.Settings["admin_token"]; ok && v != "" {
+			cfg.Auth.AdminToken = v
+		}
+
+		// Hot-reload Feishu Bot credentials
+		feishuBot.UpdateCredentials(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
+
+		// Hot-reload Goth Feishu SSO provider (re-register with new credentials)
+		if cfg.Auth.FeishuClientID != "" && cfg.Auth.FeishuClientSecret != "" {
+			baseURL := cfg.Server.PublicURL
+			if baseURL == "" {
+				baseURL = fmt.Sprintf("http://%s", cfg.Addr())
+			}
+			callbackURL := baseURL + "/api/auth/feishu/callback"
+			goth.UseProviders(feishu.New(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret, callbackURL))
+			log.Info().Str("callback", callbackURL).Msg("feishu SSO provider re-registered")
+		}
+
 		al.Log(admin.ID, "update_settings", "settings", "", r.RemoteAddr)
 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+func memorySyncHandler(s *store.Store) http.HandlerFunc {
+	type manifestEntry struct {
+		Path     string `json:"path"`
+		Checksum string `json:"checksum"`
+	}
+	type pushEntry struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	type syncRequest struct {
+		Manifest []manifestEntry `json:"manifest"`
+		Push     []pushEntry     `json:"push"`
+	}
+	type pullEntry struct {
+		Path     string `json:"path"`
+		Content  string `json:"content"`
+		Checksum string `json:"checksum"`
+	}
+	type syncResponse struct {
+		Pull         []pullEntry `json:"pull"`
+		PushAccepted []string    `json:"push_accepted"`
+		ServerTime   string      `json:"server_time"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req syncRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		clientChecksums := make(map[string]string, len(req.Manifest))
+		for _, m := range req.Manifest {
+			clientChecksums[m.Path] = m.Checksum
+		}
+
+		clientPush := make(map[string]string, len(req.Push))
+		for _, p := range req.Push {
+			clientPush[p.Path] = p.Content
+		}
+
+		serverFiles, err := s.GetMemoryManifest(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load server manifest"})
+			return
+		}
+
+		serverChecksums := make(map[string]string, len(serverFiles))
+		for _, f := range serverFiles {
+			serverChecksums[f.FilePath] = f.Checksum
+		}
+
+		var pullPaths []string
+		var pushAccepted []string
+
+		for _, sf := range serverFiles {
+			clientCk, clientHas := clientChecksums[sf.FilePath]
+			if clientHas && clientCk == sf.Checksum {
+				continue
+			}
+
+			if content, pushed := clientPush[sf.FilePath]; pushed {
+				merged := content
+				if strings.HasPrefix(sf.FilePath, "daily/") && clientCk != sf.Checksum {
+					serverWithContent, err := s.GetMemoryFilesByPaths(r.Context(), user.ID, []string{sf.FilePath})
+					if err != nil {
+						log.Error().Err(err).Str("user_id", user.ID).Str("path", sf.FilePath).Msg("memory sync: load server daily log failed")
+						writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load server memory file"})
+						return
+					}
+					if len(serverWithContent) > 0 {
+						merged = mergeDailyLogs(serverWithContent[0].Content, content)
+					}
+				}
+
+				ck := store.ContentChecksum(merged)
+				if err := s.UpsertMemoryFile(r.Context(), user.ID, sf.FilePath, merged, ck); err != nil {
+					log.Error().Err(err).Str("user_id", user.ID).Str("path", sf.FilePath).Msg("memory sync: upsert merged file failed")
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save merged memory file"})
+					return
+				}
+				pushAccepted = append(pushAccepted, sf.FilePath)
+				continue
+			}
+
+			pullPaths = append(pullPaths, sf.FilePath)
+		}
+
+		for _, p := range req.Push {
+			if _, onServer := serverChecksums[p.Path]; onServer {
+				continue
+			}
+
+			ck := store.ContentChecksum(p.Content)
+			if err := s.UpsertMemoryFile(r.Context(), user.ID, p.Path, p.Content, ck); err != nil {
+				log.Error().Err(err).Str("user_id", user.ID).Str("path", p.Path).Msg("memory sync: upsert new file failed")
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save new memory file"})
+				return
+			}
+			pushAccepted = append(pushAccepted, p.Path)
+		}
+
+		var pullFiles []pullEntry
+		if len(pullPaths) > 0 {
+			fetched, err := s.GetMemoryFilesByPaths(r.Context(), user.ID, pullPaths)
+			if err != nil {
+				log.Error().Err(err).Str("user_id", user.ID).Msg("memory sync: fetch pull files failed")
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load pull files"})
+				return
+			}
+
+			for _, f := range fetched {
+				pullFiles = append(pullFiles, pullEntry{
+					Path:     f.FilePath,
+					Content:  f.Content,
+					Checksum: f.Checksum,
+				})
+			}
+		}
+
+		writeJSON(w, http.StatusOK, syncResponse{
+			Pull:         pullFiles,
+			PushAccepted: pushAccepted,
+			ServerTime:   time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+// mergeDailyLogs combines two daily log contents by deduplicating ## HH:MM entries.
+func mergeDailyLogs(serverContent, clientContent string) string {
+	type section struct {
+		heading string
+		body    string
+	}
+
+	parseSections := func(content string) []section {
+		var sections []section
+		lines := strings.Split(content, "\n")
+		var current section
+		for _, line := range lines {
+			if strings.HasPrefix(line, "## ") {
+				if current.heading != "" {
+					sections = append(sections, current)
+				}
+				current = section{heading: line, body: ""}
+			} else {
+				current.body += line + "\n"
+			}
+		}
+		if current.heading != "" {
+			sections = append(sections, current)
+		}
+		return sections
+	}
+
+	serverSections := parseSections(serverContent)
+	clientSections := parseSections(clientContent)
+
+	seen := make(map[string]bool)
+	var merged []section
+	for _, s := range serverSections {
+		seen[s.heading] = true
+		merged = append(merged, s)
+	}
+	for _, c := range clientSections {
+		if !seen[c.heading] {
+			merged = append(merged, c)
+		}
+	}
+
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].heading < merged[j].heading
+	})
+
+	var buf strings.Builder
+	for _, s := range merged {
+		buf.WriteString(s.heading)
+		buf.WriteString("\n")
+		buf.WriteString(s.body)
+	}
+	return strings.TrimRight(buf.String(), "\n") + "\n"
+}
+
+func skillsUploadHandler(s *store.Store) http.HandlerFunc {
+	type fileEntry struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	type uploadRequest struct {
+		Source string      `json:"source"`
+		Files  []fileEntry `json:"files"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req uploadRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		if req.Source != "builtin" && req.Source != "user" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source must be 'builtin' or 'user'"})
+			return
+		}
+
+		owner := user.ID
+		if req.Source == "builtin" {
+			owner = "system"
+		}
+
+		storeFiles := make([]store.SkillFile, 0, len(req.Files))
+		for _, f := range req.Files {
+			storeFiles = append(storeFiles, store.SkillFile{
+				FilePath: f.Path,
+				Content:  f.Content,
+				Checksum: store.ContentChecksum(f.Content),
+			})
+		}
+
+		if err := s.ReplaceSkillFiles(r.Context(), owner, storeFiles); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save skills"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":     "ok",
+			"file_count": len(storeFiles),
+		})
+	}
+}
+
+func skillsChecksumHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		checksums, err := s.GetSkillChecksums(r.Context(), []string{"system", user.ID})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get checksums"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{
+			"system": checksums["system"],
+			"user":   checksums[user.ID],
+		})
 	}
 }
 

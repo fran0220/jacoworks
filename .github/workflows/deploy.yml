@@ -51,21 +51,26 @@ jobs:
       - name: Deploy to jingao
         env:
           SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
         run: |
           mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.JINGAO_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          HOST="root@${{ secrets.JINGAO_HOST }}"
-          scp gateway "$HOST:/opt/jacoworks/gateway.new"
-          ssh "$HOST" "
-            systemctl stop jacoworks-gateway
-            mv /opt/jacoworks/gateway.new /opt/jacoworks/gateway
-            chmod +x /opt/jacoworks/gateway
-            systemctl start jacoworks-gateway
+          HOST="${SSH_USER}@${SSH_HOST}"
+          SSH="ssh -i ~/.ssh/deploy_key"
+          SCP="scp -i ~/.ssh/deploy_key"
+
+          $SCP gateway "$HOST:/tmp/jacoworks-gateway"
+          $SSH "$HOST" "
+            sudo systemctl stop jacoworks-gateway
+            sudo mv /tmp/jacoworks-gateway /opt/jacoworks/gateway
+            sudo chmod +x /opt/jacoworks/gateway
+            sudo systemctl start jacoworks-gateway
             sleep 2
-            curl -sf http://localhost:8847/health || (systemctl status jacoworks-gateway; exit 1)
+            curl -sf http://localhost:8847/health || (sudo systemctl status jacoworks-gateway; exit 1)
           "
           echo "✅ Gateway deployed"
 
@@ -90,25 +95,31 @@ jobs:
       - name: Deploy to jingao
         env:
           SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
         run: |
           mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.JINGAO_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          HOST="root@${{ secrets.JINGAO_HOST }}"
+          HOST="${SSH_USER}@${SSH_HOST}"
+          SSH="ssh -i ~/.ssh/deploy_key"
           REMOTE="/opt/jacoworks/www"
 
-          ssh "$HOST" "systemctl stop jacoworks-website 2>/dev/null || true"
-          scp target/release/jacoworks-website "$HOST:$REMOTE/jacoworks-website.new"
-          rsync -avz --delete content/ "$HOST:$REMOTE/content/"
-          rsync -avz --delete static/ "$HOST:$REMOTE/static/"
-          rsync -avz --delete templates/ "$HOST:$REMOTE/templates/"
-          ssh "$HOST" "
-            mv $REMOTE/jacoworks-website.new $REMOTE/jacoworks-website
-            chmod +x $REMOTE/jacoworks-website
-            systemctl start jacoworks-website
+          $SSH "$HOST" "sudo systemctl stop jacoworks-website 2>/dev/null || true"
+          scp -i ~/.ssh/deploy_key target/release/jacoworks-website "$HOST:/tmp/jacoworks-website"
+          $SSH "$HOST" "sudo mv /tmp/jacoworks-website $REMOTE/jacoworks-website"
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" content/ "$HOST:/tmp/www-content/"
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" static/ "$HOST:/tmp/www-static/"
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" templates/ "$HOST:/tmp/www-templates/"
+          $SSH "$HOST" "
+            sudo rsync -a /tmp/www-content/ $REMOTE/content/
+            sudo rsync -a /tmp/www-static/ $REMOTE/static/
+            sudo rsync -a /tmp/www-templates/ $REMOTE/templates/
+            sudo chmod +x $REMOTE/jacoworks-website
+            sudo systemctl start jacoworks-website
             sleep 2
-            curl -sf http://localhost:9527/ || (systemctl status jacoworks-website; exit 1)
+            curl -sf http://localhost:9527/ || (sudo systemctl status jacoworks-website; exit 1)
           "
           echo "✅ Website deployed"

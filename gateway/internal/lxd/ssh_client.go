@@ -14,7 +14,7 @@ import (
 // This is simpler than calling the LXD REST API directly and works
 // well for development. For production, replace with HTTP client.
 type SSHClient struct {
-	sshTarget    string // e.g. "local" or "root@192.168.31.162"
+	sshTarget    string // e.g. "local" or "opc@10.0.1.3"
 	template     string // e.g. "tpl-openclaw"
 	network      string // e.g. "jaconet"
 	openclawPort int
@@ -207,8 +207,13 @@ func (c *SSHClient) waitForHealth(ip string, timeout time.Duration) error {
 
 	for time.Now().Before(deadline) {
 		out, err := c.sshExec(curlCmd)
-		if err == nil && strings.TrimSpace(strings.Trim(out, "'")) == "200" {
-			return nil
+		if err == nil {
+			code := strings.TrimSpace(strings.Trim(out, "'"))
+			// Any HTTP response (2xx, 4xx) means the server is up.
+			// OpenClaw may return 404 for /health — that's fine.
+			if len(code) == 3 && code[0] >= '1' && code[0] <= '5' && code != "000" {
+				return nil
+			}
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -245,7 +250,7 @@ func gatewayDeviceEntry(deviceID, publicKey string, nowMs int64) map[string]any 
 		"roles":          []string{"operator"},
 		"scopes":         scopes,
 		"approvedScopes": scopes,
-		"remoteIp":       "10.10.10.1",
+		"remoteIp":       "10.20.20.1",
 		"tokens": map[string]any{
 			"operator": map[string]any{
 				"token":       "auto-paired-gateway",
@@ -387,6 +392,156 @@ func (c *SSHClient) MountDisk(container, device, hostPath, containerPath string)
 func (c *SSHClient) UnmountDisk(container, device string) error {
 	_, err := c.lxc("config", "device", "remove", container, device)
 	return err
+}
+
+// ─── Memory Sync ───────────────────────────────────
+
+const (
+	containerWorkspace = "/home/agent/.openclaw/workspace"
+	containerSkillsDir = "/home/agent/.openclaw/skills"
+)
+
+// canonicalToContainerPath maps DB canonical paths to container filesystem paths.
+// "MEMORY.md" → "<workspace>/MEMORY.md"
+// "daily/2026-02-26.md" → "<workspace>/memory/2026-02-26.md"
+func canonicalToContainerPath(canonical string) string {
+	if canonical == "MEMORY.md" {
+		return containerWorkspace + "/MEMORY.md"
+	}
+	// daily/YYYY-MM-DD.md → memory/YYYY-MM-DD.md
+	if strings.HasPrefix(canonical, "daily/") {
+		filename := strings.TrimPrefix(canonical, "daily/")
+		return containerWorkspace + "/memory/" + filename
+	}
+	return containerWorkspace + "/" + canonical
+}
+
+// containerToCanonicalPath is the reverse mapping.
+func containerToCanonicalPath(containerPath string) string {
+	rel := strings.TrimPrefix(containerPath, containerWorkspace+"/")
+	if rel == "MEMORY.md" {
+		return "MEMORY.md"
+	}
+	if strings.HasPrefix(rel, "memory/") {
+		return "daily/" + strings.TrimPrefix(rel, "memory/")
+	}
+	return rel
+}
+
+// PushMemoryFiles writes memory files to a container.
+// files: map of canonical path → content (e.g. "MEMORY.md" → "# Memory\n...")
+func (c *SSHClient) PushMemoryFiles(containerName string, files map[string]string) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	// Ensure directories exist
+	c.lxc("exec", containerName, "--", "mkdir", "-p",
+		containerWorkspace+"/memory")
+
+	for canonical, content := range files {
+		containerPath := canonicalToContainerPath(canonical)
+
+		// Write to temp file on host, then push to container
+		tmpFile := fmt.Sprintf("/tmp/_mem_%s_%s", containerName,
+			strings.ReplaceAll(strings.ReplaceAll(canonical, "/", "_"), ".", "_"))
+
+		writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s",
+			strings.ReplaceAll(content, "'", "'\\''"), tmpFile)
+		if _, err := c.sshExec(writeCmd); err != nil {
+			log.Warn().Err(err).Str("file", canonical).Msg("push memory: write temp failed")
+			continue
+		}
+
+		pushCmd := fmt.Sprintf("lxc file push %s %s%s --uid 1001 --gid 1001 --mode 0644 && rm -f %s",
+			tmpFile, containerName, containerPath, tmpFile)
+		if _, err := c.sshExec(pushCmd); err != nil {
+			log.Warn().Err(err).Str("file", canonical).Msg("push memory: push failed")
+			continue
+		}
+	}
+
+	log.Info().Str("container", containerName).Int("files", len(files)).Msg("memory files pushed")
+	return nil
+}
+
+// PullMemoryFiles reads memory files from a container.
+// Returns map of canonical path → content.
+func (c *SSHClient) PullMemoryFiles(containerName string) (map[string]string, error) {
+	files := make(map[string]string)
+
+	// Pull MEMORY.md
+	memPath := containerWorkspace + "/MEMORY.md"
+	if content, err := c.lxc("exec", containerName, "--", "cat", memPath); err == nil {
+		content = strings.TrimSpace(content)
+		if content != "" {
+			files["MEMORY.md"] = content
+		}
+	}
+
+	// List daily logs: workspace/memory/*.md
+	listCmd := fmt.Sprintf("ls -1 %s/memory/*.md 2>/dev/null", containerWorkspace)
+	out, err := c.lxc("exec", containerName, "--", "sh", "-c", listCmd)
+	if err == nil && strings.TrimSpace(out) != "" {
+		for _, line := range strings.Split(out, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || !strings.HasSuffix(line, ".md") {
+				continue
+			}
+			content, err := c.lxc("exec", containerName, "--", "cat", line)
+			if err != nil {
+				continue
+			}
+			content = strings.TrimSpace(content)
+			if content == "" {
+				continue
+			}
+			canonical := containerToCanonicalPath(line)
+			files[canonical] = content
+		}
+	}
+
+	return files, nil
+}
+
+// PushSkillFiles writes skill files to a container's skills directory.
+// files: map of relative path → content (e.g. "创作/poster/SKILL.md" → "...")
+func (c *SSHClient) PushSkillFiles(containerName string, files map[string]string) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	// Ensure base skills dir exists
+	c.lxc("exec", containerName, "--", "mkdir", "-p", containerSkillsDir)
+
+	for relPath, content := range files {
+		fullPath := containerSkillsDir + "/" + relPath
+		dir := fullPath[:strings.LastIndex(fullPath, "/")]
+
+		// Ensure subdirectory exists
+		c.lxc("exec", containerName, "--", "mkdir", "-p", dir)
+
+		// Write via temp file
+		tmpFile := fmt.Sprintf("/tmp/_skill_%s_%s", containerName,
+			strings.ReplaceAll(strings.ReplaceAll(relPath, "/", "_"), ".", "_"))
+
+		writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s",
+			strings.ReplaceAll(content, "'", "'\\''"), tmpFile)
+		if _, err := c.sshExec(writeCmd); err != nil {
+			log.Warn().Err(err).Str("file", relPath).Msg("push skill: write temp failed")
+			continue
+		}
+
+		pushCmd := fmt.Sprintf("lxc file push %s %s%s --uid 1001 --gid 1001 --mode 0644 && rm -f %s",
+			tmpFile, containerName, fullPath, tmpFile)
+		if _, err := c.sshExec(pushCmd); err != nil {
+			log.Warn().Err(err).Str("file", relPath).Msg("push skill: push failed")
+			continue
+		}
+	}
+
+	log.Info().Str("container", containerName).Int("files", len(files)).Msg("skill files pushed")
+	return nil
 }
 
 // autoApproveDevices approves all pending pairing requests in a container.

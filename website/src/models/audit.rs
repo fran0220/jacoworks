@@ -18,6 +18,8 @@ pub async fn list_audit_logs(
     pool: &sqlx::PgPool,
     user_id: Option<&str>,
     action: Option<&str>,
+    from_time: Option<DateTime<Utc>>,
+    to_time: Option<DateTime<Utc>>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AuditLog>, AppError> {
@@ -27,12 +29,16 @@ pub async fn list_audit_logs(
         FROM audit_logs
         WHERE ($1::text IS NULL OR user_id = $1)
           AND ($2::text IS NULL OR action = $2)
+          AND ($3::timestamptz IS NULL OR created_at >= $3)
+          AND ($4::timestamptz IS NULL OR created_at <= $4)
         ORDER BY created_at DESC
-        LIMIT $3 OFFSET $4
+        LIMIT $5 OFFSET $6
         "#,
     )
     .bind(user_id)
     .bind(action)
+    .bind(from_time)
+    .bind(to_time)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
@@ -44,6 +50,8 @@ pub async fn count_audit_logs(
     pool: &sqlx::PgPool,
     user_id: Option<&str>,
     action: Option<&str>,
+    from_time: Option<DateTime<Utc>>,
+    to_time: Option<DateTime<Utc>>,
 ) -> Result<i64, AppError> {
     let row: (i64,) = sqlx::query_as(
         r#"
@@ -51,10 +59,14 @@ pub async fn count_audit_logs(
         FROM audit_logs
         WHERE ($1::text IS NULL OR user_id = $1)
           AND ($2::text IS NULL OR action = $2)
+          AND ($3::timestamptz IS NULL OR created_at >= $3)
+          AND ($4::timestamptz IS NULL OR created_at <= $4)
         "#,
     )
     .bind(user_id)
     .bind(action)
+    .bind(from_time)
+    .bind(to_time)
     .fetch_one(pool)
     .await?;
     Ok(row.0)

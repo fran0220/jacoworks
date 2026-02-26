@@ -13,8 +13,14 @@ import {
   getDailyLogPath,
   appendMemoryMd,
 } from "../lib/daily-log.js";
+import {
+  VectorStore,
+  chunkMarkdown,
+  type SearchResult,
+} from "../lib/vector-store.js";
+import { isEmbeddingAvailable } from "../lib/embedding.js";
 
-const MAX_INJECTION_CHARS = 3000;
+const MAX_INJECTION_CHARS = 4000;
 
 const LOW_SIGNAL_PREFIX_PATTERNS = [
   /^hi[!,.\s]/i,
@@ -59,6 +65,29 @@ function extractAssistantText(messages: readonly unknown[]): string {
   return "";
 }
 
+function extractLatestUserText(messages: readonly unknown[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i] as { role?: string; content?: unknown };
+    if (msg.role !== "user") continue;
+    if (typeof msg.content === "string") return msg.content;
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (
+          block &&
+          typeof block === "object" &&
+          "type" in block &&
+          block.type === "text" &&
+          "text" in block &&
+          typeof block.text === "string"
+        ) {
+          return block.text;
+        }
+      }
+    }
+  }
+  return "";
+}
+
 function nowHHMM(): string {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -79,9 +108,9 @@ function shouldPersistAssistantSummary(text: string): boolean {
 // ─── Tool Parameter Schemas ─────────────────────────
 
 const SearchParams = Type.Object({
-  query: Type.String({ description: "Keywords to search in daily logs" }),
-  days: Type.Optional(
-    Type.Number({ description: "Number of days to search back", default: 7 }),
+  query: Type.String({ description: "Natural language query to search memory (semantic search)" }),
+  top_k: Type.Optional(
+    Type.Number({ description: "Number of results to return", default: 5 }),
   ),
 });
 
@@ -92,22 +121,144 @@ const SaveParams = Type.Object({
   ),
 });
 
+// ─── Background Indexing ────────────────────────────
+
+async function indexMemoryFiles(store: VectorStore, memoryRootDir: string) {
+  // 索引 MEMORY.md
+  const longTerm = await readMemoryMd(memoryRootDir, 50_000);
+  if (longTerm) {
+    store.removeBySource("MEMORY.md");
+    const chunks = chunkMarkdown(longTerm, "MEMORY.md");
+    if (chunks.length > 0) {
+      await store.index(chunks);
+    }
+  }
+
+  // 索引最近 14 天的日志
+  const now = new Date();
+  for (let i = 0; i < 14; i++) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - i);
+    const logPath = getDailyLogPath(memoryRootDir, date);
+    const dateStr = basename(logPath, ".md");
+    const source = `daily/${dateStr}.md`;
+
+    let content: string;
+    try {
+      content = await readFile(logPath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    if (content.trim()) {
+      const chunks = chunkMarkdown(content, source);
+      if (chunks.length > 0) {
+        await store.index(chunks);
+      }
+    }
+  }
+
+  // 清理 30 天前的向量
+  store.pruneOlderThan(30);
+}
+
+// ─── Keyword Fallback Search ────────────────────────
+
+async function keywordSearch(
+  memoryRootDir: string,
+  query: string,
+  days = 7,
+): Promise<string[]> {
+  const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (keywords.length === 0) return [];
+
+  const results: string[] = [];
+  const now = new Date();
+
+  for (let i = 0; i < days; i++) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - i);
+    const logPath = getDailyLogPath(memoryRootDir, date);
+
+    let content: string;
+    try {
+      content = await readFile(logPath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    const dateStr = basename(logPath, ".md");
+    const lines = content.split("\n");
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      if (keywords.some((kw) => lower.includes(kw))) {
+        results.push(`[${dateStr}] ${line}`);
+      }
+    }
+  }
+
+  return results;
+}
+
 // ─── Extension Factory ──────────────────────────────
 
 export function createMemoryExtension(memoryRootDir: string): ExtensionFactory {
   return (pi) => {
-    // ── context: prepend memory summary before existing messages ──
+    const store = new VectorStore(memoryRootDir);
+    const useVector = isEmbeddingAvailable();
+
+    // 初始化: 加载向量缓存 + 后台索引
+    const initPromise = (async () => {
+      if (!useVector) return;
+      await store.load();
+      try {
+        await indexMemoryFiles(store, memoryRootDir);
+        console.log(`[memory] Vector store ready: ${store.size} chunks indexed`);
+      } catch (e) {
+        console.error("[memory] Background indexing error:", e);
+      }
+    })();
+
+    // ── context: 语义检索 or 传统注入 ──
     pi.on("context", async (event) => {
       const parts: string[] = [];
 
-      const longTerm = await readMemoryMd(memoryRootDir, 2000);
-      if (longTerm) parts.push(`### Long-term Memory (MEMORY.md)\n${longTerm}`);
+      if (useVector) {
+        await initPromise;
 
-      const todayLog = await readDailyLog(memoryRootDir, new Date(), 30);
-      if (todayLog) parts.push(`### Today's Log\n${todayLog}`);
+        // 从最新用户消息提取查询
+        const userQuery = extractLatestUserText(event.messages);
+        if (userQuery && store.size > 0) {
+          try {
+            const results = await store.search(userQuery, 8, 0.25);
+            if (results.length > 0) {
+              const memoryText = results
+                .map((r) => `[${r.source}] (score: ${r.score.toFixed(2)})\n${r.text}`)
+                .join("\n\n");
+              parts.push(`### Relevant Memory (semantic search)\n${memoryText}`);
+            }
+          } catch (e) {
+            console.error("[memory] Search error, falling back:", e);
+            // 回退到传统方式
+            const longTerm = await readMemoryMd(memoryRootDir, 2000);
+            if (longTerm) parts.push(`### Long-term Memory (MEMORY.md)\n${longTerm}`);
+          }
+        }
 
-      const yesterdayLog = await readDailyLog(memoryRootDir, yesterday(), 10);
-      if (yesterdayLog) parts.push(`### Yesterday's Log\n${yesterdayLog}`);
+        // 始终注入今天的日志（最新上下文）
+        const todayLog = await readDailyLog(memoryRootDir, new Date(), 20);
+        if (todayLog) parts.push(`### Today's Log\n${todayLog}`);
+      } else {
+        // Embedding 不可用时的回退
+        const longTerm = await readMemoryMd(memoryRootDir, 2000);
+        if (longTerm) parts.push(`### Long-term Memory (MEMORY.md)\n${longTerm}`);
+
+        const todayLog = await readDailyLog(memoryRootDir, new Date(), 30);
+        if (todayLog) parts.push(`### Today's Log\n${todayLog}`);
+
+        const yesterdayLog = await readDailyLog(memoryRootDir, yesterday(), 10);
+        if (yesterdayLog) parts.push(`### Yesterday's Log\n${yesterdayLog}`);
+      }
 
       if (parts.length === 0) return {};
 
@@ -119,23 +270,36 @@ export function createMemoryExtension(memoryRootDir: string): ExtensionFactory {
         timestamp: Date.now(),
       };
 
-      // Prepend memory context to existing messages (context event replaces all messages)
       return {
         messages: [contextMsg, ...event.messages],
       };
     });
 
-    // ── agent_end: append conversation summary to daily log ──
+    // ── agent_end: 自动记录 + 增量索引 ──
     pi.on("agent_end", async (event) => {
       const text = extractAssistantText(event.messages);
       if (!text) return;
 
       const summary = text.length > 200 ? text.slice(0, 200) + "..." : text;
       if (!shouldPersistAssistantSummary(summary)) return;
-      await appendDailyLog(memoryRootDir, `## ${nowHHMM()}\n${summary}\n\n`);
+
+      const entry = `## ${nowHHMM()}\n${summary}\n\n`;
+      await appendDailyLog(memoryRootDir, entry);
+
+      // 增量索引新条目
+      if (useVector) {
+        const today = new Date();
+        const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const source = `daily/${dateStr}.md`;
+        try {
+          await store.index([{ text: entry.trim(), source }]);
+        } catch (e) {
+          console.error("[memory] Index new entry error:", e);
+        }
+      }
     });
 
-    // ── session_before_compact: flush key topics before compaction ──
+    // ── session_before_compact: flush 话题到日志 ──
     pi.on("session_before_compact", async (event) => {
       const topics: string[] = [];
       for (const entry of event.branchEntries) {
@@ -166,49 +330,39 @@ export function createMemoryExtension(memoryRootDir: string): ExtensionFactory {
       return {};
     });
 
-    // ── memory_search tool ──────────────────────────
+    // ── memory_search tool: 语义搜索 + 关键词回退 ──
     const memorySearch: ToolDefinition<typeof SearchParams> = {
       name: "memory_search",
       label: "Memory Search",
-      description:
-        "Search daily memory logs by keyword. Returns matching lines with date context.",
+      description: useVector
+        ? "Semantic search across all memory (MEMORY.md + daily logs). Uses OpenAI embedding vectors for relevance matching."
+        : "Search daily memory logs by keyword. Returns matching lines with date context.",
       parameters: SearchParams,
       execute: async (_toolCallId, params: Static<typeof SearchParams>) => {
-        const days = params.days ?? 7;
-        const keywords = params.query.toLowerCase().split(/\s+/).filter(Boolean);
-        if (keywords.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: "No search keywords provided." }],
-            details: {},
-            isError: true,
-          };
-        }
+        const topK = params.top_k ?? 5;
 
-        const results: string[] = [];
-        const now = new Date();
-
-        for (let i = 0; i < days; i++) {
-          const date = new Date(now);
-          date.setDate(date.getDate() - i);
-          const logPath = getDailyLogPath(memoryRootDir, date);
-
-          let content: string;
+        if (useVector && store.size > 0) {
           try {
-            content = await readFile(logPath, "utf-8");
-          } catch {
-            continue;
-          }
-
-          const dateStr = basename(logPath, ".md");
-          const lines = content.split("\n");
-          for (const line of lines) {
-            const lower = line.toLowerCase();
-            if (keywords.some((kw) => lower.includes(kw))) {
-              results.push(`[${dateStr}] ${line}`);
+            const results = await store.search(params.query, topK);
+            if (results.length > 0) {
+              const text = results
+                .map(
+                  (r, i) =>
+                    `${i + 1}. [${r.source}] (relevance: ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
+                )
+                .join("\n\n");
+              return {
+                content: [{ type: "text" as const, text }],
+                details: { matchCount: results.length, mode: "vector" },
+              };
             }
+          } catch (e) {
+            console.error("[memory] Vector search failed, falling back to keyword:", e);
           }
         }
 
+        // 关键词回退
+        const results = await keywordSearch(memoryRootDir, params.query);
         const text =
           results.length > 0
             ? results.slice(0, 50).join("\n")
@@ -216,20 +370,33 @@ export function createMemoryExtension(memoryRootDir: string): ExtensionFactory {
 
         return {
           content: [{ type: "text" as const, text }],
-          details: { matchCount: results.length, daysSearched: days },
+          details: { matchCount: results.length, mode: "keyword" },
         };
       },
     };
 
-    // ── memory_save tool ────────────────────────────
+    // ── memory_save tool: 保存 + 立即索引 ──
     const memorySave: ToolDefinition<typeof SaveParams> = {
       name: "memory_save",
       label: "Memory Save",
       description:
-        "Save important information to MEMORY.md (long-term curated memory). Use section parameter to organize under headings.",
+        "Save important information to MEMORY.md (long-term curated memory). Content is automatically indexed for semantic search.",
       parameters: SaveParams,
       execute: async (_toolCallId, params: Static<typeof SaveParams>) => {
         await appendMemoryMd(memoryRootDir, params.content, params.section);
+
+        // 立即索引新内容
+        if (useVector) {
+          try {
+            const chunkText = params.section
+              ? `## ${params.section}\n\n${params.content}`
+              : params.content;
+            await store.index([{ text: chunkText, source: "MEMORY.md" }]);
+          } catch (e) {
+            console.error("[memory] Index saved content error:", e);
+          }
+        }
+
         return {
           content: [
             {

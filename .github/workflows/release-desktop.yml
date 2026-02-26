@@ -38,15 +38,19 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             label: macOS-arm64
+            platform: darwin-aarch64
           - os: macos-13
             target: x86_64-apple-darwin
             label: macOS-x64
+            platform: darwin-x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
+            platform: windows-x86_64
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: Linux-x64
+            platform: linux-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -95,3 +99,181 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
+
+      # 收集构建产物用于后续上传到 jingao
+      - name: Collect artifacts
+        id: collect
+        shell: bash
+        run: |
+          mkdir -p dist-upload
+          VERSION="${GITHUB_REF_NAME}"
+          TARGET="${{ matrix.target }}"
+          PLATFORM="${{ matrix.platform }}"
+
+          # 查找 Tauri 输出的安装包
+          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle"
+
+          if [ -d "${BUNDLE_DIR}/dmg" ]; then
+            cp ${BUNDLE_DIR}/dmg/*.dmg dist-upload/ 2>/dev/null || true
+          fi
+          if [ -d "${BUNDLE_DIR}/macos" ]; then
+            # .app.tar.gz for updater
+            find ${BUNDLE_DIR}/macos -name '*.tar.gz' -exec cp {} dist-upload/ \; 2>/dev/null || true
+          fi
+          if [ -d "${BUNDLE_DIR}/nsis" ]; then
+            cp ${BUNDLE_DIR}/nsis/*.exe dist-upload/ 2>/dev/null || true
+          fi
+          if [ -d "${BUNDLE_DIR}/msi" ]; then
+            cp ${BUNDLE_DIR}/msi/*.msi dist-upload/ 2>/dev/null || true
+          fi
+          if [ -d "${BUNDLE_DIR}/deb" ]; then
+            cp ${BUNDLE_DIR}/deb/*.deb dist-upload/ 2>/dev/null || true
+          fi
+          if [ -d "${BUNDLE_DIR}/appimage" ]; then
+            cp ${BUNDLE_DIR}/appimage/*.AppImage dist-upload/ 2>/dev/null || true
+          fi
+
+          # 收集签名文件 (for updater)
+          find ${BUNDLE_DIR} -name '*.sig' -exec cp {} dist-upload/ \; 2>/dev/null || true
+
+          ls -la dist-upload/
+          echo "platform=${PLATFORM}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: dist-upload/
+
+  # ── 上传到 jingao 分发 ──
+  distribute:
+    needs: build-desktop
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          pattern: desktop-*
+
+      - name: Upload to jingao
+        env:
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          HOST="${SSH_USER}@${SSH_HOST}"
+          SSH="ssh -i ~/.ssh/deploy_key"
+          SCP="scp -i ~/.ssh/deploy_key"
+          REMOTE="/opt/jacoworks/releases/${VERSION}"
+
+          # 创建版本目录
+          $SSH "$HOST" "mkdir -p ${REMOTE}"
+
+          # 上传所有平台产物
+          for dir in all-artifacts/desktop-*/; do
+            if [ -d "$dir" ]; then
+              echo "📦 Uploading from $dir"
+              $SCP "${dir}"* "$HOST:${REMOTE}/" || true
+            fi
+          done
+
+          # 列出已上传文件
+          $SSH "$HOST" "ls -lh ${REMOTE}/"
+
+          echo "✅ Artifacts uploaded to jingao: https://jaco.jingao.club/releases/${VERSION}/"
+
+      - name: Register release in database
+        env:
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          BASE_URL="https://jaco.jingao.club/releases/${VERSION}"
+
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          HOST="${SSH_USER}@${SSH_HOST}"
+          SSH="ssh -i ~/.ssh/deploy_key"
+          REMOTE="/opt/jacoworks/releases/${VERSION}"
+
+          # 在 jingao 上通过 psql 写入 releases 表
+          $SSH "$HOST" "
+            export PGPASSWORD='jacoworks-jingao-2026'
+
+            # 创建 release 记录
+            RELEASE_ID=\$(psql -h 127.0.0.1 -U postgres -d jacoworks -tAc \"
+              INSERT INTO releases (id, version, notes, pub_date, is_latest)
+              VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), false)
+              ON CONFLICT (version) DO UPDATE SET notes = EXCLUDED.notes
+              RETURNING id;
+            \")
+
+            echo \"Release ID: \$RELEASE_ID\"
+
+            # 扫描上传的文件，注册 assets
+            for file in ${REMOTE}/*; do
+              [ -f \"\$file\" ] || continue
+              FILENAME=\$(basename \"\$file\")
+
+              # 跳过签名文件
+              case \"\$FILENAME\" in *.sig) continue;; esac
+
+              # 推断平台
+              PLATFORM=''
+              case \"\$FILENAME\" in
+                *.dmg)
+                  if echo \"\$FILENAME\" | grep -qi 'aarch64\\|arm64'; then
+                    PLATFORM='darwin-aarch64'
+                  elif echo \"\$FILENAME\" | grep -qi 'x64\\|x86_64'; then
+                    PLATFORM='darwin-x86_64'
+                  else
+                    PLATFORM='darwin-aarch64'
+                  fi
+                  ;;
+                *.exe|*.msi)     PLATFORM='windows-x86_64' ;;
+                *.deb|*.AppImage) PLATFORM='linux-x86_64' ;;
+                *.tar.gz)
+                  if echo \"\$FILENAME\" | grep -qi 'darwin\\|macos\\|apple'; then
+                    if echo \"\$FILENAME\" | grep -qi 'aarch64\\|arm64'; then
+                      PLATFORM='darwin-aarch64'
+                    else
+                      PLATFORM='darwin-x86_64'
+                    fi
+                  elif echo \"\$FILENAME\" | grep -qi 'linux'; then
+                    PLATFORM='linux-x86_64'
+                  fi
+                  ;;
+              esac
+
+              [ -z \"\$PLATFORM\" ] && continue
+
+              FILESIZE=\$(stat -c%s \"\$file\" 2>/dev/null || stat -f%z \"\$file\" 2>/dev/null || echo 0)
+              DOWNLOAD_URL=\"${BASE_URL}/\${FILENAME}\"
+
+              # 查找对应签名文件
+              SIG=''
+              if [ -f \"\${file}.sig\" ]; then
+                SIG=\$(cat \"\${file}.sig\")
+              fi
+
+              psql -h 127.0.0.1 -U postgres -d jacoworks -c \"
+                INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
+                VALUES (gen_random_uuid()::text, '\$RELEASE_ID', '\$PLATFORM', '\$DOWNLOAD_URL', '\$SIG', \$FILESIZE)
+                ON CONFLICT DO NOTHING;
+              \"
+              echo \"  ✅ \$PLATFORM → \$DOWNLOAD_URL (\$FILESIZE bytes)\"
+            done
+
+            echo '✅ Release registered in database'
+          "

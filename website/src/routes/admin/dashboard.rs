@@ -36,7 +36,7 @@ pub async fn index(
     let fb_counts = feedback::count_feedback_by_status(&state.db).await?;
     let feedback_count = fb_counts.get("open").copied().unwrap_or(0);
 
-    let raw_logs = audit::list_audit_logs(&state.db, None, None, 10, 0).await?;
+    let raw_logs = audit::list_audit_logs(&state.db, None, None, None, None, 10, 0).await?;
     let recent_logs: Vec<DashLogView> = raw_logs
         .into_iter()
         .map(|l| DashLogView {

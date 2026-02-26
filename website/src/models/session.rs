@@ -53,3 +53,16 @@ pub async fn list_containers(pool: &sqlx::PgPool) -> Result<Vec<ContainerInfo>, 
     .await?;
     Ok(containers)
 }
+
+pub async fn get_container_by_name(
+    pool: &sqlx::PgPool,
+    container_name: &str,
+) -> Result<Option<ContainerInfo>, AppError> {
+    let container = sqlx::query_as::<_, ContainerInfo>(
+        "SELECT user_id, container_name, container_ip::text AS container_ip, status FROM containers WHERE container_name = $1",
+    )
+    .bind(container_name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(container)
+}

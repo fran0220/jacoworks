@@ -47,8 +47,15 @@ pub async fn check(
         }
     };
 
-    // Increment download counter
-    let _ = release::increment_download_count(&state.db, &asset.id).await;
+    // Download counting should not block updates, but failures must be visible in logs.
+    if let Err(err) = release::increment_download_count(&state.db, &asset.id).await {
+        tracing::warn!(
+            release_id = %latest.id,
+            asset_id = %asset.id,
+            error = %err,
+            "failed to increment release download count"
+        );
+    }
 
     Ok(Json(UpdateResponse {
         version: latest.version,

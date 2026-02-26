@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,8 +59,8 @@ func init() {
 
 // --- Handlers ---
 
-// Login handles username/password login.
-// POST /api/auth/login {username, password}
+// Login handles username/email + password login.
+// POST /api/auth/login {username, password} — username 支持用户名或邮箱
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -74,7 +75,14 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.store.GetUserByName(r.Context(), req.Username)
+	// Auto-detect: contains '@' → lookup by email, otherwise by name
+	var user *store.User
+	var err error
+	if strings.Contains(req.Username, "@") {
+		user, err = h.store.GetUserByEmail(r.Context(), req.Username)
+	} else {
+		user, err = h.store.GetUserByName(r.Context(), req.Username)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return

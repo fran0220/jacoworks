@@ -37,7 +37,8 @@ impl GatewayClient {
     }
 
     pub async fn start_container(&self, id: &str) -> Result<(), AppError> {
-        self.http
+        let resp = self
+            .http
             .post(format!(
                 "{}/api/admin/containers/{}/start",
                 self.base_url, id
@@ -46,11 +47,21 @@ impl GatewayClient {
             .send()
             .await
             .map_err(|e| AppError::Internal(format!("start container failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "start container failed ({status}): {body}"
+            )));
+        }
+
         Ok(())
     }
 
     pub async fn stop_container(&self, id: &str) -> Result<(), AppError> {
-        self.http
+        let resp = self
+            .http
             .post(format!(
                 "{}/api/admin/containers/{}/stop",
                 self.base_url, id
@@ -59,6 +70,15 @@ impl GatewayClient {
             .send()
             .await
             .map_err(|e| AppError::Internal(format!("stop container failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "stop container failed ({status}): {body}"
+            )));
+        }
+
         Ok(())
     }
 
@@ -72,9 +92,11 @@ impl GatewayClient {
             .await
             .map_err(|e| AppError::Internal(format!("get settings failed: {e}")))?;
         if !resp.status().is_success() {
-            return Err(AppError::Internal(
-                "Failed to fetch settings from gateway".into(),
-            ));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "failed to fetch settings from gateway ({status}): {body}"
+            )));
         }
         resp.json::<Vec<SystemSetting>>()
             .await
@@ -96,9 +118,11 @@ impl GatewayClient {
             .await
             .map_err(|e| AppError::Internal(format!("update settings failed: {e}")))?;
         if !resp.status().is_success() {
-            return Err(AppError::Internal(
-                "Failed to update settings".into(),
-            ));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "failed to update settings ({status}): {body}"
+            )));
         }
         Ok(())
     }

@@ -24,9 +24,11 @@ vm-agent/                        本地 Agent sidecar (Pi SDK + RPC stdio)
     config.ts                    环境变量 (网关下发, 无本地 fallback)
     agent.ts                     Session 池 + 4 Provider + per-user 隔离 + title 生成
     prompts/system.ts            系统提示词 (核心身份 + SOUL.md overlay + 动态能力)
-    extensions/memory.ts         记忆系统 (per-user 目录)
+    extensions/memory.ts         记忆系统 (向量语义搜索 + Markdown 文件存储)
     services/{heartbeat,cron}.ts 后台服务 (sidecar 模式默认关闭)
     tools/web.ts                 web_search (Tavily) + web_fetch
+    lib/embedding.ts             OpenAI Embedding API 客户端 (text-embedding-3-small)
+    lib/vector-store.ts          本地向量存储 (JSON 持久化 + 余弦相似度)
     lib/{daily-log,prompt-queue}.ts
 
 desktop/                         Tauri v2 + React 18 桌面客户端
@@ -104,6 +106,7 @@ deploy/
   sql/001_init_business_tables.sql   PostgreSQL 全量 schema
   sql/002_website_tables.sql         官网表: releases, release_assets, feedback
   sql/003_system_settings.sql        system_settings 表 (LLM 密钥管理)
+  sql/004_memory_and_skills.sql      user_memory + skill_files 表 (记忆/技能同步)
   sql/002_seed_test_data.sql         测试数据 (admin 用户 + 激活码)
   gateway/{frpc.toml,jacoworks-gateway.service,gateway.yaml.example}
   website/{deploy.sh,jacoworks-website.service}
@@ -145,15 +148,15 @@ tasks/                           lessons.md next-steps.md
   └─ OpenClaw 模式: WebSocket → 网关 WS 代理 → WireGuard VPN → LXD 容器
        Ed25519 设备认证, JSON framing 协议
 
-jingao (82.156.239.212) ←── WireGuard wg0 ──→ local (192.168.31.162)
-  10.0.0.1/24                                   10.0.0.2/24
-  route 10.10.10.0/24 via wg0                   jaconet: 10.10.10.0/24 (LXD)
-  ssh lxdhost → root@10.0.0.2                   LXD 容器群 (tpl-openclaw)
+jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233) ←── wg0 ──→ oracle (161.33.28.249)
+  10.0.1.1/24                       10.0.1.254/24                       10.0.1.3/24
+  route 10.20.20.0/24 via wg1      hub (转发 jingao ↔ oracle, ~67ms)   jaconet: 10.20.20.0/24 (LXD)
+  ssh opc@10.0.1.3                  xTom Japan, Tokyo                   LXD 容器群 (tpl-openclaw, ARM)
 ```
 
 **三层服务**: 官网 (浏览器) + 网关 (桌面端 API) + 共享 PostgreSQL (jingao 本地)
 **双模式**: 本地 `type="chat"` (sidecar RPC) / OpenClaw `type="cowork"` (WebSocket)
-**跨机**: WireGuard VPN 连接 jingao ↔ 本地宿主机, 网关通过 SSH 管理 LXD, WS 直连容器 IP
+**跨机**: WireGuard VPN 经 jpdata relay 中继连接 jingao ↔ oracle, 网关通过 SSH 管理 LXD, WS 直连容器 IP
 
 ## 3. 网关 API
 
@@ -222,7 +225,7 @@ server: { port: 8847, host: "0.0.0.0", public_url: "https://jacoapi.jingao.club"
 auth: { admin_token, feishu_client_id, feishu_client_secret, session_ttl_hours: 720 }
 database: { url: "postgresql://...@127.0.0.1:5432/jacoworks" }
 llm: { proxy_url, proxy_key }   # 留空, LLM 配置统一由 DB system_settings 管理
-lxd: { ssh_target: "lxdhost", template: "tpl-openclaw", network: "jaconet", openclaw_port: 18789 }
+lxd: { ssh_target: "opc@10.0.1.3", template: "tpl-openclaw", network: "jaconet", openclaw_port: 18789 }
 chat_agent: { url, token }  # 可选外部 ChatAgent
 ```
 
@@ -264,10 +267,11 @@ base_url = "https://jaco.jingao.club"
 | Go 网关 | jingao 82.156.239.212 | :8847, OpenResty 反代 jacoapi.jingao.club |
 | PostgreSQL | jingao 本地 | 127.0.0.1:5432/jacoworks |
 | 1Panel | jingao 82.156.239.212 | :8090, OpenResty + SSL 证书管理 |
-| WireGuard | jingao ↔ local | wg0: 10.0.0.1 ↔ 10.0.0.2, UDP 51820 |
-| LXD 容器 | local 192.168.31.162 | jaconet 10.10.10.0/24, tpl-openclaw 模板 |
-| LLM 中转站 | 67.230.171.248:8317 | Claude/GPT/Gemini/Grok |
-| 本地宿主机 | 192.168.31.162 | Ubuntu 24.04, Ryzen 5 5600H, 62GB, SSH: `ssh local` |
+| WireGuard | jingao ↔ jpdata ↔ oracle | wg1: 10.0.1.1 ↔ 10.0.1.254 ↔ 10.0.1.3, UDP 51820 |
+| LXD 容器 | oracle 161.33.28.249 | jaconet 10.20.20.0/24, tpl-openclaw (ARM), SSH: `opc@10.0.1.3` |
+| LLM 中转站 | 67.230.171.248 | :8317 LLM 中转 |
+| WG relay (jpdata) | 185.200.65.233 | :51820 WireGuard hub, xTom Japan Tokyo |
+| Oracle 主机 | 161.33.28.249 | Oracle Linux 9.7 ARM, 4 vCPU, 22GB RAM, 200GB Disk |
 
 ## 8. CI/CD
 
@@ -285,8 +289,9 @@ base_url = "https://jaco.jingao.club"
 |--------|------|
 | `JINGAO_HOST` | jingao 服务器 IP (82.156.239.212) |
 | `JINGAO_SSH_KEY` | SSH 私钥 (ed25519), 对应 jingao authorized_keys |
-| `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名密钥 (可选) |
-| `TAURI_SIGNING_KEY_PASSWORD` | 签名密钥密码 (可选) |
+| `JINGAO_SSH_USER` | SSH 用户名 (ubuntu) |
+| `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名私钥 (minisign, ~/.tauri/jacoworks.key) |
+| `TAURI_SIGNING_KEY_PASSWORD` | 签名密钥密码 (jacoworks-updater-2026) |
 
 ### 部署策略
 
@@ -364,14 +369,15 @@ make clean             # 清理构建产物
 - [x] 移除本地 fallback (vm-agent/desktop 仅从网关获取 LLM 配置)
 - [ ] 飞书 SSO 联调 (需飞书开放平台凭证)
 - [ ] vm-agent 编译为单二进制 (bun build --compile)
-- [ ] 向量记忆系统 (SQLite-vec)
+- [x] 向量记忆系统 (OpenAI Embedding API + 本地 JSON 向量缓存, 与 OpenClaw 同架构)
 - [ ] 预制技能 (shared/skills/)
 - [ ] 移动端 / 语音 / 文件上传
 - [ ] 飞书 Bot 消息路由
-- [ ] 桌面端接入 tauri-plugin-updater
-- [ ] GitHub Secrets 配置 (JINGAO_SSH_KEY 等)
-- [ ] 首次 Tauri 构建 + 发布流程打通
-- [ ] 官网下载页对接 releases 表 + 平台检测
+- [x] Tauri updater 签名密钥 (minisign 密钥对 + pubkey 写入 tauri.conf.json)
+- [x] GitHub Secrets 配置 (JINGAO_HOST/SSH_KEY/SSH_USER + TAURI_SIGNING_*)
+- [x] 官网下载页对接 releases 表 + 平台检测
+- [ ] 首次 Tauri 构建 + 发布流程打通 (git tag v0.1.0 端到端验证)
+- [ ] 桌面端接入 tauri-plugin-updater (运行时自动检查更新)
 
 ## 11. 开发规范与约束
 

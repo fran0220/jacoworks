@@ -14,27 +14,7 @@
 {% block admin_content %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
   <!-- Edit Release -->
-  <div class="bg-white rounded-2xl shadow-sm p-6">
-    <h3 class="text-lg font-semibold text-gray-900 mb-4">版本信息</h3>
-    <form hx-put="/admin/releases/{{ release.id }}"
-          hx-swap="none"
-          class="space-y-4">
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">版本号</label>
-        <input type="text" name="version" value="{{ release.version }}" required
-               class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-cream/50 focus:outline-none focus:ring-2 focus:ring-terra/30 focus:border-terra transition-colors text-sm">
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">更新日志</label>
-        <textarea name="notes" rows="10"
-                  class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-cream/50 focus:outline-none focus:ring-2 focus:ring-terra/30 focus:border-terra transition-colors text-sm resize-y">{{ release.notes }}</textarea>
-      </div>
-      <button type="submit"
-              class="px-5 py-2.5 rounded-xl bg-terra text-white text-sm font-medium hover:bg-terra-dark transition-colors">
-        保存修改
-      </button>
-    </form>
-  </div>
+  {% include "admin/partials/release_edit_panel.html" %}
 
   <!-- Upload Asset -->
   <div>
@@ -80,27 +60,7 @@
     <div class="bg-white rounded-2xl shadow-sm p-6">
       <h3 class="text-lg font-semibold text-gray-900 mb-4">当前安装包</h3>
       <div id="assets-list" class="space-y-3">
-        {% for asset in assets %}
-        <div class="flex items-center justify-between px-4 py-3 rounded-xl bg-cream">
-          <div>
-            <span class="text-sm font-medium text-gray-700">{{ asset.platform }}</span>
-            {% if !asset.file_size.is_empty() %}
-            <span class="text-xs text-gray-400 ml-2">{{ asset.file_size }}</span>
-            {% endif %}
-          </div>
-          <button hx-delete="/admin/releases/{{ release.id }}/assets/{{ asset.id }}"
-                  hx-target="closest div.flex"
-                  hx-swap="outerHTML"
-                  hx-confirm="确定删除？"
-                  class="text-red-500 hover:text-red-700 text-xs font-medium transition-colors">
-            删除
-          </button>
-        </div>
-        {% endfor %}
-
-        {% if assets.is_empty() %}
-        <p class="text-sm text-gray-400 text-center py-4">暂无安装包</p>
-        {% endif %}
+        {% include "admin/partials/release_assets_list.html" %}
       </div>
     </div>
   </div>

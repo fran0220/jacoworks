@@ -89,9 +89,25 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info, err := h.store.GetContainerInfo(r.Context(), user.ID)
-	if err == nil && info.ContainerName != "" {
-		device := deviceName(sid)
-		_ = h.lxdClient.MountDisk(info.ContainerName, device, dir, ContainerMountPath)
+	if err != nil {
+		log.Warn().Err(err).Str("user_id", user.ID).Str("session_id", sid).Msg("container info missing for cowork upload")
+		http.Error(w, `{"error":"no container provisioned"}`, http.StatusBadGateway)
+		return
+	}
+	if info.ContainerName == "" {
+		http.Error(w, `{"error":"no container provisioned"}`, http.StatusBadGateway)
+		return
+	}
+	if h.lxdClient == nil {
+		http.Error(w, `{"error":"container service unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	device := deviceName(sid)
+	if err := h.lxdClient.MountDisk(info.ContainerName, device, dir, ContainerMountPath); err != nil {
+		log.Error().Err(err).Str("container", info.ContainerName).Str("session_id", sid).Str("device", device).Msg("mount cowork workspace failed")
+		http.Error(w, `{"error":"failed to mount workspace into container"}`, http.StatusBadGateway)
+		return
 	}
 
 	if err := saveManifest(dir); err != nil {
@@ -159,22 +175,29 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		fullPath := filepath.Join(dir, c.Path)
 		fi, err := os.Stat(fullPath)
 		if err != nil {
+			log.Warn().Err(err).Str("path", fullPath).Msg("skip missing changed file")
 			continue
 		}
 		header, _ := tar.FileInfoHeader(fi, "")
 		header.Name = c.Path
 		if err := tw.WriteHeader(header); err != nil {
+			log.Warn().Err(err).Str("path", c.Path).Msg("skip changed file with tar header error")
 			continue
 		}
 		f, err := os.Open(fullPath)
 		if err != nil {
+			log.Warn().Err(err).Str("path", fullPath).Msg("skip changed file open error")
 			continue
 		}
-		io.Copy(tw, f)
+		if _, err := io.Copy(tw, f); err != nil {
+			log.Warn().Err(err).Str("path", fullPath).Msg("skip changed file copy error")
+		}
 		f.Close()
 	}
 
-	saveManifest(dir)
+	if err := saveManifest(dir); err != nil {
+		log.Warn().Err(err).Str("dir", dir).Msg("save manifest after download")
+	}
 }
 
 // --- helpers ---
@@ -209,15 +232,25 @@ func extractTarGz(r io.Reader, destDir string) (count int, totalSize int64, err 
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			os.MkdirAll(target, 0755)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return count, totalSize, err
+			}
 		case tar.TypeReg:
-			os.MkdirAll(filepath.Dir(target), 0755)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return count, totalSize, err
+			}
 			f, err := os.Create(target)
 			if err != nil {
 				return count, totalSize, err
 			}
-			n, _ := io.Copy(f, tr)
-			f.Close()
+			n, copyErr := io.Copy(f, tr)
+			closeErr := f.Close()
+			if copyErr != nil {
+				return count, totalSize, copyErr
+			}
+			if closeErr != nil {
+				return count, totalSize, closeErr
+			}
 			count++
 			totalSize += n
 		}
@@ -227,16 +260,30 @@ func extractTarGz(r io.Reader, destDir string) (count int, totalSize int64, err 
 
 func saveManifest(dir string) error {
 	manifest := make(map[string]string)
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || info.Name() == ".manifest.json" {
+	if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || info.Name() == ".manifest.json" {
 			return nil
 		}
-		rel, _ := filepath.Rel(dir, path)
-		hash, _ := hashFile(path)
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		hash, err := hashFile(path)
+		if err != nil {
+			return err
+		}
 		manifest[rel] = hash
 		return nil
-	})
-	data, _ := json.Marshal(manifest)
+	}); err != nil {
+		return err
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(filepath.Join(dir, ".manifest.json"), data, 0644)
 }
 
@@ -257,26 +304,40 @@ func hashFile(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	io.Copy(h, f)
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func detectChanges(dir string) ([]FileChange, error) {
 	oldManifest, err := loadManifest(dir)
 	if err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 
 	var changes []FileChange
 	currentFiles := make(map[string]bool)
 
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || info.Name() == ".manifest.json" {
+	if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || info.Name() == ".manifest.json" {
 			return nil
 		}
-		rel, _ := filepath.Rel(dir, path)
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
 		currentFiles[rel] = true
-		hash, _ := hashFile(path)
+		hash, err := hashFile(path)
+		if err != nil {
+			return err
+		}
 
 		if oldHash, exists := oldManifest[rel]; !exists {
 			changes = append(changes, FileChange{Path: rel, Action: "created", Size: info.Size()})
@@ -284,7 +345,9 @@ func detectChanges(dir string) ([]FileChange, error) {
 			changes = append(changes, FileChange{Path: rel, Action: "modified", Size: info.Size()})
 		}
 		return nil
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	for path := range oldManifest {
 		if !currentFiles[path] {

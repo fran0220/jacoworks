@@ -1,12 +1,14 @@
 use askama::Template;
 use axum::extract::{Path, Query, State};
-use axum::response::{IntoResponse, Redirect};
+use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::auth::AdminUser;
 use crate::error::{render_template, AppError};
 use crate::models::user;
 use crate::AppState;
 
+#[derive(Clone)]
 struct UserView {
     id: String,
     name: String,
@@ -31,6 +33,12 @@ struct UsersTemplate {
 struct UserDetailTemplate {
     admin_name: String,
     active_page: String,
+    user: UserView,
+}
+
+#[derive(Template)]
+#[template(path = "admin/partials/user_row.html")]
+struct UserRowTemplate {
     user: UserView,
 }
 
@@ -117,14 +125,36 @@ pub async fn change_role(
 pub async fn toggle_role(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     let u = user::get_user(&state.db, &id)
         .await?
         .ok_or(AppError::NotFound("User not found".into()))?;
     let next_role = if u.role == "admin" { "user" } else { "admin" };
     user::update_user_role(&state.db, &id, next_role).await?;
-    Ok(Redirect::to("/admin/users"))
+
+    if is_htmx_request(&headers) {
+        let updated = user::get_user(&state.db, &id)
+            .await?
+            .ok_or(AppError::NotFound("User not found".into()))?;
+        let html = UserRowTemplate {
+            user: user_view(updated),
+        }
+        .render()
+        .map_err(|e| AppError::Internal(format!("template render error: {e}")))?;
+        return Ok(axum::response::Html(html).into_response());
+    }
+
+    Ok(Redirect::to("/admin/users").into_response())
+}
+
+fn is_htmx_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("HX-Request")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn user_view(u: user::User) -> UserView {

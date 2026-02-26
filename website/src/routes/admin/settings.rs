@@ -52,6 +52,7 @@ fn is_secret_key(key: &str) -> bool {
     matches!(
         key,
         "llm_proxy_key" | "openai_api_key" | "exa_api_key" | "tavily_api_key"
+        | "feishu_client_secret" | "admin_token"
     )
 }
 
@@ -69,6 +70,9 @@ pub struct UpdateSettingsForm {
     openai_api_key: Option<String>,
     exa_api_key: Option<String>,
     tavily_api_key: Option<String>,
+    feishu_client_id: Option<String>,
+    feishu_client_secret: Option<String>,
+    admin_token: Option<String>,
 }
 
 pub async fn update(
@@ -92,11 +96,19 @@ pub async fn update(
             settings.insert("llm_proxy_url".to_string(), v);
         }
     }
+    if let Some(v) = form.feishu_client_id {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            settings.insert("feishu_client_id".to_string(), v);
+        }
+    }
     for (key, value) in [
         ("llm_proxy_key", form.llm_proxy_key),
         ("openai_api_key", form.openai_api_key),
         ("exa_api_key", form.exa_api_key),
         ("tavily_api_key", form.tavily_api_key),
+        ("feishu_client_secret", form.feishu_client_secret),
+        ("admin_token", form.admin_token),
     ] {
         if let Some(v) = value {
             let v = v.trim().to_string();
@@ -113,9 +125,7 @@ pub async fn update(
 
     match client.update_settings(settings).await {
         Ok(_) => render_settings_page(&state, &admin, true, None).await,
-        Err(e) => {
-            render_settings_page(&state, &admin, false, Some(format!("保存失败: {e}"))).await
-        }
+        Err(e) => render_settings_page(&state, &admin, false, Some(format!("保存失败: {e}"))).await,
     }
 }
 
@@ -141,7 +151,13 @@ async fn render_settings_page(
         Err(_) => "连接异常".to_string(),
     };
 
-    let raw_settings = client.get_settings().await.unwrap_or_default();
+    let (raw_settings, gateway_fetch_error) = match client.get_settings().await {
+        Ok(settings) => (settings, None),
+        Err(err) => (
+            Vec::new(),
+            Some(format!("网关设置读取失败: {err}")),
+        ),
+    };
     let settings: Vec<SettingView> = raw_settings
         .into_iter()
         .map(|s| {
@@ -217,6 +233,6 @@ async fn render_settings_page(
         models,
         settings,
         save_success,
-        save_error,
+        save_error: save_error.or(gateway_fetch_error),
     })
 }

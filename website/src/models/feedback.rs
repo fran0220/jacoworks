@@ -38,6 +38,16 @@ pub async fn list_feedback(
     Ok(feedbacks)
 }
 
+pub async fn get_feedback(pool: &sqlx::PgPool, id: &str) -> Result<Option<Feedback>, AppError> {
+    let feedback = sqlx::query_as::<_, Feedback>(
+        "SELECT id, name, email, category, message, app_version, status, admin_reply, created_at, updated_at FROM feedback WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(feedback)
+}
+
 pub async fn create_feedback(
     pool: &sqlx::PgPool,
     name: Option<&str>,

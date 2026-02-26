@@ -34,11 +34,12 @@ var upgrader = websocket.Upgrader{
 
 // WSProxy handles WebSocket proxying between desktop clients and OpenClaw containers.
 type WSProxy struct {
-	store        *store.Store
-	lxdClient    *lxd.SSHClient
-	freezer      *lxd.Freezer
-	openclawPort int
-	deviceKeys   *DeviceKeyStore
+	store            *store.Store
+	lxdClient        *lxd.SSHClient
+	freezer          *lxd.Freezer
+	openclawPort     int
+	deviceKeys       *DeviceKeyStore
+	onContainerReady func(userID, containerName string) // called after unfreeze/start
 }
 
 func NewWSProxy(s *store.Store, lxdClient *lxd.SSHClient, freezer *lxd.Freezer, openclawPort int, dataDir string) *WSProxy {
@@ -49,6 +50,11 @@ func NewWSProxy(s *store.Store, lxdClient *lxd.SSHClient, freezer *lxd.Freezer, 
 		openclawPort: openclawPort,
 		deviceKeys:   NewDeviceKeyStore(dataDir),
 	}
+}
+
+// SetOnContainerReady sets a callback for when a container becomes ready after unfreeze/start.
+func (p *WSProxy) SetOnContainerReady(fn func(userID, containerName string)) {
+	p.onContainerReady = fn
 }
 
 // ServeHTTP upgrades the connection and starts bidirectional proxying.
@@ -377,7 +383,16 @@ func (p *WSProxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, 
 		return nil
 	case "FROZEN":
 		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("unfreezing for ws")
-		return p.lxdClient.Unfreeze(info.ContainerName)
+		if err := p.lxdClient.Unfreeze(info.ContainerName); err != nil {
+			return err
+		}
+		if err := p.store.UpdateContainerStatusByName(ctx, info.ContainerName, "running"); err != nil {
+			return fmt.Errorf("update container status after unfreeze: %w", err)
+		}
+		if p.onContainerReady != nil {
+			go p.onContainerReady(userID, info.ContainerName)
+		}
+		return nil
 	case "STOPPED":
 		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("starting stopped container for ws")
 		if err := p.lxdClient.Start(info.ContainerName); err != nil {
@@ -388,8 +403,13 @@ func (p *WSProxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, 
 			return err
 		}
 		// Update IP in DB and in-memory info
-		p.store.UpdateContainerIP(ctx, userID, ip)
+		if err := p.store.UpdateContainerIP(ctx, userID, ip); err != nil {
+			return fmt.Errorf("update container ip: %w", err)
+		}
 		info.ContainerIP = ip
+		if p.onContainerReady != nil {
+			go p.onContainerReady(userID, info.ContainerName)
+		}
 		return nil
 	default:
 		return fmt.Errorf("container in unexpected state: %s", status.Status)

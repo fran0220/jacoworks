@@ -45,12 +45,7 @@
             {% endif %}
           </div>
           <h3 class="font-semibold text-gray-900 group-hover:text-terra transition-colors">
-            {% if asset.platform == "darwin-aarch64" %}macOS (Apple Silicon)
-            {% else if asset.platform == "darwin-x86_64" %}macOS (Intel)
-            {% else if asset.platform == "windows-x86_64" %}Windows (64-bit)
-            {% else if asset.platform == "linux-x86_64" %}Linux (AppImage)
-            {% else %}{{ asset.platform }}
-            {% endif %}
+            {{ asset.platform_label }}
           </h3>
           {% if !asset.file_size.is_empty() %}
           <p class="text-sm text-gray-400 mt-2">{{ asset.file_size }}</p>
@@ -84,9 +79,19 @@
       </div>
     </div>
 
+    <!-- Release Notes -->
+    {% if !notes_html.is_empty() %}
+    <div class="mt-12">
+      <h2 class="text-xl font-semibold text-gray-900 mb-6 text-center">更新日志</h2>
+      <div class="bg-white rounded-2xl shadow-sm p-8">
+        <div class="prose-custom">{{ notes_html|safe }}</div>
+      </div>
+    </div>
+    {% endif %}
+
     <!-- Links -->
     <div class="mt-12 text-center">
-      <a href="https://github.com/fran0220/jacoworks/releases" target="_blank" rel="noopener"
+      <a href="/docs/changelog"
          class="text-terra hover:text-terra-dark transition-colors text-sm font-medium">
         查看所有版本 →
       </a>

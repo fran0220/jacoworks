@@ -15,6 +15,7 @@ import type { ExtensionFactory, CreateAgentSessionResult } from "@mariozechner/p
 import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
+import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
 import { createCronService, type CronService } from "./services/cron.js";
@@ -223,11 +224,17 @@ export function initAgent(cfg: Config) {
   // 注册中转站所有模型
   registerProxyModels(modelRegistry, cfg.proxyUrl, cfg.proxyKey);
 
+  // 初始化 OpenAI Embedding (向量记忆搜索)
+  if (cfg.openaiApiKey) {
+    initEmbedding(cfg.openaiApiKey);
+  }
+
   console.log("✅ Agent initialized");
   console.log(`   Default model: ${cfg.primaryProvider}/${cfg.primaryModel}`);
   console.log(`   LLM Proxy: ${cfg.proxyUrl}`);
   console.log(`   Workspace: ${cfg.workspaceDir}`);
   console.log(`   Memory root: ${cfg.memoryRootDir}`);
+  console.log(`   Embedding: ${isEmbeddingAvailable() ? "OpenAI text-embedding-3-small" : "disabled (no OPENAI_API_KEY)"}`);
 
   // 列出已注册的代理模型
   const proxyModels = modelRegistry

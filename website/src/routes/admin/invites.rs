@@ -1,12 +1,14 @@
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::response::{IntoResponse, Redirect};
+use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::auth::AdminUser;
 use crate::error::{render_template, AppError};
 use crate::models::invite;
 use crate::AppState;
 
+#[derive(Clone)]
 struct InviteCodeView {
     code: String,
     role: String,
@@ -27,33 +29,17 @@ struct InvitesTemplate {
     codes: Vec<InviteCodeView>,
 }
 
+#[derive(Template)]
+#[template(path = "admin/partials/invites_table.html")]
+struct InvitesTableTemplate {
+    codes: Vec<InviteCodeView>,
+}
+
 pub async fn list(
     State(state): State<AppState>,
     admin: AdminUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let raw_codes = invite::list_invite_codes(&state.db).await?;
-    let now = chrono::Utc::now();
-    let codes: Vec<InviteCodeView> = raw_codes
-        .into_iter()
-        .map(|c| {
-            let is_expired = c.expires_at.map(|e| e < now).unwrap_or(false);
-            let is_exhausted = c.used_count >= c.max_uses;
-            InviteCodeView {
-                code: c.code,
-                role: c.role,
-                max_uses: c.max_uses,
-                used_count: c.used_count,
-                note: c.note,
-                expires_at: c
-                    .expires_at
-                    .map(|e| e.format("%Y-%m-%d %H:%M").to_string())
-                    .unwrap_or_default(),
-                created_at: c.created_at.format("%Y-%m-%d %H:%M").to_string(),
-                is_expired,
-                is_exhausted,
-            }
-        })
-        .collect();
+    let codes = load_invite_views(&state).await?;
 
     render_template(&InvitesTemplate {
         admin_name: admin.0.name.clone(),
@@ -73,8 +59,9 @@ pub struct CreateInviteForm {
 pub async fn create(
     State(state): State<AppState>,
     admin: AdminUser,
+    headers: HeaderMap,
     axum::Form(form): axum::Form<CreateInviteForm>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     let code = generate_code();
     let role = if form.role == "admin" {
         "admin"
@@ -101,16 +88,68 @@ pub async fn create(
     )
     .await?;
 
-    Ok(Redirect::to("/admin/invites"))
+    if is_htmx_request(&headers) {
+        return render_invites_table(&state).await;
+    }
+
+    Ok(Redirect::to("/admin/invites").into_response())
 }
 
 pub async fn revoke(
     State(state): State<AppState>,
     _admin: AdminUser,
+    headers: HeaderMap,
     Path(code): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     invite::revoke_invite_code(&state.db, &code).await?;
-    Ok(Redirect::to("/admin/invites"))
+    if is_htmx_request(&headers) {
+        return render_invites_table(&state).await;
+    }
+
+    Ok(Redirect::to("/admin/invites").into_response())
+}
+
+async fn render_invites_table(state: &AppState) -> Result<Response, AppError> {
+    let codes = load_invite_views(state).await?;
+    let html = InvitesTableTemplate { codes }
+        .render()
+        .map_err(|e| AppError::Internal(format!("template render error: {e}")))?;
+    Ok(axum::response::Html(html).into_response())
+}
+
+async fn load_invite_views(state: &AppState) -> Result<Vec<InviteCodeView>, AppError> {
+    let raw_codes = invite::list_invite_codes(&state.db).await?;
+    let now = chrono::Utc::now();
+    let codes: Vec<InviteCodeView> = raw_codes
+        .into_iter()
+        .map(|c| {
+            let is_expired = c.expires_at.map(|e| e < now).unwrap_or(false);
+            let is_exhausted = c.used_count >= c.max_uses;
+            InviteCodeView {
+                code: c.code,
+                role: c.role,
+                max_uses: c.max_uses,
+                used_count: c.used_count,
+                note: c.note,
+                expires_at: c
+                    .expires_at
+                    .map(|e| e.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_default(),
+                created_at: c.created_at.format("%Y-%m-%d %H:%M").to_string(),
+                is_expired,
+                is_exhausted,
+            }
+        })
+        .collect();
+    Ok(codes)
+}
+
+fn is_htmx_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("HX-Request")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn generate_code() -> String {

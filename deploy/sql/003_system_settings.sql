@@ -18,5 +18,8 @@ INSERT INTO system_settings (key, description) VALUES
     ('llm_proxy_key', 'LLM 中转站密钥'),
     ('openai_api_key', 'OpenAI API 密钥 (Embedding 向量搜索)'),
     ('exa_api_key', 'Exa 搜索 API 密钥'),
-    ('tavily_api_key', 'Tavily 搜索 API 密钥')
+    ('tavily_api_key', 'Tavily 搜索 API 密钥'),
+    ('feishu_client_id', '飞书应用 Client ID'),
+    ('feishu_client_secret', '飞书应用 Client Secret'),
+    ('admin_token', '管理员 API Token')
 ON CONFLICT (key) DO NOTHING;

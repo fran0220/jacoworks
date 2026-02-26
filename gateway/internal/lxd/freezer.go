@@ -15,9 +15,11 @@ type Freezer struct {
 	interval    time.Duration
 	prefix      string // container name prefix to manage (e.g. "oc-")
 
-	mu       sync.Mutex
-	lastSeen map[string]time.Time // container name → last activity time
-	stopCh   chan struct{}
+	mu             sync.Mutex
+	lastSeen       map[string]time.Time // container name → last activity time
+	onBeforeFreeze func(containerName string)
+	onAfterFreeze  func(containerName string)
+	stopCh         chan struct{}
 }
 
 func NewFreezer(client *SSHClient, idleTimeout, checkInterval time.Duration) *Freezer {
@@ -67,6 +69,21 @@ func (f *Freezer) Stop() {
 	close(f.stopCh)
 }
 
+// SetOnBeforeFreeze sets a callback that runs before a container is frozen.
+// Used by main.go to pull memory files before freeze.
+func (f *Freezer) SetOnBeforeFreeze(fn func(string)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onBeforeFreeze = fn
+}
+
+// SetOnAfterFreeze sets a callback that runs after a container is frozen.
+func (f *Freezer) SetOnAfterFreeze(fn func(string)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onAfterFreeze = fn
+}
+
 func (f *Freezer) checkAndFreeze() {
 	containers, err := f.client.List()
 	if err != nil {
@@ -75,9 +92,10 @@ func (f *Freezer) checkAndFreeze() {
 	}
 
 	now := time.Now()
-	f.mu.Lock()
-	defer f.mu.Unlock()
 
+	// Collect containers to freeze (under lock)
+	f.mu.Lock()
+	var toFreeze []string
 	for _, ct := range containers {
 		if !strings.HasPrefix(ct.Name, f.prefix) {
 			continue
@@ -88,22 +106,34 @@ func (f *Freezer) checkAndFreeze() {
 
 		lastActivity, seen := f.lastSeen[ct.Name]
 		if !seen {
-			// First time seeing this container, start tracking
 			f.lastSeen[ct.Name] = now
 			continue
 		}
 
 		if now.Sub(lastActivity) > f.idleTimeout {
-			log.Info().
-				Str("container", ct.Name).
-				Dur("idle", now.Sub(lastActivity)).
-				Msg("freezing idle container")
+			toFreeze = append(toFreeze, ct.Name)
+		}
+	}
+	f.mu.Unlock()
 
-			if err := f.client.Freeze(ct.Name); err != nil {
-				log.Error().Err(err).Str("container", ct.Name).Msg("freeze failed")
-			} else {
-				delete(f.lastSeen, ct.Name)
+	// Process freezes outside lock (callback may take time)
+	for _, name := range toFreeze {
+		log.Info().Str("container", name).Msg("freezing idle container")
+
+		// Pre-freeze hook: pull memory
+		if f.onBeforeFreeze != nil {
+			f.onBeforeFreeze(name)
+		}
+
+		if err := f.client.Freeze(name); err != nil {
+			log.Error().Err(err).Str("container", name).Msg("freeze failed")
+		} else {
+			if f.onAfterFreeze != nil {
+				f.onAfterFreeze(name)
 			}
+			f.mu.Lock()
+			delete(f.lastSeen, name)
+			f.mu.Unlock()
 		}
 	}
 }

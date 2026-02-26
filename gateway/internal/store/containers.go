@@ -66,3 +66,25 @@ func (s *Store) UpdateContainer(ctx context.Context, userID, name, ip, token str
 	)
 	return err
 }
+
+func (s *Store) UpdateContainerStatusByName(ctx context.Context, containerName, status string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE containers SET status = $1 WHERE container_name = $2`,
+		status, containerName,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("container not found: %s", containerName)
+	}
+	return nil
+}
+
+// GetUserIDByContainerName looks up the user who owns a container (for freeze-time memory pull).
+func (s *Store) GetUserIDByContainerName(ctx context.Context, containerName string) (string, error) {
+	var userID string
+	err := s.pool.QueryRow(ctx,
+		`SELECT user_id FROM containers WHERE container_name = $1`, containerName).Scan(&userID)
+	return userID, err
+}
