@@ -440,6 +440,20 @@ pub fn run() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let _ = _app.deep_link().register_all();
             }
+
+            // Open devtools in debug builds or when JACOWORKS_DEVTOOLS=1
+            #[cfg(feature = "devtools")]
+            {
+                use tauri::Manager;
+                let open_devtools = cfg!(debug_assertions)
+                    || std::env::var("JACOWORKS_DEVTOOLS").unwrap_or_default() == "1";
+                if open_devtools {
+                    if let Some(window) = _app.get_webview_window("main") {
+                        window.open_devtools();
+                    }
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

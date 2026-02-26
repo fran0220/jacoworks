@@ -253,7 +253,8 @@ func main() {
 
 var allowedOrigins = map[string]bool{
 	"http://localhost:1420":        true,
-	"tauri://localhost":            true,
+	"tauri://localhost":            true,  // macOS WebKit
+	"https://tauri.localhost":      true,  // Windows WebView2
 	"https://jaco.jingao.club":     true,
 }
 

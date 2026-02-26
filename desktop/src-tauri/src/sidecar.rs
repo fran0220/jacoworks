@@ -448,6 +448,14 @@ pub async fn start_agent(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // Windows: hide the console window for the sidecar process
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
         for (key, value) in &env_vars {
             cmd.env(key, value);
         }
