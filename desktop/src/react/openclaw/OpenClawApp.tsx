@@ -11,7 +11,14 @@ import {
   updateOcSession,
 } from "./lib/sessions";
 import type { OpenClawSSE } from "./lib/sse";
-import { createOcId, type OcEvent, type OcMessage, type OcRes, type OcSession } from "./types";
+import {
+  createOcId,
+  type OcAttachment,
+  type OcEvent,
+  type OcMessage,
+  type OcRes,
+  type OcSession,
+} from "./types";
 
 const SESSION_KEY = "main";
 
@@ -238,9 +245,9 @@ export default function OpenClawApp({
   // --- Send / Abort ---
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: OcAttachment[] = []) => {
       const messageText = text.trim();
-      if (!messageText) return;
+      if (!messageText && attachments.length === 0) return;
 
       const sse = sseRef.current;
       if (!sse) {
@@ -254,10 +261,11 @@ export default function OpenClawApp({
         await loadOrCreateSession();
       }
 
+      const displayText = messageText || (attachments.length > 0 ? `[图片 ×${attachments.length}]` : "");
       const userMessage: OcMessage = {
         id: createOcId(),
         role: "user",
-        content: messageText,
+        content: displayText,
         createdAt: Date.now(),
         status: "final",
       };
@@ -284,8 +292,9 @@ export default function OpenClawApp({
       try {
         await sse.sendChat({
           sessionKey: SESSION_KEY,
-          message: messageText,
+          message: messageText || "请查看图片",
           idempotencyKey: createOcId(),
+          attachments: attachments.length > 0 ? attachments : undefined,
         });
       } catch (error) {
         setMessageError(error instanceof Error ? error.message : "发送失败");
@@ -398,8 +407,8 @@ export default function OpenClawApp({
         isStreaming={isStreaming}
         errorText={messageError}
         disabled={!connectionReady}
-        onSend={(text) => {
-          sendMessage(text).catch((error) => {
+        onSend={(text, attachments) => {
+          sendMessage(text, attachments).catch((error) => {
             setMessageError(error instanceof Error ? error.message : "发送消息失败");
           });
         }}

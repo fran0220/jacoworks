@@ -271,8 +271,37 @@
   gap: var(--space-3);
 }
 
+.oc-input-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.oc-attach-btn {
+  flex-shrink: 0;
+  width: var(--size-btn-sm);
+  height: var(--size-btn-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-tertiary);
+  transition: color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.oc-attach-btn:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.oc-attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .oc-input {
-  width: 100%;
+  flex: 1;
   min-height: var(--space-10);
   max-height: var(--space-15);
   resize: none;

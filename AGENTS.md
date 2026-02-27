@@ -279,6 +279,8 @@ base_url = "https://jaco.jingao.club"
 | LLM 中转站 | 67.230.171.248 | :8317 LLM 中转 |
 | WG relay (jpdata) | 185.200.65.233 | :51820 WireGuard hub, xTom Japan Tokyo |
 | Oracle 主机 | 161.33.28.249 | Oracle Linux 9.7 ARM, 4 vCPU, 22GB RAM, 200GB Disk |
+| Windows 构建 VM | local 192.168.31.162 (KVM) | win-build, IP 192.168.122.98, Win11 LTSC x64, SSH builder/build2026 |
+| 本地服务器 | 192.168.31.162 | Ubuntu 24.04 AMD x86_64, 62GB RAM, 12核, 1.7TB, KVM 宿主机 |
 
 ## 8. CI/CD 与桌面端发布
 
@@ -287,15 +289,72 @@ base_url = "https://jaco.jingao.club"
 | 工作流 | 触发 | 作用 |
 |--------|------|------|
 | `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job (go vet/test, cargo check/test, tsc) |
-| `release-desktop.yml` | git tag `v*` | 构建 vm-agent sidecar → Windows Tauri 构建 → GitHub Release + jingao 分发 |
+| `release-desktop.yml` | git tag `v*` | (CI 付费暂停) 构建 vm-agent sidecar → Windows Tauri 构建 → GitHub Release + jingao 分发 |
 
 > **注意**: 自动部署已移除。gateway/website 通过 `make deploy` 手动部署 (SSH 到 jingao 远程 git pull + 本地编译)。
+> **注意**: GitHub Actions CI 因计费问题暂停，Windows 构建改用本地 KVM VM 手动构建。
+
+### Windows 构建 VM (win-build)
+
+本地服务器 (192.168.31.162) 上的 KVM 虚拟机，用于 Windows 桌面端构建。
+
+| 项目 | 值 |
+|------|-----|
+| VM 名称 | win-build |
+| 宿主机 | 192.168.31.162 (root, Ubuntu 24.04, AMD x86_64) |
+| VM IP | 192.168.122.98 (libvirt default NAT) |
+| OS | Windows 11 Enterprise LTSC Evaluation (10.0.26100) |
+| 用户 | builder / build2026 |
+| VNC | 宿主机 :5900 |
+| 磁盘 | 100GB qcow2, SATA, UEFI |
+| 工具 | Git, Rust (rustup), Node.js 22, Bun, VS Build Tools (C++), NSIS |
+| 构建目录 | `C:\build\jacoworks` |
+| 签名密钥 | `C:\build\tauri-signing.key` |
+
+**VM 管理命令** (在 local 192.168.31.162 上):
+```bash
+virsh start win-build       # 启动
+virsh shutdown win-build    # 关机
+virsh list --all            # 查看状态
+# SSH 连接:
+sshpass -p build2026 ssh builder@192.168.122.98
+```
+
+**Windows 构建步骤** (在 VM 内):
+```powershell
+# 1. 拉取代码
+cd C:\build\jacoworks && git pull
+
+# 2. 构建 sidecar
+cd vm-agent && npm ci && bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
+
+# 3. 准备资源
+mkdir -Force ..\desktop\src-tauri\binaries
+copy dist\vm-agent-x86_64-pc-windows-msvc.exe ..\desktop\src-tauri\binaries\
+tar -czf ..\desktop\src-tauri\resources\skills.tar.gz -C skills .
+
+# 4. 构建 Tauri
+cd ..\desktop && npm ci
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content C:\build\tauri-signing.key -Raw
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "jacoworks-updater-2026"
+npx tauri build --target x86_64-pc-windows-msvc
+
+# 5. 产物在 src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\
+```
+
+**从 Mac 取回产物** (经 local 中转):
+```bash
+# SSH 到 local, 从 VM 拉产物
+ssh root@192.168.31.162 "sshpass -p build2026 scp builder@192.168.122.98:'C:/build/jacoworks/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*' /tmp/win-build/"
+# 从 local 拉到 Mac
+scp root@192.168.31.162:/tmp/win-build/* /tmp/win-artifacts/
+```
 
 ### 桌面端发布流程 (混合模式)
 
-**macOS: 本地构建** | **Windows: CI 构建**
+**macOS: 本地构建 (Mac)** | **Windows: 本地 VM 构建 (win-build)**
 
-macOS 因 Apple 公证耗时不稳定，改为本地构建 + 手动公证。Windows 保留 CI 自动构建。
+macOS 因 Apple 公证耗时不稳定，改为本地构建 + 手动公证。Windows 因 CI 付费暂停，改用本地 KVM VM 构建。
 
 #### macOS 本地构建步骤
 
@@ -345,8 +404,7 @@ git tag vX.Y.Z && git push origin main --tags
 
 # 3. 本地构建 macOS (上述步骤)
 
-# 4. 下载 Windows CI 产物
-gh run download <run-id> --repo fran0220/jacoworks --name desktop-windows-x86_64 --dir /tmp/win-artifacts
+# 4. Windows 构建 (在 win-build VM 内, 见上方 Windows 构建步骤)
 
 # 5. 上传到 jingao 分发
 scp <macOS产物> <Windows产物> jingao:/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/vX.Y.Z/
@@ -385,7 +443,7 @@ gh release create vX.Y.Z --repo fran0220/jacoworks --title "JAcoworks vX.Y.Z" <�
 
 - **gateway / website**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板访问 GitHub) → 本地编译 → 重启
 - **desktop macOS**: 本地构建 + 签名 + 手动公证 → 上传 jingao + GitHub Release
-- **desktop Windows**: CI 自动构建 → 手动下载产物 → 上传 jingao + GitHub Release
+- **desktop Windows**: 本地 VM 构建 (win-build) → 上传 jingao + GitHub Release
 - **vm-agent**: bun build --compile 打包进 desktop sidecar, 不独立部署
 
 ### jingao GitHub 访问

@@ -1,6 +1,6 @@
 import { AlertCircle } from "lucide-react";
 import { useEffect, useRef } from "react";
-import type { OcSession } from "../types";
+import type { OcAttachment, OcSession } from "../types";
 import OcComposer from "./OcComposer";
 import OcMessageBubble from "./OcMessageBubble";
 
@@ -16,7 +16,7 @@ export default function OcChatView({
   isStreaming: boolean;
   errorText: string | null;
   disabled?: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: OcAttachment[]) => void;
   onAbort: () => void;
 }) {
   const messagesRef = useRef<HTMLDivElement | null>(null);

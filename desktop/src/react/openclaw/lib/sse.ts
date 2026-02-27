@@ -5,6 +5,7 @@ import { GATEWAY_URL } from "../../lib/config";
 import { httpFetch } from "../../lib/transport";
 import {
   createOcId,
+  type OcAttachment,
   type OcChatAbortParams,
   type OcChatSendParams,
   type OcEvent,
@@ -82,13 +83,21 @@ export class OpenClawSSE {
     this.cleanup();
   }
 
-  async sendChat(params: { sessionKey: string; message: string; idempotencyKey?: string }) {
+  async sendChat(params: {
+    sessionKey: string;
+    message: string;
+    idempotencyKey?: string;
+    attachments?: OcAttachment[];
+  }) {
     const payload: OcChatSendParams = {
       sessionKey: params.sessionKey,
       message: params.message,
       deliver: true,
       idempotencyKey: params.idempotencyKey ?? createOcId(),
     };
+    if (params.attachments && params.attachments.length > 0) {
+      payload.attachments = params.attachments;
+    }
     return this.sendCommand("chat.send", payload);
   }
 

@@ -41,11 +41,19 @@ export interface OcEvent<TPayload = unknown> {
 
 export type OcFrame = OcProxyReadyFrame | OcProxyErrorFrame | OcPongFrame | OcRes | OcEvent;
 
+export interface OcAttachment {
+  type: "image";
+  mimeType: string;
+  fileName: string;
+  content: string; // raw base64 (no data: prefix)
+}
+
 export interface OcChatSendParams {
   sessionKey: string;
   message: string;
   deliver: boolean;
   idempotencyKey: string;
+  attachments?: OcAttachment[];
 }
 
 export interface OcChatAbortParams {

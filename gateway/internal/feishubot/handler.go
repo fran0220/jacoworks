@@ -3,6 +3,7 @@ package feishubot
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,14 @@ const (
 )
 
 var mentionPattern = regexp.MustCompile(`@_user_\d+\s*`)
+
+// ocAttachment represents an image attachment for OpenClaw chat.send protocol.
+type ocAttachment struct {
+	Type     string `json:"type"`
+	MimeType string `json:"mimeType"`
+	FileName string `json:"fileName"`
+	Content  string `json:"content"` // raw base64
+}
 
 // Handler processes Feishu webhook events and routes messages to OpenClaw containers
 // via the shared ChannelPool (WebSocket protocol), enabling conversation sync with desktop.
@@ -149,26 +158,54 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 		return
 	}
 
-	// Only handle text messages
-	if msg.Message.MessageType != "text" {
-		h.client.ReplyText(messageID, "暂时只支持文字消息哦 🙂")
+	// Handle supported message types
+	var text string
+	var attachments []ocAttachment
+
+	switch msg.Message.MessageType {
+	case "text":
+		var content struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(msg.Message.Content), &content); err != nil {
+			log.Error().Err(err).Str("content", msg.Message.Content).Msg("feishu bot: parse text failed")
+			h.client.ReplyText(messageID, "消息解析失败，请重试")
+			return
+		}
+		text = mentionPattern.ReplaceAllString(content.Text, "")
+		text = strings.TrimSpace(text)
+
+	case "image":
+		var content struct {
+			ImageKey string `json:"image_key"`
+		}
+		if err := json.Unmarshal([]byte(msg.Message.Content), &content); err != nil {
+			log.Error().Err(err).Str("content", msg.Message.Content).Msg("feishu bot: parse image content failed")
+			h.client.ReplyText(messageID, "图片解析失败，请重试")
+			return
+		}
+		imgData, err := h.client.DownloadImage(messageID, content.ImageKey)
+		if err != nil {
+			log.Error().Err(err).Str("image_key", content.ImageKey).Msg("feishu bot: download image failed")
+			h.client.ReplyText(messageID, "图片下载失败，请重试")
+			return
+		}
+		mimeType := http.DetectContentType(imgData)
+		attachments = append(attachments, ocAttachment{
+			Type:     "image",
+			MimeType: mimeType,
+			FileName: content.ImageKey + mimeExtension(mimeType),
+			Content:  base64.StdEncoding.EncodeToString(imgData),
+		})
+		text = "请查看这张图片"
+		log.Info().Str("image_key", content.ImageKey).Int("size", len(imgData)).Str("mime", mimeType).Msg("feishu bot: image downloaded")
+
+	default:
+		h.client.ReplyText(messageID, "暂时只支持文字和图片消息哦 🙂")
 		return
 	}
 
-	// Parse text content
-	var content struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal([]byte(msg.Message.Content), &content); err != nil {
-		log.Error().Err(err).Str("content", msg.Message.Content).Msg("feishu bot: parse text failed")
-		h.client.ReplyText(messageID, "消息解析失败，请重试")
-		return
-	}
-
-	// Strip @mention patterns and trim
-	text := mentionPattern.ReplaceAllString(content.Text, "")
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return
 	}
 
@@ -187,7 +224,7 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 	defer lock.Unlock()
 
 	// Route message via OpenClaw channel (shared with desktop)
-	response, err := h.routeViaChannel(ctx, user.ID, text)
+	response, err := h.routeViaChannel(ctx, user.ID, text, attachments)
 	if err != nil {
 		log.Error().Err(err).Str("user_id", user.ID).Msg("feishu bot: route via channel failed")
 		h.client.ReplyText(messageID, "AI 处理消息时出错，请稍后重试。")
@@ -222,7 +259,7 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 // routeViaChannel sends a message through the shared OpenClaw ChannelPool and
 // collects the streaming response. This uses the same WS protocol as the desktop,
 // ensuring conversation context (sessionKey) is shared between both channels.
-func (h *Handler) routeViaChannel(ctx context.Context, userID, message string) (string, error) {
+func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, attachments []ocAttachment) (string, error) {
 	channel, _, err := h.channelPool.GetOrCreate(ctx, userID)
 	if err != nil {
 		return "", fmt.Errorf("get channel: %w", err)
@@ -243,12 +280,16 @@ func (h *Handler) routeViaChannel(ctx context.Context, userID, message string) (
 	requestID := generateRequestID()
 
 	// Build chat.send params (same protocol as desktop)
-	params, _ := json.Marshal(map[string]interface{}{
+	paramsMap := map[string]interface{}{
 		"sessionKey":     defaultSessionKey,
 		"message":        message,
 		"deliver":        true,
 		"idempotencyKey": requestID,
-	})
+	}
+	if len(attachments) > 0 {
+		paramsMap["attachments"] = attachments
+	}
+	params, _ := json.Marshal(paramsMap)
 
 	// Send the request through the shared channel
 	if err := channel.SendRequest("chat.send", params, requestID); err != nil {
@@ -544,6 +585,21 @@ func truncateTitle(text string) string {
 		return cleaned
 	}
 	return string(runes[:20]) + "..."
+}
+
+func mimeExtension(mimeType string) string {
+	switch mimeType {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".bin"
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {

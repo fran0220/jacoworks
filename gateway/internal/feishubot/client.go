@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"sync"
 	"time"
@@ -187,4 +189,131 @@ func (c *Client) SendText(openID, text string) error {
 	}
 
 	return nil
+}
+
+// DownloadImage downloads an image from a Feishu message by message_id and file_key.
+func (c *Client) DownloadImage(messageID, fileKey string) ([]byte, error) {
+	token, err := c.getTenantAccessToken()
+	if err != nil {
+		return nil, err
+	}
+
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("%s/im/v1/messages/%s/resources/%s?type=image", feishuBaseURL, messageID, fileKey),
+		nil,
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("download image: status %d, body: %s", resp.StatusCode, body)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read image body: %w", err)
+	}
+	return data, nil
+}
+
+// SendImage sends an image message to a user by open_id.
+func (c *Client) SendImage(openID, imageKey string) error {
+	token, err := c.getTenantAccessToken()
+	if err != nil {
+		return err
+	}
+
+	content, _ := json.Marshal(map[string]string{"image_key": imageKey})
+	body, _ := json.Marshal(map[string]interface{}{
+		"receive_id": openID,
+		"msg_type":   "image",
+		"content":    string(content),
+	})
+
+	req, _ := http.NewRequest("POST",
+		feishuBaseURL+"/im/v1/messages?receive_id_type=open_id",
+		bytes.NewReader(body),
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result.Code != 0 {
+		return fmt.Errorf("feishu send image error %d: %s", result.Code, result.Msg)
+	}
+
+	return nil
+}
+
+// UploadImage uploads image data to Feishu and returns the image_key.
+func (c *Client) UploadImage(data []byte, mimeType string) (string, error) {
+	token, err := c.getTenantAccessToken()
+	if err != nil {
+		return "", err
+	}
+
+	ext := ".png"
+	switch mimeType {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/gif":
+		ext = ".gif"
+	case "image/webp":
+		ext = ".webp"
+	}
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("image_type", "message_image")
+
+	fw, err := w.CreateFormFile("image", "image"+ext)
+	if err != nil {
+		return "", fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		return "", fmt.Errorf("write image data: %w", err)
+	}
+	w.Close()
+
+	req, _ := http.NewRequest("POST", feishuBaseURL+"/im/v1/images", &buf)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("upload image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			ImageKey string `json:"image_key"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode upload response: %w", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("feishu upload error %d: %s", result.Code, result.Msg)
+	}
+
+	return result.Data.ImageKey, nil
 }
