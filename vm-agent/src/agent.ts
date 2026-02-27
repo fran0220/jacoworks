@@ -324,6 +324,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     settingsManager,
     extensionFactories,
     additionalSkillPaths: [
+      ...(existsSync(config.remoteSkillsDir) ? [config.remoteSkillsDir] : []),
       ...config.skillsPaths.filter((p) => existsSync(p)),
       ...(existsSync(config.userSkillsDir) ? [config.userSkillsDir] : []),
     ],
@@ -600,6 +601,11 @@ export function listAvailableSkills(): SkillInfo[] {
         editable: source === "user",
       });
     }
+  }
+
+  // Remote skills (from gateway, highest priority)
+  if (existsSync(config.remoteSkillsDir)) {
+    loadFrom(config.remoteSkillsDir, "builtin");
   }
 
   // Built-in skills (vm-agent/skills/ etc.)

@@ -52,9 +52,12 @@ function parseHttpError(body: string, fallback: string) {
 
 export class OpenClawSSE {
   private connected = false;
+  private connecting = false;
   private shouldReconnect = false;
   private ready = false;
   private reconnectAttempt = 0;
+  private reconnectTimer: number | null = null;
+  private lastSeenSeq = 0;
   private unlistenEvent: UnlistenFn | null = null;
   private unlistenClosed: UnlistenFn | null = null;
 
@@ -66,7 +69,7 @@ export class OpenClawSSE {
 
   connect() {
     this.shouldReconnect = true;
-    if (this.connected) {
+    if (this.connected || this.connecting) {
       return;
     }
     this.openSource();
@@ -75,6 +78,7 @@ export class OpenClawSSE {
   close() {
     this.shouldReconnect = false;
     this.ready = false;
+    this.cancelReconnectTimer();
     this.cleanup();
   }
 
@@ -94,11 +98,21 @@ export class OpenClawSSE {
   }
 
   private async openSource() {
+    if (this.connected || this.connecting) return;
+
     const token = getToken();
     if (!token) {
       this.handlers.onError?.(new Error("未找到登录 token，请重新登录"));
       return;
     }
+
+    this.connecting = true;
+
+    // Always clean up old listeners before registering new ones
+    this.unlistenEvent?.();
+    this.unlistenEvent = null;
+    this.unlistenClosed?.();
+    this.unlistenClosed = null;
 
     try {
       this.unlistenEvent = await listen<SseEventPayload>("oc-sse-event", ({ payload }) => {
@@ -119,10 +133,21 @@ export class OpenClawSSE {
       this.cleanup();
       this.handlers.onError?.(new Error(err instanceof Error ? err.message : String(err)));
       this.scheduleReconnect();
+    } finally {
+      this.connecting = false;
     }
   }
 
   private handleSseEvent(payload: SseEventPayload) {
+    // Seq-based dedup: skip events we've already processed
+    if (payload.id) {
+      const seq = Number(payload.id);
+      if (Number.isFinite(seq) && seq > 0) {
+        if (seq <= this.lastSeenSeq) return;
+        this.lastSeenSeq = seq;
+      }
+    }
+
     switch (payload.event) {
       case "proxy.ready":
         this.ready = true;
@@ -152,6 +177,7 @@ export class OpenClawSSE {
     const wasReady = this.ready;
     this.ready = false;
     this.connected = false;
+    this.connecting = false;
 
     this.unlistenEvent?.();
     this.unlistenEvent = null;
@@ -165,17 +191,28 @@ export class OpenClawSSE {
   private scheduleReconnect() {
     if (!this.shouldReconnect) return;
 
+    this.cancelReconnectTimer();
+
     this.reconnectAttempt += 1;
     this.handlers.onReconnect?.(RECONNECT_NOTICE_DELAY_MS, this.reconnectAttempt);
 
-    window.setTimeout(() => {
-      if (!this.shouldReconnect || this.connected) return;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.shouldReconnect || this.connected || this.connecting) return;
       this.openSource();
     }, RECONNECT_NOTICE_DELAY_MS);
   }
 
+  private cancelReconnectTimer() {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
   private cleanup() {
     this.connected = false;
+    this.connecting = false;
     this.unlistenEvent?.();
     this.unlistenEvent = null;
     this.unlistenClosed?.();

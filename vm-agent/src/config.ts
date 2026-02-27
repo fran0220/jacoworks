@@ -20,6 +20,8 @@ export interface Config {
   skillsPaths: string[];
   /** 用户自建技能目录 (可编辑) */
   userSkillsDir: string;
+  /** 远程技能目录 (从网关拉取, 最高优先) */
+  remoteSkillsDir: string;
   heartbeatEnabled: boolean;
   heartbeatIntervalMs: number;
   heartbeatActiveHours?: { start: string; end: string };
@@ -47,6 +49,10 @@ function defaultMemoryRootDir(): string {
 
 function defaultUserSkillsDir(): string {
   return join(defaultAppDataDir(), "skills");
+}
+
+function defaultRemoteSkillsDir(): string {
+  return join(defaultAppDataDir(), "remote-skills");
 }
 
 export function parseInterval(str: string): number {
@@ -152,6 +158,7 @@ export function loadConfig(): Config {
     memoryEnabled: process.env.MEMORY_ENABLED !== "false",
     skillsPaths: resolveSkillsPaths(process.env.SKILLS_PATHS),
     userSkillsDir: process.env.USER_SKILLS_DIR || defaultUserSkillsDir(),
+    remoteSkillsDir: process.env.REMOTE_SKILLS_DIR || defaultRemoteSkillsDir(),
     heartbeatEnabled: process.env.HEARTBEAT_ENABLED === "true",
     heartbeatIntervalMs: parseInterval(process.env.HEARTBEAT_INTERVAL || "30m"),
     heartbeatActiveHours:

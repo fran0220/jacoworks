@@ -4,4 +4,5 @@ pub mod feedback;
 pub mod invite;
 pub mod release;
 pub mod session;
+pub mod skill;
 pub mod user;

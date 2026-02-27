@@ -192,6 +192,7 @@ func main() {
 	// Authenticated: skills sync
 	mux.Handle("POST /api/skills/upload", authMiddleware.Authenticate(http.HandlerFunc(skillsUploadHandler(s))))
 	mux.Handle("GET /api/skills/checksum", authMiddleware.Authenticate(http.HandlerFunc(skillsChecksumHandler(s))))
+	mux.Handle("GET /api/skills/pull", authMiddleware.Authenticate(http.HandlerFunc(skillsPullHandler(s))))
 
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
@@ -1126,6 +1127,43 @@ func skillsChecksumHandler(s *store.Store) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]string{
 			"system": checksums["system"],
 			"user":   checksums[user.ID],
+		})
+	}
+}
+
+func skillsPullHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		checksums, err := s.GetSkillChecksums(r.Context(), []string{"system"})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get checksums"})
+			return
+		}
+		etag := checksums["system"]
+
+		if etag != "" && r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
+		files, err := s.GetSkillFiles(r.Context(), "system")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load skills"})
+			return
+		}
+
+		if etag != "" {
+			w.Header().Set("ETag", etag)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"files":    files,
+			"checksum": etag,
 		})
 	}
 }

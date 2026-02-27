@@ -1,12 +1,20 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-static SSE_CANCEL: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
+static SSE_CONNECTION_ID: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+
+fn next_connection_id() -> u64 {
+    SSE_CONNECTION_ID.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+fn is_connection_active(connection_id: u64) -> bool {
+    SSE_CONNECTION_ID.load(Ordering::SeqCst) == connection_id
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpResponse {
@@ -75,7 +83,7 @@ pub async fn sse_connect(
     url: String,
     headers: HashMap<String, String>,
 ) -> Result<(), String> {
-    SSE_CANCEL.store(false, Ordering::SeqCst);
+    let connection_id = next_connection_id();
 
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -108,8 +116,7 @@ pub async fn sse_connect(
         };
 
         while let Some(chunk_result) = stream.next().await {
-            if SSE_CANCEL.load(Ordering::SeqCst) {
-                emit_closed(&app, "cancelled".into());
+            if !is_connection_active(connection_id) {
                 return;
             }
 
@@ -139,6 +146,10 @@ pub async fn sse_connect(
                         data_lines.clear();
                         let id = event_id.take();
 
+                        if !is_connection_active(connection_id) {
+                            return;
+                        }
+
                         let _ = app.emit(
                             "oc-sse-event",
                             SseEventPayload {
@@ -159,13 +170,14 @@ pub async fn sse_connect(
                 // Lines starting with ':' are comments — ignored
             }
 
-            if SSE_CANCEL.load(Ordering::SeqCst) {
-                emit_closed(&app, "cancelled".into());
+            if !is_connection_active(connection_id) {
                 return;
             }
         }
 
-        emit_closed(&app, "stream ended".into());
+        if is_connection_active(connection_id) {
+            emit_closed(&app, "stream ended".into());
+        }
     });
 
     Ok(())
@@ -173,6 +185,6 @@ pub async fn sse_connect(
 
 #[tauri::command]
 pub async fn sse_close() -> Result<(), String> {
-    SSE_CANCEL.store(true, Ordering::SeqCst);
+    next_connection_id();
     Ok(())
 }

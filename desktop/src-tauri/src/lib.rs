@@ -471,6 +471,7 @@ pub fn run() {
             sidecar::get_user_skills_dir,
             sidecar::delete_user_skill,
             sidecar::reveal_user_skill,
+            sidecar::write_remote_skills,
             reveal_in_finder,
             open_file_default,
             resolve_file_path,

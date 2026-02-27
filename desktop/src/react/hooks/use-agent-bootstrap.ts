@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
 import { getSettings } from "../lib/config";
 import { setSkills } from "../lib/skills";
-import { syncSkills } from "../lib/skill-sync";
+import { pullSystemSkills, syncSkills } from "../lib/skill-sync";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -60,6 +60,13 @@ export function useAgentBootstrap(authenticated: boolean) {
         };
 
         const config = await fetchAgentConfig();
+
+        // Pull latest system skills from gateway BEFORE starting agent
+        // Non-blocking: failures fall back to bundled/cached skills
+        await pullSystemSkills().catch((err) =>
+          console.warn("[boot] skill pull failed:", err),
+        );
+
         envVars.LLM_PROXY_URL = config.llm_proxy_url;
         envVars.LLM_PROXY_KEY = config.llm_proxy_key;
         if (config.openai_api_key) envVars.OPENAI_API_KEY = config.openai_api_key;

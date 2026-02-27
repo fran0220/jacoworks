@@ -5,6 +5,7 @@ pub mod feedback;
 pub mod invites;
 pub mod releases;
 pub mod settings;
+pub mod skills;
 pub mod users;
 
 use axum::routing::{delete, get, post, put};
@@ -48,4 +49,8 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/feedback/{id}/status", post(feedback::update_status))
         .route("/audit", get(audit::list))
         .route("/settings", get(settings::index).post(settings::update))
+        .route("/skills", get(skills::list))
+        .route("/skills/edit", get(skills::edit_form))
+        .route("/skills/save", post(skills::save))
+        .route("/skills/delete", delete(skills::delete).post(skills::delete))
 }

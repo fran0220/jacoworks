@@ -1,6 +1,7 @@
 /**
- * Skills sync client — one-way push from desktop to gateway.
- * Gateway later pushes to OpenClaw containers.
+ * Skills sync client — bidirectional:
+ *   pull: gateway → desktop (system skills hot-update)
+ *   push: desktop → gateway (for OpenClaw containers)
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -111,6 +112,79 @@ export async function syncSkills(): Promise<void> {
     console.warn("[skill-sync] sync error:", err);
   }
 }
+
+// ─── Pull: gateway → desktop (hot-update system skills) ──────
+
+/** Cached ETag from last pull, avoids re-downloading unchanged skills. */
+let lastPullEtag = "";
+
+interface PullSkillFile {
+  file_path: string;
+  content: string;
+  checksum: string;
+}
+
+interface PullResponse {
+  files: PullSkillFile[];
+  checksum: string;
+}
+
+/**
+ * Pull system skills from gateway and write to app_data/remote-skills/.
+ * Uses ETag to skip download when server skills haven't changed.
+ * Should be called BEFORE starting the agent sidecar.
+ */
+export async function pullSystemSkills(): Promise<void> {
+  try {
+    const token = getToken();
+    if (!token) return;
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+    };
+    if (lastPullEtag) {
+      headers["If-None-Match"] = lastPullEtag;
+    }
+
+    const res = await httpFetch(`${GATEWAY_URL}/api/skills/pull`, {
+      method: "GET",
+      headers,
+    });
+
+    if (res.status === 304) {
+      // Server skills unchanged
+      return;
+    }
+
+    if (res.status !== 200) {
+      console.warn("[skill-pull] server returned", res.status);
+      return;
+    }
+
+    const data: PullResponse = JSON.parse(res.body);
+    if (!data.files || data.files.length === 0) {
+      return;
+    }
+
+    // Write files to app_data/remote-skills/ via Tauri command
+    await invoke("write_remote_skills", {
+      files: data.files.map((f) => ({
+        file_path: f.file_path,
+        content: f.content,
+      })),
+    });
+
+    lastPullEtag = data.checksum || "";
+    console.log(
+      `[skill-pull] pulled ${data.files.length} system skills from gateway`,
+    );
+  } catch (err) {
+    // Non-fatal: agent can still use bundled/cached skills
+    console.warn("[skill-pull] pull error:", err);
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────
 
 async function resolveBuiltinSkillsDir(): Promise<string | null> {
   try {

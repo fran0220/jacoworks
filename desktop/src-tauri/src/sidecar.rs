@@ -70,6 +70,12 @@ pub struct MemoryFileEntry {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteSkillFile {
+    pub file_path: String,
+    pub content: String,
+}
+
 /// List all memory files with their content (MEMORY.md + daily/*.md).
 #[tauri::command]
 pub fn list_memory_files(app: AppHandle) -> Result<Vec<MemoryFileEntry>, String> {
@@ -156,6 +162,33 @@ pub fn write_memory_files(app: AppHandle, files: Vec<MemoryFileEntry>) -> Result
 #[tauri::command]
 pub fn get_memory_root(app: AppHandle) -> Result<String, String> {
     memory_root_dir(&app).map(|p| p.display().to_string())
+}
+
+/// Write remote skills pulled from gateway to app_data/remote-skills/
+/// Returns the directory path where files were written.
+#[tauri::command]
+pub fn write_remote_skills(
+    app: AppHandle,
+    files: Vec<RemoteSkillFile>,
+) -> Result<String, String> {
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let remote_dir = app_data.join("remote-skills");
+
+    // Clean and recreate directory
+    if remote_dir.exists() {
+        let _ = std::fs::remove_dir_all(&remote_dir);
+    }
+
+    for file in &files {
+        let file_path = remote_dir.join(&file.file_path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {}", e))?;
+        }
+        std::fs::write(&file_path, &file.content)
+            .map_err(|e| format!("write failed: {}", e))?;
+    }
+
+    Ok(remote_dir.to_string_lossy().to_string())
 }
 
 // ───── Skills sync helpers ────────────────────────────────────
@@ -439,6 +472,14 @@ pub async fn start_agent(
                 .current_dir(&resolved_dir);
             (c, resolved_dir)
         };
+
+        // Remote skills pulled from gateway (highest priority)
+        if let Ok(app_data) = app.path().app_data_dir() {
+            let remote_skills = app_data.join("remote-skills");
+            if remote_skills.exists() {
+                cmd.env("REMOTE_SKILLS_DIR", remote_skills.to_string_lossy().as_ref());
+            }
+        }
 
         cmd.env("MEMORY_ENABLED", "true")
             .env("HEARTBEAT_ENABLED", "false")
