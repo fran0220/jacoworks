@@ -169,6 +169,8 @@ export async function fetchAgentConfig(): Promise<{
   embedding_base_url?: string;
   embedding_api_key?: string;
   fal_api_key?: string;
+  jimeng_api_url?: string;
+  jimeng_api_key?: string;
 }> {
   const response = await authFetch("/api/agent/config", { method: "GET" });
   if (response.status !== 200) {

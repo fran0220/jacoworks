@@ -33,6 +33,8 @@ type LLMConfig struct {
 	EmbeddingBaseURL string `yaml:"embedding_base_url"`
 	EmbeddingAPIKey  string `yaml:"embedding_api_key"`
 	FalAPIKey        string `yaml:"fal_api_key"`
+	JimengAPIURL     string `yaml:"jimeng_api_url"`
+	JimengAPIKey     string `yaml:"jimeng_api_key"`
 }
 
 type ServerConfig struct {
@@ -150,6 +152,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_LLM_FAL_API_KEY"); v != "" {
 		cfg.LLM.FalAPIKey = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_JIMENG_API_URL"); v != "" {
+		cfg.LLM.JimengAPIURL = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_JIMENG_API_KEY"); v != "" {
+		cfg.LLM.JimengAPIKey = v
 	}
 	if v := os.Getenv("GATEWAY_CHAT_AGENT_URL"); v != "" {
 		cfg.ChatAgent.URL = v

@@ -79,6 +79,12 @@ func main() {
 				llm.EmbeddingBaseURL = setting.Value
 			case "embedding_api_key":
 				llm.EmbeddingAPIKey = setting.Value
+			case "fal_api_key":
+				llm.FalAPIKey = setting.Value
+			case "jimeng_api_url":
+				llm.JimengAPIURL = setting.Value
+			case "jimeng_api_key":
+				llm.JimengAPIKey = setting.Value
 			case "feishu_client_id":
 				cfg.Auth.FeishuClientID = setting.Value
 			case "feishu_client_secret":
@@ -745,6 +751,8 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"embedding_base_url": llm.EmbeddingBaseURL,
 			"embedding_api_key":  llm.EmbeddingAPIKey,
 			"fal_api_key":        llm.FalAPIKey,
+			"jimeng_api_url":     llm.JimengAPIURL,
+			"jimeng_api_key":     llm.JimengAPIKey,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
@@ -785,6 +793,8 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"embedding_base_url":   true,
 		"embedding_api_key":    true,
 		"fal_api_key":          true,
+		"jimeng_api_url":       true,
+		"jimeng_api_key":       true,
 		"feishu_client_id":     true,
 		"feishu_client_secret": true,
 		"admin_token":          true,
@@ -834,6 +844,12 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		}
 		if v, ok := req.Settings["fal_api_key"]; ok {
 			llm.FalAPIKey = v
+		}
+		if v, ok := req.Settings["jimeng_api_url"]; ok {
+			llm.JimengAPIURL = v
+		}
+		if v, ok := req.Settings["jimeng_api_key"]; ok {
+			llm.JimengAPIKey = v
 		}
 		cfg.UpdateLLM(llm)
 

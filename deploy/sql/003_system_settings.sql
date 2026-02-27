@@ -24,5 +24,7 @@ INSERT INTO system_settings (key, description) VALUES
     ('admin_token', '管理员 API Token'),
     ('embedding_base_url', 'Embedding API 地址 (OpenAI 兼容, 不含 /embeddings)'),
     ('embedding_api_key', 'Embedding API 密钥'),
-    ('fal_api_key', 'fal.ai 图片生成 API 密钥')
+    ('fal_api_key', 'fal.ai 图片生成 API 密钥'),
+    ('jimeng_api_url', '即梦网关地址 (Seedance 视频生成)'),
+    ('jimeng_api_key', '即梦网关 API 密钥')
 ON CONFLICT (key) DO NOTHING;

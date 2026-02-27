@@ -75,6 +75,8 @@ export function useAgentBootstrap(authenticated: boolean) {
         if (config.embedding_base_url) envVars.EMBEDDING_BASE_URL = config.embedding_base_url;
         if (config.embedding_api_key) envVars.EMBEDDING_API_KEY = config.embedding_api_key;
         if (config.fal_api_key) envVars.FAL_KEY = config.fal_api_key;
+        if (config.jimeng_api_url) envVars.JIMENG_API_URL = config.jimeng_api_url;
+        if (config.jimeng_api_key) envVars.JIMENG_API_KEY = config.jimeng_api_key;
 
         await invoke("start_agent", {
           agentDir: import.meta.env.VITE_AGENT_DIR || "../vm-agent",
