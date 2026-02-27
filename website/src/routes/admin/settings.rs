@@ -52,7 +52,7 @@ fn is_secret_key(key: &str) -> bool {
     matches!(
         key,
         "llm_proxy_key" | "openai_api_key" | "exa_api_key" | "tavily_api_key"
-        | "feishu_client_secret" | "admin_token"
+        | "embedding_api_key" | "feishu_client_secret" | "admin_token"
     )
 }
 
@@ -70,6 +70,8 @@ pub struct UpdateSettingsForm {
     openai_api_key: Option<String>,
     exa_api_key: Option<String>,
     tavily_api_key: Option<String>,
+    embedding_base_url: Option<String>,
+    embedding_api_key: Option<String>,
     feishu_client_id: Option<String>,
     feishu_client_secret: Option<String>,
     admin_token: Option<String>,
@@ -102,11 +104,18 @@ pub async fn update(
             settings.insert("feishu_client_id".to_string(), v);
         }
     }
+    if let Some(v) = form.embedding_base_url {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            settings.insert("embedding_base_url".to_string(), v);
+        }
+    }
     for (key, value) in [
         ("llm_proxy_key", form.llm_proxy_key),
         ("openai_api_key", form.openai_api_key),
         ("exa_api_key", form.exa_api_key),
         ("tavily_api_key", form.tavily_api_key),
+        ("embedding_api_key", form.embedding_api_key),
         ("feishu_client_secret", form.feishu_client_secret),
         ("admin_token", form.admin_token),
     ] {
