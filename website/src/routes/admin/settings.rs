@@ -52,7 +52,8 @@ fn is_secret_key(key: &str) -> bool {
     matches!(
         key,
         "llm_proxy_key" | "openai_api_key" | "exa_api_key" | "tavily_api_key"
-        | "embedding_api_key" | "fal_api_key" | "feishu_client_secret" | "admin_token"
+        | "embedding_api_key" | "fal_api_key" | "jimeng_api_key"
+        | "feishu_client_secret" | "admin_token"
     )
 }
 
@@ -73,6 +74,8 @@ pub struct UpdateSettingsForm {
     embedding_base_url: Option<String>,
     embedding_api_key: Option<String>,
     fal_api_key: Option<String>,
+    jimeng_api_url: Option<String>,
+    jimeng_api_key: Option<String>,
     feishu_client_id: Option<String>,
     feishu_client_secret: Option<String>,
     admin_token: Option<String>,
@@ -111,6 +114,12 @@ pub async fn update(
             settings.insert("embedding_base_url".to_string(), v);
         }
     }
+    if let Some(v) = form.jimeng_api_url {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            settings.insert("jimeng_api_url".to_string(), v);
+        }
+    }
     for (key, value) in [
         ("llm_proxy_key", form.llm_proxy_key),
         ("openai_api_key", form.openai_api_key),
@@ -118,6 +127,7 @@ pub async fn update(
         ("tavily_api_key", form.tavily_api_key),
         ("embedding_api_key", form.embedding_api_key),
         ("fal_api_key", form.fal_api_key),
+        ("jimeng_api_key", form.jimeng_api_key),
         ("feishu_client_secret", form.feishu_client_secret),
         ("admin_token", form.admin_token),
     ] {
