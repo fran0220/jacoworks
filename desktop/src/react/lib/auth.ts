@@ -168,6 +168,7 @@ export async function fetchAgentConfig(): Promise<{
   tavily_api_key?: string;
   embedding_base_url?: string;
   embedding_api_key?: string;
+  fal_api_key?: string;
 }> {
   const response = await authFetch("/api/agent/config", { method: "GET" });
   if (response.status !== 200) {

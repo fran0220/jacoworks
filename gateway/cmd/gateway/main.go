@@ -743,6 +743,7 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"tavily_api_key":     llm.TavilyKey,
 			"embedding_base_url": llm.EmbeddingBaseURL,
 			"embedding_api_key":  llm.EmbeddingAPIKey,
+			"fal_api_key":        llm.FalAPIKey,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
@@ -782,6 +783,7 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"tavily_api_key":       true,
 		"embedding_base_url":   true,
 		"embedding_api_key":    true,
+		"fal_api_key":          true,
 		"feishu_client_id":     true,
 		"feishu_client_secret": true,
 		"admin_token":          true,
@@ -828,6 +830,9 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		}
 		if v, ok := req.Settings["embedding_api_key"]; ok {
 			llm.EmbeddingAPIKey = v
+		}
+		if v, ok := req.Settings["fal_api_key"]; ok {
+			llm.FalAPIKey = v
 		}
 		cfg.UpdateLLM(llm)
 
