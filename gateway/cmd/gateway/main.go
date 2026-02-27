@@ -75,6 +75,10 @@ func main() {
 				llm.ExaAPIKey = setting.Value
 			case "tavily_api_key":
 				llm.TavilyKey = setting.Value
+			case "embedding_base_url":
+				llm.EmbeddingBaseURL = setting.Value
+			case "embedding_api_key":
+				llm.EmbeddingAPIKey = setting.Value
 			case "feishu_client_id":
 				cfg.Auth.FeishuClientID = setting.Value
 			case "feishu_client_secret":
@@ -732,11 +736,13 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 		}
 		llm := cfg.GetLLM()
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"llm_proxy_url":  llm.ProxyURL,
-			"llm_proxy_key":  llm.ProxyKey,
-			"openai_api_key": llm.OpenAIAPIKey,
-			"exa_api_key":    llm.ExaAPIKey,
-			"tavily_api_key": llm.TavilyKey,
+			"llm_proxy_url":      llm.ProxyURL,
+			"llm_proxy_key":      llm.ProxyKey,
+			"openai_api_key":     llm.OpenAIAPIKey,
+			"exa_api_key":        llm.ExaAPIKey,
+			"tavily_api_key":     llm.TavilyKey,
+			"embedding_base_url": llm.EmbeddingBaseURL,
+			"embedding_api_key":  llm.EmbeddingAPIKey,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
@@ -774,6 +780,8 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"openai_api_key":       true,
 		"exa_api_key":          true,
 		"tavily_api_key":       true,
+		"embedding_base_url":   true,
+		"embedding_api_key":    true,
 		"feishu_client_id":     true,
 		"feishu_client_secret": true,
 		"admin_token":          true,
@@ -814,6 +822,12 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		}
 		if v, ok := req.Settings["tavily_api_key"]; ok {
 			llm.TavilyKey = v
+		}
+		if v, ok := req.Settings["embedding_base_url"]; ok {
+			llm.EmbeddingBaseURL = v
+		}
+		if v, ok := req.Settings["embedding_api_key"]; ok {
+			llm.EmbeddingAPIKey = v
 		}
 		cfg.UpdateLLM(llm)
 

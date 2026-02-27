@@ -21,5 +21,7 @@ INSERT INTO system_settings (key, description) VALUES
     ('tavily_api_key', 'Tavily 搜索 API 密钥'),
     ('feishu_client_id', '飞书应用 Client ID'),
     ('feishu_client_secret', '飞书应用 Client Secret'),
-    ('admin_token', '管理员 API Token')
+    ('admin_token', '管理员 API Token'),
+    ('embedding_base_url', 'Embedding API 地址 (OpenAI 兼容, 不含 /embeddings)'),
+    ('embedding_api_key', 'Embedding API 密钥')
 ON CONFLICT (key) DO NOTHING;

@@ -146,9 +146,11 @@ async function handlePrompt(command: PromptCommand) {
       ? { streamingBehavior: command.streaming_behavior || "followUp" as const }
       : undefined;
 
-    session.prompt(command.message, options).catch((err) => {
-      finish(err instanceof Error ? err.message : "prompt failed");
-    });
+    session.prompt(command.message, options)
+      .then(() => finish())
+      .catch((err) => {
+        finish(err instanceof Error ? err.message : "prompt failed");
+      });
   } catch (err) {
     const error = err instanceof Error ? err.message : "prompt failed";
     sendResponse(id, command.type, false, { error });

@@ -8,6 +8,10 @@ export interface Config {
   proxyUrl: string;
   proxyKey: string;
   openaiApiKey: string;
+  /** Embedding API base URL (不含 /embeddings 后缀), 默认 https://api.openai.com/v1 */
+  embeddingBaseUrl: string;
+  /** Embedding API key, 默认复用 OPENAI_API_KEY */
+  embeddingApiKey: string;
   workspaceDir: string;
   memoryRootDir: string;
   primaryModel: string;
@@ -129,12 +133,18 @@ export function loadConfig(): Config {
   const heartbeatActiveStart = process.env.HEARTBEAT_ACTIVE_START;
   const heartbeatActiveEnd = process.env.HEARTBEAT_ACTIVE_END;
 
+  const openaiApiKey = process.env.OPENAI_API_KEY || "";
+  const embeddingApiKey = process.env.EMBEDDING_API_KEY || openaiApiKey;
+  const embeddingBaseUrl = process.env.EMBEDDING_BASE_URL || "https://api.openai.com/v1";
+
   return {
     port: parseInt(process.env.PORT || "18789", 10),
     gatewayToken: process.env.GATEWAY_TOKEN || "",
     proxyUrl,
     proxyKey,
-    openaiApiKey: process.env.OPENAI_API_KEY || "",
+    openaiApiKey,
+    embeddingBaseUrl,
+    embeddingApiKey,
     workspaceDir: process.env.WORKSPACE_DIR || process.cwd(),
     memoryRootDir: process.env.MEMORY_ROOT_DIR || defaultMemoryRootDir(),
     primaryModel: process.env.PRIMARY_MODEL || "claude-sonnet-4-6",

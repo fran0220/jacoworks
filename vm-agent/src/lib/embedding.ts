@@ -1,14 +1,14 @@
 /**
- * OpenAI Embedding API 客户端
- * 使用 text-embedding-3-small (1536 维) 生成文本向量
+ * Embedding API 客户端
+ * 支持 OpenAI 兼容的 embedding 服务 (可通过 EMBEDDING_BASE_URL 配置)
+ * 默认使用 text-embedding-3-small (1536 维)
  */
 
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const EMBEDDING_DIMENSIONS = 1536;
-const OPENAI_EMBEDDING_URL = "https://api.openai.com/v1/embeddings";
 
 // ─── 批量限制 ───────────────────────────────────────
-const MAX_BATCH_SIZE = 96; // OpenAI 单次最多 2048，但小批量更稳定
+const MAX_BATCH_SIZE = 96;
 
 export type Embedding = number[];
 
@@ -18,9 +18,14 @@ interface EmbeddingResponse {
 }
 
 let _apiKey = "";
+let _baseUrl = "https://api.openai.com/v1";
 
-export function initEmbedding(apiKey: string) {
+export function initEmbedding(apiKey: string, baseUrl?: string) {
   _apiKey = apiKey;
+  if (baseUrl) {
+    // 去除尾部斜杠
+    _baseUrl = baseUrl.replace(/\/+$/, "");
+  }
 }
 
 export function isEmbeddingAvailable(): boolean {
@@ -39,14 +44,15 @@ export async function embed(text: string): Promise<Embedding> {
  * 批量生成 embedding（自动分片）
  */
 export async function embedBatch(texts: string[]): Promise<Embedding[]> {
-  if (!_apiKey) throw new Error("OpenAI API key not configured for embedding");
+  if (!_apiKey) throw new Error("Embedding API key not configured");
   if (texts.length === 0) return [];
 
+  const embeddingUrl = `${_baseUrl}/embeddings`;
   const allEmbeddings: Embedding[] = new Array(texts.length);
 
   for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE) {
     const batch = texts.slice(i, i + MAX_BATCH_SIZE);
-    const res = await fetch(OPENAI_EMBEDDING_URL, {
+    const res = await fetch(embeddingUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -61,7 +67,7 @@ export async function embedBatch(texts: string[]): Promise<Embedding[]> {
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new Error(`Embedding API ${res.status}: ${body.slice(0, 300)}`);
+      throw new Error(`Embedding API ${res.status} (${_baseUrl}): ${body.slice(0, 300)}`);
     }
 
     const json = (await res.json()) as EmbeddingResponse;

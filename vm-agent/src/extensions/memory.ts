@@ -276,6 +276,8 @@ export function createMemoryExtension(memoryRootDir: string): ExtensionFactory {
     });
 
     // ── agent_end: 自动记录 + 增量索引 ──
+    // NOTE: embedding 索引改为 fire-and-forget，不阻塞 agent_end hook，
+    // 避免 OpenAI Embedding API 慢导致前端 streaming 状态卡住 ~1 分钟。
     pi.on("agent_end", async (event) => {
       const text = extractAssistantText(event.messages);
       if (!text) return;
@@ -286,16 +288,14 @@ export function createMemoryExtension(memoryRootDir: string): ExtensionFactory {
       const entry = `## ${nowHHMM()}\n${summary}\n\n`;
       await appendDailyLog(memoryRootDir, entry);
 
-      // 增量索引新条目
+      // 增量索引新条目 — fire-and-forget，不阻塞 hook
       if (useVector) {
         const today = new Date();
         const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
         const source = `daily/${dateStr}.md`;
-        try {
-          await store.index([{ text: entry.trim(), source }]);
-        } catch (e) {
+        store.index([{ text: entry.trim(), source }]).catch((e) => {
           console.error("[memory] Index new entry error:", e);
-        }
+        });
       }
     });
 

@@ -166,6 +166,8 @@ export async function fetchAgentConfig(): Promise<{
   openai_api_key?: string;
   exa_api_key?: string;
   tavily_api_key?: string;
+  embedding_base_url?: string;
+  embedding_api_key?: string;
 }> {
   const response = await authFetch("/api/agent/config", { method: "GET" });
   if (response.status !== 200) {

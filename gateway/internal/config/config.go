@@ -25,11 +25,13 @@ type ChatAgentConfig struct {
 }
 
 type LLMConfig struct {
-	ProxyURL     string `yaml:"proxy_url"`
-	ProxyKey     string `yaml:"proxy_key"`
-	ExaAPIKey    string `yaml:"exa_api_key"`
-	TavilyKey    string `yaml:"tavily_api_key"`
-	OpenAIAPIKey string `yaml:"openai_api_key"`
+	ProxyURL        string `yaml:"proxy_url"`
+	ProxyKey        string `yaml:"proxy_key"`
+	ExaAPIKey       string `yaml:"exa_api_key"`
+	TavilyKey       string `yaml:"tavily_api_key"`
+	OpenAIAPIKey    string `yaml:"openai_api_key"`
+	EmbeddingBaseURL string `yaml:"embedding_base_url"`
+	EmbeddingAPIKey  string `yaml:"embedding_api_key"`
 }
 
 type ServerConfig struct {

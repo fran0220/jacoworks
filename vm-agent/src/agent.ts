@@ -224,8 +224,11 @@ export function initAgent(cfg: Config) {
   // 注册中转站所有模型
   registerProxyModels(modelRegistry, cfg.proxyUrl, cfg.proxyKey);
 
-  // 初始化 OpenAI Embedding (向量记忆搜索)
-  if (cfg.openaiApiKey) {
+  // 初始化 Embedding API (向量记忆搜索)
+  // 优先使用 EMBEDDING_API_KEY + EMBEDDING_BASE_URL, 回退到 OPENAI_API_KEY
+  if (cfg.embeddingApiKey) {
+    initEmbedding(cfg.embeddingApiKey, cfg.embeddingBaseUrl);
+  } else if (cfg.openaiApiKey) {
     initEmbedding(cfg.openaiApiKey);
   }
 
@@ -234,7 +237,7 @@ export function initAgent(cfg: Config) {
   console.log(`   LLM Proxy: ${cfg.proxyUrl}`);
   console.log(`   Workspace: ${cfg.workspaceDir}`);
   console.log(`   Memory root: ${cfg.memoryRootDir}`);
-  console.log(`   Embedding: ${isEmbeddingAvailable() ? "OpenAI text-embedding-3-small" : "disabled (no OPENAI_API_KEY)"}`);
+  console.log(`   Embedding: ${isEmbeddingAvailable() ? `text-embedding-3-small → ${cfg.embeddingBaseUrl || "https://api.openai.com/v1"}` : "disabled (no EMBEDDING_API_KEY / OPENAI_API_KEY)"}`);
 
   // 列出已注册的代理模型
   const proxyModels = modelRegistry

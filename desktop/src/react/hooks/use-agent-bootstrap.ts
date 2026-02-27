@@ -65,6 +65,8 @@ export function useAgentBootstrap(authenticated: boolean) {
         if (config.openai_api_key) envVars.OPENAI_API_KEY = config.openai_api_key;
         if (config.exa_api_key) envVars.EXA_API_KEY = config.exa_api_key;
         if (config.tavily_api_key) envVars.TAVILY_API_KEY = config.tavily_api_key;
+        if (config.embedding_base_url) envVars.EMBEDDING_BASE_URL = config.embedding_base_url;
+        if (config.embedding_api_key) envVars.EMBEDDING_API_KEY = config.embedding_api_key;
 
         await invoke("start_agent", {
           agentDir: import.meta.env.VITE_AGENT_DIR || "../vm-agent",
