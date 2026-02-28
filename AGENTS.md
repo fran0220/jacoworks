@@ -337,7 +337,6 @@ cd vm-agent && npm ci && bun build --compile --target=bun-windows-x64 src/index.
 # 3. 准备资源
 mkdir -Force ..\desktop\src-tauri\binaries
 copy dist\vm-agent-x86_64-pc-windows-msvc.exe ..\desktop\src-tauri\binaries\
-tar -czf ..\desktop\src-tauri\resources\skills.tar.gz -C skills .
 
 # 4. 构建 Tauri
 cd ..\desktop && npm ci
@@ -371,7 +370,6 @@ cd vm-agent && npm ci && bun build --compile src/index.ts --outfile dist/vm-agen
 # 2. 准备资源
 mkdir -p ../desktop/src-tauri/binaries
 cp dist/vm-agent-aarch64-apple-darwin ../desktop/src-tauri/binaries/
-tar -czf ../desktop/src-tauri/resources/skills.tar.gz -C skills .
 
 # 3. 构建 Tauri (签名, 跳过公证)
 cd ../desktop

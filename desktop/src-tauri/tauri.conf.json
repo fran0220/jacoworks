@@ -58,8 +58,7 @@
       "binaries/vm-agent"
     ],
     "resources": {
-      "resources/pi-meta/package.json": "resources/pi-meta/package.json",
-      "resources/skills.tar.gz": "resources/skills.tar.gz"
+      "resources/pi-meta/package.json": "resources/pi-meta/package.json"
     }
   },
   "plugins": {

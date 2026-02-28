@@ -587,13 +587,16 @@ export interface SkillInfo {
 
 export function listAvailableSkills(): SkillInfo[] {
   const skills: SkillInfo[] = [];
+  const seen = new Set<string>();
   const userDir = config.userSkillsDir;
 
-  // Helper: load skills from a directory and tag source
+  // Helper: load skills from a directory and tag source (skip duplicates)
   function loadFrom(dir: string, source: "builtin" | "user") {
     if (!existsSync(dir)) return;
     const result = loadSkillsFromDir({ dir, source: "additional" });
     for (const s of result.skills) {
+      if (seen.has(s.name)) continue;
+      seen.add(s.name);
       const { displayName, displayDesc } = readDisplayFields(s.filePath);
       const rel = relative(dir, s.filePath);
       const parts = rel.split("/");

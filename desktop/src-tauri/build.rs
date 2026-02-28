@@ -22,13 +22,6 @@ fn main() {
 
     // Ensure resource files exist for Tauri validation
     std::fs::create_dir_all("resources/pi-meta").ok();
-    if !std::path::Path::new("resources/skills.tar.gz").exists() {
-        // Create an empty tar.gz placeholder for dev builds
-        std::fs::write("resources/skills.tar.gz", &[
-            0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
-            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ]).ok();
-    }
 
     tauri_build::build()
 }

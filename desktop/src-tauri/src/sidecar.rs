@@ -268,47 +268,6 @@ pub struct AgentStatus {
 
 // ───── Sidecar binary resolution ──────────────────────────────
 
-/// Extract bundled skills.tar.gz to app_data/builtin-skills/ if not already present.
-fn ensure_builtin_skills(app: &AppHandle) -> Option<PathBuf> {
-    let app_data = app.path().app_data_dir().ok()?;
-    let skills_dir = app_data.join("builtin-skills");
-    let version_marker = skills_dir.join(".version");
-    let current_version = env!("CARGO_PKG_VERSION");
-
-    // Skip extraction if skills dir exists and version matches
-    if version_marker.exists() {
-        if let Ok(v) = std::fs::read_to_string(&version_marker) {
-            if v.trim() == current_version {
-                return Some(skills_dir);
-            }
-        }
-    }
-
-    let resource_dir = app.path().resource_dir().ok()?;
-    let archive_path = resource_dir.join("resources").join("skills.tar.gz");
-    if !archive_path.exists() || archive_path.metadata().map(|m| m.len()).unwrap_or(0) < 100 {
-        return None; // Placeholder or missing
-    }
-
-    // Extract skills archive
-    if skills_dir.exists() {
-        let _ = std::fs::remove_dir_all(&skills_dir);
-    }
-    std::fs::create_dir_all(&skills_dir).ok()?;
-
-    let file = std::fs::File::open(&archive_path).ok()?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
-    if archive.unpack(&skills_dir).is_err() {
-        let _ = std::fs::remove_dir_all(&skills_dir);
-        return None;
-    }
-
-    // Write version marker
-    let _ = std::fs::write(&version_marker, current_version);
-    Some(skills_dir)
-}
-
 /// Look for the bun-compiled sidecar binary next to the main executable.
 /// Returns None in dev mode (binary not bundled).
 fn find_sidecar_binary() -> Option<PathBuf> {
@@ -457,11 +416,6 @@ pub async fn start_agent(
                     c.env("PI_PACKAGE_DIR", pi_meta.to_string_lossy().as_ref());
                 }
             }
-            // Bundled builtin skills (extracted from skills.tar.gz)
-            if let Some(skills_dir) = ensure_builtin_skills(&app) {
-                c.env("SKILLS_PATHS", skills_dir.to_string_lossy().as_ref());
-            }
-
             (c, bin_dir)
         } else {
             // Dev fallback: node + dist/index.js

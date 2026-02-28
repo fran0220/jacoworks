@@ -4,7 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
 import { getSettings } from "../lib/config";
 import { setSkills } from "../lib/skills";
-import { pullSystemSkills, syncSkills } from "../lib/skill-sync";
+import {
+  syncUserSkills,
+  pullSystemSkills,
+  startSkillPolling,
+  stopSkillPolling,
+} from "../lib/skill-sync";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -61,8 +66,12 @@ export function useAgentBootstrap(authenticated: boolean) {
 
         const config = await fetchAgentConfig();
 
-        // Pull latest system skills from gateway BEFORE starting agent
-        // Non-blocking: failures fall back to bundled/cached skills
+        // 1. Push user skills to gateway (for OpenClaw access)
+        await syncUserSkills().catch((err) =>
+          console.warn("[boot] user skill push failed:", err),
+        );
+
+        // 2. Pull system skills from gateway (source of truth) BEFORE starting agent
         await pullSystemSkills().catch((err) =>
           console.warn("[boot] skill pull failed:", err),
         );
@@ -78,15 +87,14 @@ export function useAgentBootstrap(authenticated: boolean) {
         if (config.jimeng_api_url) envVars.JIMENG_API_URL = config.jimeng_api_url;
         if (config.jimeng_api_key) envVars.JIMENG_API_KEY = config.jimeng_api_key;
 
+        // 3. Start agent — loads skills from remote-skills/ (pulled) + user skills
         await invoke("start_agent", {
           agentDir: import.meta.env.VITE_AGENT_DIR || "../vm-agent",
           envVars,
         });
 
-        // Agent started — sync skills to gateway in background
-        syncSkills().catch((err) =>
-          console.warn("[boot] skills sync failed:", err),
-        );
+        // 4. Start periodic polling for skill updates (lazy: new sessions pick them up)
+        startSkillPolling();
       })(),
       20_000,
       "Agent 启动超时，请点击右下角 RPC 日志排查",
@@ -110,6 +118,7 @@ export function useAgentBootstrap(authenticated: boolean) {
     return () => {
       cancelled = true;
       unlistenSkills?.();
+      stopSkillPolling();
     };
   }, [authenticated, isTauriEnv, agentBootNonce]);
 

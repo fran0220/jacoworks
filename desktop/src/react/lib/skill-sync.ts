@@ -1,7 +1,12 @@
 /**
- * Skills sync client — bidirectional:
- *   pull: gateway → desktop (system skills hot-update)
- *   push: desktop → gateway (for OpenClaw containers)
+ * Skills sync client:
+ *   pull: gateway → desktop (system skills, source of truth)
+ *   push: desktop → gateway (user skills only, for OpenClaw containers)
+ *   poll: periodic checksum check for silent updates
+ *
+ * System skills are managed exclusively on the gateway (admin hotfix).
+ * Desktop only pulls system skills and caches them in app_data/remote-skills/.
+ * User-created skills are pushed to gateway for OpenClaw container access.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -57,15 +62,14 @@ async function uploadSkills(
 }
 
 /**
- * Sync skills to gateway. One-way push.
- * Compares local aggregate checksum with server; uploads only if changed.
+ * Push user-created skills to gateway (for OpenClaw container access).
+ * Only uploads user skills; system skills are managed on the gateway.
  */
-export async function syncSkills(): Promise<void> {
+export async function syncUserSkills(): Promise<void> {
   try {
     const token = getToken();
     if (!token) return;
 
-    // Get server checksums
     const checksumRes = await httpFetch(`${GATEWAY_URL}/api/skills/checksum`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
@@ -76,25 +80,6 @@ export async function syncSkills(): Promise<void> {
         ? JSON.parse(checksumRes.body)
         : { system: "", user: "" };
 
-    // Builtin skills: vm-agent/skills/ resolved relative to agent workspace
-    // The agent dir is resolved by sidecar; we use a known relative path
-    const builtinDir = await resolveBuiltinSkillsDir();
-    if (builtinDir) {
-      const builtinFiles: FileEntry[] = await invoke("list_skill_files", {
-        dir: builtinDir,
-      });
-      if (builtinFiles.length > 0) {
-        const localChecksum = await aggregateChecksum(builtinFiles);
-        if (localChecksum !== serverChecksums.system) {
-          await uploadSkills(token, "builtin", builtinFiles);
-          console.log(
-            `[skill-sync] uploaded ${builtinFiles.length} builtin skill files`,
-          );
-        }
-      }
-    }
-
-    // User skills: <app_data>/skills (managed by sidecar.rs)
     const userDir: string = await invoke("get_user_skills_dir");
     const userFiles: FileEntry[] = await invoke("list_skill_files", {
       dir: userDir,
@@ -113,7 +98,7 @@ export async function syncSkills(): Promise<void> {
   }
 }
 
-// ─── Pull: gateway → desktop (hot-update system skills) ──────
+// ─── Pull: gateway → desktop (system skills, source of truth) ──
 
 /** Cached ETag from last pull, avoids re-downloading unchanged skills. */
 let lastPullEtag = "";
@@ -152,7 +137,6 @@ export async function pullSystemSkills(): Promise<void> {
     });
 
     if (res.status === 304) {
-      // Server skills unchanged
       return;
     }
 
@@ -166,7 +150,6 @@ export async function pullSystemSkills(): Promise<void> {
       return;
     }
 
-    // Write files to app_data/remote-skills/ via Tauri command
     await invoke("write_remote_skills", {
       files: data.files.map((f) => ({
         file_path: f.file_path,
@@ -179,21 +162,33 @@ export async function pullSystemSkills(): Promise<void> {
       `[skill-pull] pulled ${data.files.length} system skills from gateway`,
     );
   } catch (err) {
-    // Non-fatal: agent can still use bundled/cached skills
     console.warn("[skill-pull] pull error:", err);
   }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────
+// ─── Periodic polling for skill updates ──────────────────────
 
-async function resolveBuiltinSkillsDir(): Promise<string | null> {
-  try {
-    // skills/ is inside vm-agent directory (agent workspace).
-    const resolved: string = await invoke("resolve_file_path", {
-      path: "skills",
-    });
-    return resolved;
-  } catch {
-    return null;
+const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start periodic skill polling. Checks gateway checksum every 30 min;
+ * pulls new skills if changed. New agent sessions will pick them up lazily.
+ */
+export function startSkillPolling(): void {
+  if (pollTimer) return;
+  pollTimer = setInterval(() => {
+    pullSystemSkills().catch((err) =>
+      console.warn("[skill-poll] poll error:", err),
+    );
+  }, POLL_INTERVAL_MS);
+  console.log("[skill-poll] started (interval: 30min)");
+}
+
+/** Stop periodic skill polling. */
+export function stopSkillPolling(): void {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
   }
 }
