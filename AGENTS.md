@@ -25,12 +25,15 @@ vm-agent/                        本地 Agent sidecar (Pi SDK + RPC stdio)
     config.ts                    环境变量 (网关下发, 无本地 fallback)
     agent.ts                     Session 池 + 4 Provider + per-user 隔离 + title 生成
     prompts/system.ts            系统提示词 (核心身份 + SOUL.md overlay + 动态能力)
-    extensions/memory.ts         记忆系统 (向量语义搜索 + Markdown 文件存储)
+    extensions/memory.ts         记忆系统 (context hook 纯本地读 + memory_search/save 工具)
     services/{heartbeat,cron}.ts 后台服务 (sidecar 模式默认关闭)
     tools/web.ts                 web_search (Tavily) + web_fetch
-    lib/embedding.ts             OpenAI Embedding API 客户端 (text-embedding-3-small)
-    lib/vector-store.ts          本地向量存储 (JSON 持久化 + 余弦相似度)
+    lib/embedding.ts             OpenAI Embedding API 客户端 (text-embedding-3-small, AbortController 超时)
+    lib/memory-store.ts          SQLite + FTS5 记忆存储 (BM25 + CJK 分词 + 向量 rerank + 迁移)
     lib/{daily-log,prompt-queue}.ts
+    __tests__/rpc.test.ts        E2E RPC 测试 (真实网关认证 + 双用户隔离)
+    __tests__/helpers/            测试辅助 (gateway-config.ts — 自动获取 LLM 配置)
+    lib/__tests__/               单元测试 (memory-store, daily-log)
 
 desktop/                         Tauri v2 + React 18 桌面客户端
   src-tauri/src/
@@ -242,6 +245,9 @@ chat_agent: { url, token }  # 可选外部 ChatAgent
 - `MEMORY_ROOT_DIR` — 记忆根目录 (默认 `~/Library/Application Support/JAcoworks/memory`)
 - `PRIMARY_MODEL=claude-sonnet-4-6` / `PRIMARY_PROVIDER=proxy-claude`
 - `MEMORY_ENABLED=true` / `HEARTBEAT_ENABLED=false` / `CRON_ENABLED=false`
+- `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` — 向量 embedding (可选, 回退 OPENAI_API_KEY)
+- `MEMORY_EMBED_TIMEOUT_MS=8000` / `MEMORY_EMBED_CACHE_MAX=10000`
+- `MEMORY_HYBRID_W_BM25=0.3` / `MEMORY_HYBRID_W_VEC=0.7` — hybrid 搜索权重
 - `SKILLS_PATHS` — 技能目录 (逗号分隔)
 - `TOOL_DENY_LIST` / `TAVILY_API_KEY`
 
@@ -480,7 +486,9 @@ psql "postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks" \
 ```
 
 测试账号: `admin@jacoworks.local` / `admin123` (role=admin)
+测试账号: `e2e-tester` / `e2e-test-2026` (role=user, E2E 测试专用)
 测试激活码: `JACO-TEST-2026` (admin) / `JACO-USER-2026` (user)
+E2E 激活码: `02fd4b5c6a128c762a99966de11ba110` (user, max_uses=100, E2E 自动注册用)
 
 ### 本地配置文件 (gitignore, 不入库)
 
@@ -499,7 +507,7 @@ make dev-gateway       # Go 网关 → localhost:8847
 make dev-website       # Rust 官网 → localhost:9527
 make dev-agent         # vm-agent 热重载 (调试用)
 make dev-desktop       # Tauri 桌面端 (Vite HMR)
-make check             # 全量 lint + typecheck + test
+make check             # 全量 lint + typecheck + test (含 vm-agent 单元测试)
 make build             # 构建所有服务端组件
 make deploy            # SSH jingao 远程 git pull + 编译 + 重启
 make deploy-gateway    # 仅部署 Gateway
@@ -507,6 +515,21 @@ make deploy-website    # 仅部署 Website
 make deploy-sync       # 仅同步代码 (git pull)
 make clean             # 清理构建产物
 ```
+
+### vm-agent 测试
+
+三层测试，`bun test` 跑器，零额外依赖：
+
+| 层 | 命令 | 测试数 | 依赖 |
+|---|---|---|---|
+| **Unit** | `cd vm-agent && npm test` | 37 | 零网络，纯本地 SQLite |
+| **E2E** | `cd vm-agent && npm run test:e2e` | 15 | 自动从网关获取密钥 |
+| **全量** | `cd vm-agent && npm run test:all` | 52 | 同上 |
+
+- **单元测试** (`src/lib/__tests__/`): memory-store (FTS5+CJK+hybrid+migration+cache) + daily-log (CRUD+truncate)
+- **E2E RPC** (`src/__tests__/rpc.test.ts`): spawn vm-agent 进程 → 真实网关认证 (admin + e2e-tester 双用户) → LLM 对话 → 内存持久化 → user-scoped 隔离验证 → memory_save/search 工具链 → title 生成
+- **自动降级**: 网关不可达时 E2E 全部优雅跳过，单元测试始终可跑
+- `make check-agent` = typecheck + 单元测试 (CI 安全)
 
 ### 日常工作流
 
@@ -531,6 +554,8 @@ make clean             # 清理构建产物
 - [x] 飞书 SSO 联调 (凭证已配置, Goth Provider 热重载已修复)
 - [x] 飞书 Bot 消息路由 (feishubot 包, webhook → 容器路由)
 - [x] 向量记忆系统 (OpenAI Embedding API + 本地 JSON 向量缓存, 与 OpenClaw 同架构)
+- [x] 记忆系统重构 (SQLite+FTS5 hybrid search, context hook 零 API 调用, 向量 fire-and-forget)
+- [x] vm-agent 测试基础设施 (bun test: 37 单元 + 15 E2E RPC, 真实网关认证 + 双用户隔离)
 - [x] 记忆/技能同步 (gateway API + 容器冻结前拉取 + 解冻后推送)
 - [x] Tauri updater 签名密钥 (minisign 密钥对 + pubkey 写入 tauri.conf.json)
 - [x] GitHub Secrets 配置 (JINGAO_HOST/SSH_KEY/SSH_USER + TAURI_SIGNING_*)

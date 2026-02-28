@@ -12,6 +12,14 @@ export interface Config {
   embeddingBaseUrl: string;
   /** Embedding API key, 默认复用 OPENAI_API_KEY */
   embeddingApiKey: string;
+  /** Embedding API 超时 (ms) */
+  embedTimeoutMs: number;
+  /** Embedding 缓存上限 */
+  embedCacheMax: number;
+  /** Hybrid search BM25 权重 */
+  hybridWBm25: number;
+  /** Hybrid search Vector 权重 */
+  hybridWVec: number;
   workspaceDir: string;
   memoryRootDir: string;
   primaryModel: string;
@@ -151,6 +159,10 @@ export function loadConfig(): Config {
     openaiApiKey,
     embeddingBaseUrl,
     embeddingApiKey,
+    embedTimeoutMs: parseInt(process.env.MEMORY_EMBED_TIMEOUT_MS || "8000", 10),
+    embedCacheMax: parseInt(process.env.MEMORY_EMBED_CACHE_MAX || "10000", 10),
+    hybridWBm25: parseFloat(process.env.MEMORY_HYBRID_W_BM25 || "0.3"),
+    hybridWVec: parseFloat(process.env.MEMORY_HYBRID_W_VEC || "0.7"),
     workspaceDir: process.env.WORKSPACE_DIR || process.cwd(),
     memoryRootDir: process.env.MEMORY_ROOT_DIR || defaultMemoryRootDir(),
     primaryModel: process.env.PRIMARY_MODEL || "claude-sonnet-4-6",

@@ -133,8 +133,8 @@ check-gateway: ## Go vet + test
 check-website: ## Cargo check + test
 	cd website && cargo check && cargo test
 
-check-agent: ## TypeScript typecheck
-	cd vm-agent && npm run typecheck
+check-agent: ## TypeScript typecheck + 单元测试
+	cd vm-agent && npm run typecheck && npm test
 
 check-desktop: ## Desktop typecheck
 	cd desktop && npm run check

@@ -13,6 +13,7 @@ Thumbs.db
 .env.*
 !.env.template
 !.env.example
+!.env.test.example
 gateway/gateway.yaml
 gateway/gateway-prod.yaml
 gateway/data/

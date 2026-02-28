@@ -1,17 +1,17 @@
 ---
 name: nano-banana-pro
 display-name: 图片生成
-display-description: 使用 Nano Banana 2 生成或编辑图片 (自动 fallback 到 Pro)
+display-description: 使用 Nano Banana 2 生成或编辑图片 (中转站优先, fal.ai fallback)
 description: >
   Generate or edit images with Nano Banana 2 (Gemini 3.1 Flash Image, fast & cheap).
-  Auto-fallback to Nano Banana Pro (Gemini 3 Pro) if fal.ai unavailable.
+  Primary via LLM Proxy, auto-fallback to fal.ai if proxy unavailable.
   Supports text-to-image and image-to-image editing.
   Use when user asks to create, generate, draw, or edit an image.
 ---
 
 # 图片生成与编辑
 
-双引擎图片生成：优先 fal-ai/nano-banana-2 (快速廉价)，失败自动 fallback 到 nano-banana-pro (最高画质)。
+双引擎图片生成：优先 LLM 中转站 nano-banana-2 (统一计费)，失败自动 fallback 到 fal.ai nano-banana-2。
 
 ## 使用方法
 
@@ -49,12 +49,12 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 
 ## 引擎选择
 
-| 引擎 | 模型 | 速度 | 画质 | 条件 |
-|------|------|------|------|------|
-| **Primary** | fal-ai/nano-banana-2 (Gemini 3.1 Flash) | 4-6s | 95% Pro | `FAL_KEY` 已配置 |
-| **Fallback** | nano-banana-pro (Gemini 3 Pro) | 10-20s | 最高 | `LLM_PROXY_KEY` 已配置 |
+| 引擎 | 模型 | 协议 | 条件 |
+|------|------|------|------|
+| **Primary** | nano-banana-2 via LLM Proxy | Gemini generateContent (`?key=` query param) | `LLM_PROXY_KEY` 已配置 |
+| **Fallback** | nano-banana-2 via fal.ai | fal.ai REST | `FAL_KEY` 已配置 |
 
-脚本自动选择：FAL_KEY 有值 → nano-banana-2；失败或无 key → fallback nano-banana-pro。
+脚本自动选择：LLM_PROXY_KEY 有值 → 中转站 nano-banana-2；失败或无 key → fallback fal.ai。
 
 ## 宽高比映射 (nano-banana-2)
 
@@ -66,7 +66,7 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 | "竖屏" / "手机" / "9:16" | `9:16` |
 | "4:3" / "标准" | `4:3` |
 
-## 分辨率映射 (Pro fallback)
+## 分辨率映射
 
 | 用户说法 | 参数 |
 |----------|------|
@@ -74,7 +74,7 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 | "2K" / "中等" | `2K` |
 | "高清" / "4K" / "ultra" | `4K` |
 
-编辑模式下若未指定分辨率，脚本会根据输入图片尺寸自动选择。
+编辑模式下若未指定分辨率，脚本会根据输入图片尺寸自动选择。分辨率仅在中转站 Proxy 模式生效。
 
 ## 默认工作流：draft → iterate → final
 
@@ -106,9 +106,9 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 
 | 变量 | 说明 |
 |------|------|
-| `FAL_KEY` | fal.ai API 密钥 (primary, 管理后台配置) |
-| `LLM_PROXY_URL` | 中转站地址 (fallback) |
-| `LLM_PROXY_KEY` | 中转站 API 密钥 (fallback) |
+| `LLM_PROXY_URL` | 中转站地址 (primary, 默认 `http://67.230.171.248:8317`) |
+| `LLM_PROXY_KEY` | 中转站 API 密钥 (primary) |
+| `FAL_KEY` | fal.ai API 密钥 (fallback) |
 
 这些变量由 Tauri 启动时注入（网关 `/api/agent/config` 下发）。
 
@@ -123,9 +123,9 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 
 | 错误 | 原因 | 解决 |
 |------|------|------|
-| `neither FAL_KEY nor LLM_PROXY_KEY` | 两个 key 都未配置 | 管理后台「系统设置」配置 fal_api_key |
+| `neither LLM_PROXY_KEY nor FAL_KEY` | 两个 key 都未配置 | 管理后台「系统设置」配置 LLM 密钥 |
+| `Proxy API error: HTTP 503` | 中转站渠道不可用 | 自动 fallback 到 fal.ai，或检查中转站 |
 | `fal API error: HTTP 401` | FAL_KEY 无效 | 检查 fal.ai 密钥 |
-| `fal API error: HTTP 429` | fal.ai 限流 | 等待重试或自动 fallback 到 Pro |
+| `fal API error: HTTP 429` | fal.ai 限流 | 等待后重试 |
 | `Error loading input image` | 文件不存在或不可读 | 检查 `--input-image` 路径 |
-| `Proxy API error` | 中转站异常 | 检查中转站状态 |
 | `No image was generated` | 模型拒绝生成（安全过滤） | 调整 prompt |

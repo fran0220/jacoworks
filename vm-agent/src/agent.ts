@@ -227,9 +227,9 @@ export function initAgent(cfg: Config) {
   // 初始化 Embedding API (向量记忆搜索)
   // 优先使用 EMBEDDING_API_KEY + EMBEDDING_BASE_URL, 回退到 OPENAI_API_KEY
   if (cfg.embeddingApiKey) {
-    initEmbedding(cfg.embeddingApiKey, cfg.embeddingBaseUrl);
+    initEmbedding(cfg.embeddingApiKey, cfg.embeddingBaseUrl, cfg.embedTimeoutMs);
   } else if (cfg.openaiApiKey) {
-    initEmbedding(cfg.openaiApiKey);
+    initEmbedding(cfg.openaiApiKey, undefined, cfg.embedTimeoutMs);
   }
 
   console.log("✅ Agent initialized");
@@ -291,7 +291,13 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   const extensionFactories: ExtensionFactory[] = [];
 
   if (config.memoryEnabled) {
-    extensionFactories.push(createMemoryExtension(userMemoryRootDir(opts?.userId)));
+    extensionFactories.push(
+      createMemoryExtension(userMemoryRootDir(opts?.userId), {
+        embedCacheMax: config.embedCacheMax,
+        hybridWBm25: config.hybridWBm25,
+        hybridWVec: config.hybridWVec,
+      }),
+    );
   }
 
   if (config.cronEnabled && cronService) {

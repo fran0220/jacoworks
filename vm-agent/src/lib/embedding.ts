@@ -19,12 +19,15 @@ interface EmbeddingResponse {
 
 let _apiKey = "";
 let _baseUrl = "https://api.openai.com/v1";
+let _timeoutMs = 8000;
 
-export function initEmbedding(apiKey: string, baseUrl?: string) {
+export function initEmbedding(apiKey: string, baseUrl?: string, timeoutMs?: number) {
   _apiKey = apiKey;
   if (baseUrl) {
-    // 去除尾部斜杠
     _baseUrl = baseUrl.replace(/\/+$/, "");
+  }
+  if (timeoutMs !== undefined) {
+    _timeoutMs = timeoutMs;
   }
 }
 
@@ -52,27 +55,35 @@ export async function embedBatch(texts: string[]): Promise<Embedding[]> {
 
   for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE) {
     const batch = texts.slice(i, i + MAX_BATCH_SIZE);
-    const res = await fetch(embeddingUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${_apiKey}`,
-      },
-      body: JSON.stringify({
-        model: EMBEDDING_MODEL,
-        input: batch,
-        dimensions: EMBEDDING_DIMENSIONS,
-      }),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), _timeoutMs);
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Embedding API ${res.status} (${_baseUrl}): ${body.slice(0, 300)}`);
-    }
+    try {
+      const res = await fetch(embeddingUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${_apiKey}`,
+        },
+        body: JSON.stringify({
+          model: EMBEDDING_MODEL,
+          input: batch,
+          dimensions: EMBEDDING_DIMENSIONS,
+        }),
+        signal: controller.signal,
+      });
 
-    const json = (await res.json()) as EmbeddingResponse;
-    for (const item of json.data) {
-      allEmbeddings[i + item.index] = item.embedding;
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`Embedding API ${res.status} (${_baseUrl}): ${body.slice(0, 300)}`);
+      }
+
+      const json = (await res.json()) as EmbeddingResponse;
+      for (const item of json.data) {
+        allEmbeddings[i + item.index] = item.embedding;
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 
