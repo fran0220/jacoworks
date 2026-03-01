@@ -319,7 +319,7 @@ func (c *SSHClient) ProvisionContainer(name, containerToken string, envVars map[
 	log.Info().Str("name", name).Str("template", c.template).Msg("provisioning container")
 
 	// 1. Clone from template snapshot
-	if _, err := c.lxc("copy", c.template+"/v2-full-verified", name); err != nil {
+	if _, err := c.lxc("copy", c.template+"/v3-godot", name); err != nil {
 		return "", fmt.Errorf("clone: %w", err)
 	}
 

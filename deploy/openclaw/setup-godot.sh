@@ -17,12 +17,15 @@ mv "Godot_v${GODOT_VERSION}-stable_linux.arm64" /usr/local/bin/godot
 chmod +x /usr/local/bin/godot
 rm godot.zip
 
-# 2. Install Web Export Template
-echo "📦 Installing Web Export Template (~1.2GB, this takes a while)..."
+# 2. Install Web Export Template (~1.2GB download, only keep web templates ~86MB)
+echo "📦 Installing Web Export Template..."
 wget -q "${EXPORT_TPL_URL}" -O templates.tpz
 mkdir -p /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable
 unzip -o templates.tpz -d /tmp/tpl
 mv /tmp/tpl/templates/* /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+# Remove non-web platforms to save ~1.8GB
+cd /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+rm -f android_* ios.zip macos.zip linux_* windows_*
 rm -rf templates.tpz /tmp/tpl
 
 # 3. Install Xvfb + ImageMagick (virtual display + screenshots)
