@@ -408,6 +408,7 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 			"LLM_PROXY_URL":  llm.ProxyURL,
 			"LLM_PROXY_KEY":  llm.ProxyKey,
 			"OPENAI_API_KEY": llm.OpenAIAPIKey,
+			"FAL_API_KEY":    llm.FalAPIKey,
 		}
 		deviceKey := wsProxy.GetDeviceKeyInfo()
 		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
@@ -679,6 +680,7 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			"LLM_PROXY_URL":  llm.ProxyURL,
 			"LLM_PROXY_KEY":  llm.ProxyKey,
 			"OPENAI_API_KEY": llm.OpenAIAPIKey,
+			"FAL_API_KEY":    llm.FalAPIKey,
 		}
 		deviceKey := wsProxy.GetDeviceKeyInfo()
 		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)

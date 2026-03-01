@@ -3,9 +3,10 @@ name: game-dev-ai
 display-name: 游戏开发助手
 display-description: 使用 Godot 引擎开发游戏，支持创建、调试、导出和发布
 description: >
-  Game development with Godot Engine. Creates scenes, scripts, runs and
-  debugs games using Godot CLI. Exports to Web and deploys to game gallery.
-  Triggers on: 做游戏, 开发游戏, game development, godot, 游戏开发.
+  Game development with Godot Engine. Creates scenes, scripts, generates
+  assets (images via Nano Banana 2, SFX and music via Beatoven on fal.ai),
+  runs and debugs games using Godot CLI. Exports to Web and deploys to
+  game gallery. Triggers on: 做游戏, 开发游戏, game development, godot, 游戏开发.
 ---
 
 # 游戏开发助手 — Godot Engine
@@ -148,6 +149,112 @@ kill %1  # 杀掉 Xvfb
 - `Invalid get index` → 节点路径错误，检查场景树
 - `Condition "..." is true` → 运行时断言，检查逻辑
 
+## 资产生成 (AI)
+
+容器环境变量 `FAL_API_KEY` 由网关自动注入。通过 fal.ai REST API 生成图像、音效、音乐。
+
+### 图像 — Nano Banana 2 (sprite / 贴图 / 背景 / UI)
+
+```bash
+# 生成游戏 sprite (返回 JSON，含 images[0].url)
+curl -s -X POST "https://queue.fal.run/fal-ai/nano-banana-2" \
+  -H "Authorization: Key $FAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "pixel art character sprite, 2D platformer hero, idle pose, transparent background, 64x64",
+    "aspect_ratio": "1:1"
+  }' | python3 -c "
+import sys,json,urllib.request
+url = json.load(sys.stdin)['images'][0]['url']
+urllib.request.urlretrieve(url, '/tmp/sprite.png')
+print(f'Downloaded: {url}')
+"
+
+# 下载到项目
+cp /tmp/sprite.png ~/game/assets/sprites/player.png
+```
+
+常用 prompt 模式：
+- sprite: `"pixel art [描述], 2D game sprite, transparent background, 64x64"`
+- 贴图: `"seamless tileable [描述] texture, top-down view, game asset"`
+- 背景: `"2D game background, [描述], parallax layer, wide format"`
+- UI: `"game UI button [描述], flat design, clean edges"`
+
+### 音效 — Beatoven Sound Effect Generation
+
+```bash
+# 生成音效 (返回 JSON，含 audio.url)
+curl -s -X POST "https://queue.fal.run/beatoven/sound-effect-generation" \
+  -H "Authorization: Key $FAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "8-bit coin pickup chime, bright and short",
+    "duration": 1.5
+  }' | python3 -c "
+import sys,json,urllib.request
+url = json.load(sys.stdin)['audio']['url']
+urllib.request.urlretrieve(url, '/tmp/sfx.wav')
+print(f'Downloaded: {url}')
+"
+
+cp /tmp/sfx.wav ~/game/assets/sounds/coin.wav
+```
+
+常用 prompt 模式：
+- 跳跃: `"platformer jump sound, cartoon bounce, short"`
+- 爆炸: `"retro game explosion, 8-bit style, medium"`
+- 受击: `"character hit damage sound, impact thud, brief"`
+- 拾取: `"item pickup chime, magical sparkle, short"`
+- 菜单: `"UI click sound, soft button press, minimal"`
+
+参数：`duration` 1.0-35.0 秒，`creativity` 越高越自由
+
+### 背景音乐 — Beatoven Music Generation
+
+```bash
+# 生成 BGM (返回 JSON，含 audio.url)
+curl -s -X POST "https://queue.fal.run/beatoven/music-generation" \
+  -H "Authorization: Key $FAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "upbeat chiptune adventure theme, 8-bit retro game music, energetic and looping",
+    "duration": 60
+  }' | python3 -c "
+import sys,json,urllib.request
+url = json.load(sys.stdin)['audio']['url']
+urllib.request.urlretrieve(url, '/tmp/bgm.wav')
+print(f'Downloaded: {url}')
+"
+
+cp /tmp/bgm.wav ~/game/assets/sounds/bgm.wav
+```
+
+常用 prompt 模式：
+- 主题曲: `"[风格] adventure theme, game music, energetic, looping"`
+- 菜单: `"calm ambient menu music, soft piano, atmospheric"`
+- 战斗: `"intense battle music, fast tempo, orchestral percussion"`
+- 胜利: `"victory fanfare, triumphant brass, short jingle"` (duration: 5)
+
+参数：`duration` 5-150 秒，`refinement` 越高质量越好 (默认 100)
+
+### 资产导入 Godot
+
+生成的文件放到 `assets/` 目录后，Godot 自动识别。在脚本中引用：
+
+```gdscript
+# 加载图片
+var texture: Texture2D = preload("res://assets/sprites/player.png")
+
+# 运行时加载音效
+var sfx: AudioStream = load("res://assets/sounds/coin.wav")
+$AudioStreamPlayer.stream = sfx
+$AudioStreamPlayer.play()
+
+# 循环播放 BGM
+$BGMPlayer.stream = load("res://assets/sounds/bgm.wav")
+$BGMPlayer.play()
+```
+
 ## Web 导出
 
 ```bash
@@ -197,14 +304,15 @@ curl -s -X POST "http://10.0.1.1:8847/api/games/deploy" \
 ## 工作流总结
 
 ```
-1. 检查环境 → godot --version
+1. 检查环境 → godot --version + echo $FAL_API_KEY
 2. 创建项目 → mkdir + project.godot + export_presets.cfg
 3. 创建场景 → godot_operations.gd 或直接写 .tscn
 4. 编写脚本 → write 工具创建 .gd 文件
-5. 测试验证 → godot --headless --check-only → godot --headless 运行
-6. 迭代修复 → 解析错误 → 修改 → 重新测试
-7. 导出 Web  → godot --export-release "Web"
-8. 部署发布 → tar + curl POST /api/games/deploy
+5. 生成资产 → fal.ai API (图像/音效/音乐) → assets/ 目录
+6. 测试验证 → godot --headless --check-only → godot --headless 运行
+7. 迭代修复 → 解析错误 → 修改 → 重新测试
+8. 导出 Web  → godot --export-release "Web"
+9. 部署发布 → tar + curl POST /api/games/deploy
 ```
 
 ## 反模式 (必须避免)
