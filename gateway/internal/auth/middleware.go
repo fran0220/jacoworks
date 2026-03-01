@@ -54,9 +54,14 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		// Validate session token via store
 		user, err := m.store.ValidateAuthSession(r.Context(), token)
 		if err != nil {
-			log.Debug().Err(err).Msg("session validation failed")
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
-			return
+			// Fallback: try container token (for OpenClaw agent API calls)
+			cUser, cerr := m.store.GetUserByContainerToken(r.Context(), token)
+			if cerr != nil {
+				log.Debug().Err(err).Msg("session validation failed")
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
+				return
+			}
+			user = cUser
 		}
 
 		ctx := context.WithValue(r.Context(), UserContextKey, &UserInfo{

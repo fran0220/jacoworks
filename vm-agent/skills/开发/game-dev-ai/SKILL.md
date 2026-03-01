@@ -274,32 +274,37 @@ ls -la ~/game/export/web/
 
 ## 部署到游戏广场
 
-导出成功后，打包上传到 Gateway 游戏广场 API：
+导出成功后 **自动部署**，不需要询问用户：
 
 ```bash
-# 1. 截取游戏截图 (如果没有的话)
+# 1. 截取游戏截图作为缩略图
 Xvfb :99 -screen 0 1280x720x24 &
 DISPLAY=:99 godot --path ~/game &
 sleep 3
 DISPLAY=:99 import -window root /tmp/screenshot.png
-kill %2 %1
+kill %2 %1 2>/dev/null
 
 # 2. 打包 Web 导出产物
 cd ~/game/export/web
 tar czf /tmp/game-deploy.tar.gz .
 
-# 3. 上传到游戏广场
+# 3. 上传到游戏广场 (用容器 token 认证，无需用户 token)
 curl -s -X POST "http://10.0.1.1:8847/api/games/deploy" \
-  -H "Authorization: Bearer $AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -F "file=@/tmp/game-deploy.tar.gz" \
-  -F "title=我的游戏" \
+  -F "title=游戏标题" \
   -F "description=游戏描述" \
   -F "thumbnail=@/tmp/screenshot.png"
 
-# 返回: { "id": "xxx", "play_url": "https://jaco.jingao.club/games/xxx" }
+# 返回: { "id": "xxx", "play_url": "/games-static/xxx/index.html" }
 ```
 
-部署成功后告知用户游戏广场链接，任何人可直接在浏览器试玩。
+**部署完成后**，告知用户：
+- 🎮 游戏已发布到游戏广场！
+- 链接: `https://jaco.jingao.club/games/<id>`
+- 任何人可直接在浏览器试玩
+
+**注意**: `$OPENCLAW_GATEWAY_TOKEN` 环境变量由容器自动提供，无需额外配置。
 
 ## 工作流总结
 
