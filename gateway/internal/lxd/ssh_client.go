@@ -334,8 +334,8 @@ func (c *SSHClient) ProvisionContainer(name, containerToken string, envVars map[
 
 	// 4. Inject .env via printf + lxc file push (safe from echo -e backslash mangling)
 	envContent := fmt.Sprintf(
-		"LLM_PROXY_URL=%s\nLLM_PROXY_KEY=%s\nOPENAI_API_KEY=%s\nOPENCLAW_GATEWAY_TOKEN=%s\nNODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n",
-		envVars["LLM_PROXY_URL"], envVars["LLM_PROXY_KEY"], envVars["OPENAI_API_KEY"], containerToken,
+		"LLM_PROXY_URL=%s\nLLM_PROXY_KEY=%s\nOPENAI_API_KEY=%s\nFAL_API_KEY=%s\nOPENCLAW_GATEWAY_TOKEN=%s\nNODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n",
+		envVars["LLM_PROXY_URL"], envVars["LLM_PROXY_KEY"], envVars["OPENAI_API_KEY"], envVars["FAL_API_KEY"], containerToken,
 	)
 	tmpFile := fmt.Sprintf("/tmp/_oc_env_%s", name)
 	writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s", strings.ReplaceAll(envContent, "'", "'\\''"), tmpFile)
