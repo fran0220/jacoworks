@@ -23,8 +23,8 @@ type Game struct {
 func (s *Store) CreateGame(ctx context.Context, userID, authorName, title, description string) (*Game, error) {
 	game := &Game{}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO games (user_id, author_name, title, description)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO games (user_id, author_name, title, description, play_url)
+		 VALUES ($1, $2, $3, $4, '')
 		 RETURNING id, user_id, author_name, title, description, thumbnail_url, play_url, status, play_count, created_at, updated_at`,
 		userID, authorName, title, description,
 	).Scan(&game.ID, &game.UserID, &game.AuthorName, &game.Title, &game.Description,
