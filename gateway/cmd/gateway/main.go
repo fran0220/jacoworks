@@ -27,6 +27,7 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/cowork"
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
+	"github.com/fran0220/jacoworks/gateway/internal/games"
 	"github.com/fran0220/jacoworks/gateway/internal/lxd"
 	"github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/proxy"
@@ -164,6 +165,7 @@ func main() {
 	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
 	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, channelPool)
+	gamesHandler := games.NewHandler(s)
 
 	mux := http.NewServeMux()
 
@@ -206,6 +208,11 @@ func main() {
 	mux.Handle("POST /api/cowork/{sid}/upload", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Upload)))
 	mux.Handle("GET /api/cowork/{sid}/changes", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Changes)))
 	mux.Handle("GET /api/cowork/{sid}/download", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Download)))
+
+	// Games (list is public, deploy/delete require auth)
+	mux.HandleFunc("GET /api/games", gamesHandler.List)
+	mux.Handle("POST /api/games/deploy", authMiddleware.Authenticate(http.HandlerFunc(gamesHandler.Deploy)))
+	mux.Handle("DELETE /api/games/{id}", authMiddleware.Authenticate(http.HandlerFunc(gamesHandler.Delete)))
 
 	// Authenticated: chat proxy
 	mux.Handle("POST /v1/chat/completions", authMiddleware.Authenticate(http.HandlerFunc(proxyHandler.ChatCompletions)))

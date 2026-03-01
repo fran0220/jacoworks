@@ -56,6 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/about", get(routes::pages::about))
         .route("/docs", get(routes::docs::index))
         .route("/docs/{*path}", get(routes::docs::page))
+        .route("/games", get(routes::games::gallery))
+        .route("/games/{id}", get(routes::games::play))
         .route(
             "/feedback",
             get(routes::feedback::form_page).post(routes::feedback::submit),
