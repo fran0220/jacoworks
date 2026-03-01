@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle, ChevronDown, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
+import { AlertCircle, Bug, CheckCircle, ChevronDown, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
 import ClawIcon from "./ClawIcon";
 import { useEffect, useRef, useState } from "react";
 import type { OcConnectionPhase } from "../hooks/use-openclaw-connection";
@@ -15,6 +15,9 @@ export default function TopBar({
   openclawOpen,
   onOpenClawChat,
   onCloseOpenClaw,
+  debugEnabled,
+  showRpcLog,
+  onToggleRpcLog,
 }: {
   title: string;
   sidebarOpen: boolean;
@@ -26,6 +29,9 @@ export default function TopBar({
   openclawOpen: boolean;
   onOpenClawChat: () => void;
   onCloseOpenClaw: () => void;
+  debugEnabled: boolean;
+  showRpcLog: boolean;
+  onToggleRpcLog: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showReadyFlash, setShowReadyFlash] = useState(false);
@@ -99,6 +105,16 @@ export default function TopBar({
         <h2 className="title">{title}</h2>
       </div>
       <div className="right">
+        {debugEnabled && (
+          <button
+            type="button"
+            className={`btn-debug${showRpcLog ? " active" : ""}`}
+            title="RPC 调试日志"
+            onClick={onToggleRpcLog}
+          >
+            <Bug size={14} />
+          </button>
+        )}
         <button
           type="button"
           className={btnClass}

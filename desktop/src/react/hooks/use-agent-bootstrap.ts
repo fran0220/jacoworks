@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
-import { getSettings } from "../lib/config";
+import { ensureDefaultWorkspace, getSettings } from "../lib/config";
 import { setSkills } from "../lib/skills";
 import {
   syncUserSkills,
@@ -59,6 +59,8 @@ export function useAgentBootstrap(authenticated: boolean) {
     withTimeout(
       (async () => {
         await skillsReady;
+        // 首次启动: 自动创建 ~/Documents/JAcoworks 作为默认工作区
+        await ensureDefaultWorkspace();
         const appSettings = getSettings();
         const envVars: Record<string, string> = {
           MEMORY_ENABLED: appSettings.memoryEnabled ? "true" : "false",

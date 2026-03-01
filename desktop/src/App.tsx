@@ -1,4 +1,4 @@
-import { AlertTriangle, LoaderCircle } from "lucide-react";
+import { AlertTriangle, Bug, LoaderCircle } from "lucide-react";
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import ChatView from "./react/components/ChatView";
 import LoginPanel from "./react/components/LoginPanel";
@@ -17,30 +17,22 @@ import {
   logout,
   subscribeAuth,
 } from "./react/lib/auth";
+import { getSettings } from "./react/lib/config";
 
-const RpcLogPanel = import.meta.env.DEV
-  ? lazy(() => import("./react/components/RpcLogPanel"))
-  : null;
+const RpcLogPanel = lazy(() => import("./react/components/RpcLogPanel"));
 const SettingsModal = lazy(() => import("./react/components/SettingsModal"));
 const OpenClawApp = lazy(() => import("./react/openclaw/OpenClawApp"));
 const AgentationDevTools = import.meta.env.DEV
   ? lazy(() => import("./react/components/AgentationDevTools"))
   : null;
 
-function LazyRpcLogPanel() {
-  if (!RpcLogPanel) return null;
-  return (
-    <Suspense fallback={null}>
-      <RpcLogPanel />
-    </Suspense>
-  );
-}
-
 export default function App() {
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [showSettings, setShowSettings] = useState(false);
   const [openclawOpen, setOpenclawOpen] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [debugEnabled, setDebugEnabled] = useState(() => getSettings().debugLogEnabled);
+  const [showRpcLog, setShowRpcLog] = useState(false);
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
   const { agentStarting, agentError, retryAgent } = useAgentBootstrap(authenticated);
@@ -102,29 +94,33 @@ export default function App() {
 
   if (agentStarting) {
     return (
-      <>
-        <div className="agent-loading">
-          <LoaderCircle size={24} className="spinning" />
-          <p>正在启动 AI Agent</p>
-        </div>
-        <LazyRpcLogPanel />
-      </>
+      <div className="agent-loading">
+        <LoaderCircle size={24} className="spinning" />
+        <p>正在启动 AI Agent</p>
+        <button className="agent-debug-btn" onClick={() => setShowRpcLog(v => !v)}>
+          <Bug size={14} />
+          调试日志
+        </button>
+        {showRpcLog && <Suspense fallback={null}><RpcLogPanel onClose={() => setShowRpcLog(false)} /></Suspense>}
+      </div>
     );
   }
 
   if (agentError) {
     return (
-      <>
-        <div className="agent-error">
-          <p>
-            <AlertTriangle size={16} />
-            {agentError}
-          </p>
-          <button onClick={retryAgent}>重试</button>
-          <button onClick={() => logout()}>退出登录</button>
-        </div>
-        <LazyRpcLogPanel />
-      </>
+      <div className="agent-error">
+        <p>
+          <AlertTriangle size={16} />
+          {agentError}
+        </p>
+        <button onClick={retryAgent}>重试</button>
+        <button onClick={() => logout()}>退出登录</button>
+        <button className="agent-debug-btn" onClick={() => setShowRpcLog(v => !v)}>
+          <Bug size={14} />
+          调试日志
+        </button>
+        {showRpcLog && <Suspense fallback={null}><RpcLogPanel onClose={() => setShowRpcLog(false)} /></Suspense>}
+      </div>
     );
   }
 
@@ -188,6 +184,9 @@ export default function App() {
             ocConnection.connect();
           }}
           onCloseOpenClaw={() => setOpenclawOpen(false)}
+          debugEnabled={debugEnabled}
+          showRpcLog={showRpcLog}
+          onToggleRpcLog={() => setShowRpcLog(v => !v)}
         />
 
         <div className={`content-row${openclawOpen ? " oc-drawer-active" : ""}`}>
@@ -244,18 +243,29 @@ export default function App() {
         </div>
       </div>
 
-      <LazyRpcLogPanel />
+      {showRpcLog && <Suspense fallback={null}><RpcLogPanel onClose={() => setShowRpcLog(false)} /></Suspense>}
       {showSettings && (
         <Suspense fallback={null}>
           <SettingsModal
-            onClose={() => setShowSettings(false)}
+            onClose={() => {
+              setShowSettings(false);
+              const d = getSettings().debugLogEnabled;
+              setDebugEnabled(d);
+              if (!d) setShowRpcLog(false);
+            }}
             onCreateSkill={() => {
               setShowSettings(false);
+              const d = getSettings().debugLogEnabled;
+              setDebugEnabled(d);
+              if (!d) setShowRpcLog(false);
               createNewSession();
               setPendingMessage("/building-skills 我想创建一个技能：");
             }}
             onInstallSkill={(url) => {
               setShowSettings(false);
+              const d = getSettings().debugLogEnabled;
+              setDebugEnabled(d);
+              if (!d) setShowRpcLog(false);
               createNewSession();
               setPendingMessage(`/building-skills 请从这个 GitHub 仓库安装技能：${url}`);
             }}

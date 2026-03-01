@@ -21,6 +21,15 @@ Process office documents by writing and executing Node.js scripts. The following
 | `pdf-lib` | ✅ (modify) | ✅ | .pdf — create, edit, merge, fill forms, embed images/fonts |
 | `pdf-parse` | ✅ | — | .pdf → text extraction by page |
 | `csv-parse` | ✅ | — | .csv/.tsv → structured data |
+| `csv-stringify` | — | ✅ | Write .csv/.tsv with proper escaping/quoting |
+| `pptxgenjs` | — | ✅ | Create .pptx (slides, charts, images, tables) |
+| `jszip` | ✅ | ✅ | .zip — read/create/extract zip archives |
+| `fast-xml-parser` | ✅ | ✅ | .xml — parse XML to JSON, build XML from objects |
+| `yaml` | ✅ | ✅ | .yaml/.yml — parse and stringify YAML |
+| `cheerio` | ✅ | — | .html — jQuery-style DOM parsing and extraction |
+| `iconv-lite` | ✅ | ✅ | Decode/encode GBK, GB2312, Big5, Shift_JIS and other legacy encodings |
+| `dayjs` | — | — | Date parsing, formatting, arithmetic (utility) |
+| `marked` | ✅ | ✅ | Markdown → HTML conversion |
 
 ## Script Rules
 
@@ -204,7 +213,7 @@ await wb.xlsx.writeFile("existing.xlsx"); // overwrite
 console.log("Modified existing.xlsx");
 ```
 
-### Create PDF
+### Create PDF (Latin only)
 
 ```javascript
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
@@ -222,6 +231,58 @@ page.drawLine({ start: { x: 50, y: 730 }, end: { x: 545, y: 730 },
 writeFileSync('output.pdf', await pdf.save());
 console.log("Created output.pdf");
 ```
+
+### Create PDF with multilingual text (中文/英文/多语言)
+
+StandardFonts do NOT support CJK characters. Use the **bundled Noto Sans SC font** via `@pdf-lib/fontkit`.
+
+**Bundled font**: `NotoSansSC-Regular.otf` (in desktop resources, via `FONTS_DIR` env)
+- Google Noto Sans Simplified Chinese, 30890 glyphs
+- Covers: Latin, CJK (中日韩), Cyrillic, Greek, extended Latin (é ñ ü), symbols
+- Format: OpenType (OTF), works directly with pdf-lib + fontkit
+- No system font dependency — works on all platforms
+
+**Resolve the font path** via `FONTS_DIR` environment variable (injected by Tauri sidecar):
+
+```javascript
+import { PDFDocument, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+// Bundled font — always available via FONTS_DIR env
+const fontsDir = process.env.FONTS_DIR;
+if (!fontsDir) throw new Error('FONTS_DIR not set — font not available');
+const fontPath = resolve(fontsDir, 'NotoSansSC-Regular.otf');
+
+const pdf = await PDFDocument.create();
+pdf.registerFontkit(fontkit);
+
+const fontBytes = readFileSync(fontPath);
+const font = await pdf.embedFont(fontBytes, { subset: true });
+
+const page = pdf.addPage([595, 842]); // A4
+const { height } = page.getSize();
+
+page.drawText('硅上春秋', {
+  x: 50, y: height - 80, size: 28, font, color: rgb(0.77, 0.44, 0.29),
+});
+page.drawText('Hello World · Привет · café · über', {
+  x: 50, y: height - 120, size: 14, font,
+});
+page.drawText('正文内容在这里，支持中英文混排。', {
+  x: 50, y: height - 150, size: 14, font,
+});
+
+writeFileSync('output.pdf', await pdf.save());
+console.log("Created output.pdf");
+```
+
+**Important notes:**
+- Always use `{ subset: true }` to keep PDF size small (only embeds used glyphs)
+- Do NOT use system `.ttc` fonts — they cause TTC subsetting errors with pdf-lib
+- The bundled OTF font works cross-platform (macOS, Windows, Linux) with no extra setup
+- For complex layout (multi-column, headers/footers, images + text), calculate Y positions manually — pdf-lib has no auto-layout
 
 ### Merge PDFs
 
@@ -290,8 +351,125 @@ console.log("Created output.csv");
 1. Use `ls` or `find` to list files
 2. Write a script that loops over files and processes each
 
+---
+
+## Additional Format Patterns
+
+### Read GBK/GB2312 encoded files
+
+```javascript
+import { readFileSync } from 'node:fs';
+import iconv from 'iconv-lite';
+
+// Read a GBK-encoded CSV file
+const buffer = readFileSync('data_gbk.csv');
+const text = iconv.decode(buffer, 'gbk');
+console.log(text); // now proper UTF-8 string, ready for csv-parse
+```
+
+### Read/Create ZIP archives
+
+```javascript
+import JSZip from 'jszip';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+// Read a zip
+const zip = await JSZip.loadAsync(readFileSync('archive.zip'));
+for (const [name, entry] of Object.entries(zip.files)) {
+  if (!entry.dir) {
+    const content = await entry.async('string'); // or 'nodebuffer' for binary
+    console.log(`${name}: ${content.length} chars`);
+  }
+}
+
+// Create a zip
+const newZip = new JSZip();
+newZip.file('readme.txt', 'Hello World');
+newZip.file('data/report.csv', 'col1,col2\na,b');
+const buf = await newZip.generateAsync({ type: 'nodebuffer' });
+writeFileSync('output.zip', buf);
+console.log('Created output.zip');
+```
+
+### Parse/Build XML
+
+```javascript
+import { XMLParser, XMLBuilder } from 'fast-xml-parser';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+// Parse XML
+const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+const obj = parser.parse(readFileSync('data.xml', 'utf-8'));
+console.log(JSON.stringify(obj, null, 2));
+
+// Build XML
+const builder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: '@_', format: true });
+const xml = builder.build({ root: { item: [{ '@_id': '1', name: '产品A' }, { '@_id': '2', name: '产品B' }] } });
+writeFileSync('output.xml', xml);
+```
+
+### Parse/Write YAML
+
+```javascript
+import { parse, stringify } from 'yaml';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const data = parse(readFileSync('config.yaml', 'utf-8'));
+console.log(JSON.stringify(data, null, 2));
+
+writeFileSync('output.yaml', stringify(data));
+```
+
+### Parse HTML (extract tables, links, etc.)
+
+```javascript
+import { load } from 'cheerio';
+import { readFileSync } from 'node:fs';
+
+const $ = load(readFileSync('report.html', 'utf-8'));
+// Extract all table rows
+$('table tr').each((i, row) => {
+  const cells = $(row).find('td, th').map((_, el) => $(el).text().trim()).get();
+  console.log(cells.join(' | '));
+});
+```
+
+### Write CSV with proper escaping
+
+```javascript
+import { stringify } from 'csv-stringify/sync';
+import { writeFileSync } from 'node:fs';
+
+const data = [
+  ['名称', '数量', '备注'],
+  ['产品A', 100, '含"特殊"字符'],
+  ['产品B', 200, '换行\n测试'],
+];
+const csv = stringify(data);
+writeFileSync('output.csv', '\uFEFF' + csv, 'utf-8'); // BOM for Excel CJK
+console.log('Created output.csv');
+```
+
+### Markdown to HTML
+
+```javascript
+import { marked } from 'marked';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const md = readFileSync('document.md', 'utf-8');
+const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>body{font-family:system-ui;max-width:800px;margin:2rem auto;padding:0 1rem}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px}</style>
+</head><body>${marked(md)}</body></html>`;
+writeFileSync('document.html', html);
+console.log('Created document.html');
+```
+
+---
+
 ## Limitations
 - **Word Track Changes**: not supported (neither read nor write)
 - **Word Mail Merge**: not supported
-- **PDF CJK text**: StandardFonts don't include CJK — embed a .ttf font file or use docx/xlsx instead
+- **PDF CJK text**: StandardFonts don't include CJK — use the "Create PDF with CJK text" pattern above (requires `@pdf-lib/fontkit` + system font)
 - **Scanned PDFs**: pdf-parse returns empty text for image-only PDFs
+- **PPTX reading**: pptxgenjs only creates slides, cannot read existing .pptx files

@@ -21,11 +21,17 @@ import type { AttachedFile, ChatSession } from "../types";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const imageExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
+const binaryDocExts = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
 
 function isImageFile(file: File): boolean {
   if (file.type.startsWith("image/")) return true;
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   return imageExts.has(ext);
+}
+
+function isBinaryDocFile(file: File): boolean {
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return binaryDocExts.has(ext);
 }
 
 function readAsDataURL(file: File) {
@@ -65,7 +71,7 @@ export default function NewSessionPanel({
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [readingCount, setReadingCount] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  const [model, setModel] = useState(() => getSettings().defaultModel || DEFAULT_MODEL);
   const [workspacePath, setWorkspacePath] = useState(() => getSettings().defaultWorkspace);
   const [loading, setLoading] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
@@ -181,6 +187,13 @@ export default function NewSessionPanel({
             name: file.name,
             type: "image",
             data: await readAsDataURL(file),
+            size: file.size,
+          });
+        } else if (isBinaryDocFile(file)) {
+          incoming.push({
+            name: file.name,
+            type: "binary",
+            data: "",
             size: file.size,
           });
         } else {

@@ -1,4 +1,4 @@
-import { Bug, Trash2, X } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -25,8 +25,7 @@ function formatTime(timestamp: number): string {
   return `${h}:${m}:${s}`;
 }
 
-export default function RpcLogPanel() {
-  const [open, setOpen] = useState(false);
+export default function RpcLogPanel({ onClose }: { onClose: () => void }) {
   const [logs, setLogs] = useState<RpcLogEntry[]>([]);
   const nextId = useRef(1);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -69,9 +68,9 @@ export default function RpcLogPanel() {
   }, []);
 
   useEffect(() => {
-    if (!open || !listRef.current) return;
+    if (!listRef.current) return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [logs, open]);
+  }, [logs]);
 
   const latestLogs = useMemo(() => logs.slice(-250), [logs]);
 
@@ -79,51 +78,40 @@ export default function RpcLogPanel() {
 
   return (
     <div className="rpc-log-root">
-      <button
-        className="rpc-log-toggle"
-        onClick={() => setOpen((value) => !value)}
-        title="RPC 调试日志"
-      >
-        <Bug size={14} />
-        RPC 日志 ({logs.length})
-      </button>
-
-      {open && (
-        <div className="rpc-log-panel">
-          <div className="rpc-log-header">
-            <strong>Agent RPC 日志</strong>
-            <div className="rpc-log-actions">
-              <button className="rpc-log-action" onClick={() => setLogs([])} title="清空日志">
-                <Trash2 size={14} />
-                清空
-              </button>
-              <button className="rpc-log-action" onClick={() => setOpen(false)} title="关闭">
-                <X size={14} />
-              </button>
-            </div>
-          </div>
-
-          <div className="rpc-log-list" ref={listRef}>
-            {latestLogs.length === 0 && <p className="rpc-log-empty">等待 sidecar 日志输出...</p>}
-
-            {latestLogs.map((entry) => (
-              <div key={entry.id} className="rpc-log-line">
-                <span className="rpc-log-time">{formatTime(entry.timestamp)}</span>
-                <span
-                  className={
-                    entry.source === "stderr"
-                      ? "rpc-log-source rpc-log-source-error"
-                      : "rpc-log-source"
-                  }
-                >
-                  {entry.source}
-                </span>
-                <code className="rpc-log-text">{entry.line}</code>
-              </div>
-            ))}
+      <div className="rpc-log-panel">
+        <div className="rpc-log-header">
+          <strong>Agent RPC 日志</strong>
+          <div className="rpc-log-actions">
+            <button className="rpc-log-action" onClick={() => setLogs([])} title="清空日志">
+              <Trash2 size={14} />
+              清空
+            </button>
+            <button className="rpc-log-action" onClick={onClose} title="关闭">
+              <X size={14} />
+            </button>
           </div>
         </div>
-      )}
+
+        <div className="rpc-log-list" ref={listRef}>
+          {latestLogs.length === 0 && <p className="rpc-log-empty">等待 sidecar 日志输出...</p>}
+
+          {latestLogs.map((entry) => (
+            <div key={entry.id} className="rpc-log-line">
+              <span className="rpc-log-time">{formatTime(entry.timestamp)}</span>
+              <span
+                className={
+                  entry.source === "stderr"
+                    ? "rpc-log-source rpc-log-source-error"
+                    : "rpc-log-source"
+                }
+              >
+                {entry.source}
+              </span>
+              <code className="rpc-log-text">{entry.line}</code>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

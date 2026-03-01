@@ -100,11 +100,15 @@ select:focus-visible {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  transition: box-shadow var(--duration-fast) var(--ease-standard);
+  cursor: pointer;
+  transition:
+    box-shadow var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
 }
 
 .markdown-body .file-card:hover {
   box-shadow: var(--shadow-md);
+  border-color: var(--accent);
 }
 
 .markdown-body .file-card-icon {

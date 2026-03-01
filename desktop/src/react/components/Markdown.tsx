@@ -62,7 +62,7 @@ const FILE_EXT_MAP: Record<string, { typeLabel: string; kind: string }> = {
   html: { typeLabel: "Web · HTML", kind: "code" },
   css: { typeLabel: "Style · CSS", kind: "code" },
   sql: { typeLabel: "Query · SQL", kind: "code" },
-  csv: { typeLabel: "Data · CSV", kind: "code" },
+  csv: { typeLabel: "Data · CSV", kind: "csv" },
   png: { typeLabel: "Image · PNG", kind: "image" },
   jpg: { typeLabel: "Image · JPEG", kind: "image" },
   jpeg: { typeLabel: "Image · JPEG", kind: "image" },
@@ -315,6 +315,18 @@ export default function Markdown({
     if (openBtn) {
       const filePath = openBtn.getAttribute("data-file-path");
       if (filePath) openFileDefault(filePath, workspacePath);
+      return;
+    }
+
+    // File card body click → trigger preview (click anywhere on the card)
+    const fileCard = target.closest(".file-card") as HTMLElement | null;
+    if (fileCard) {
+      const filePath = fileCard.getAttribute("data-file-path");
+      if (filePath) {
+        window.dispatchEvent(
+          new CustomEvent("preview-file", { detail: { path: filePath } }),
+        );
+      }
       return;
     }
   };

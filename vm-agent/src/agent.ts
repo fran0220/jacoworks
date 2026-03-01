@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join, relative } from "node:path";
+import { join, resolve, dirname, relative } from "node:path";
 import {
   createAgentSession,
   SessionManager,
@@ -102,15 +103,6 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 200000,
-        maxTokens: 16384,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      {
         id: "claude-haiku-4-5-20251001",
         name: "Claude Haiku 4.5",
         reasoning: false,
@@ -173,15 +165,7 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         maxTokens: 8192,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      {
-        id: "gemini-3-flash-preview",
-        name: "Gemini 3 Flash",
-        reasoning: false,
-        input: ["text", "image"],
-        contextWindow: 1000000,
-        maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
+
     ],
   });
 
@@ -213,6 +197,79 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
   });
 }
 
+// ─── Document Processing Packages ───────────────────
+
+const DOC_PACKAGES: Record<string, string> = {
+  mammoth: "^1.11.0",
+  docx: "^9.6.0",
+  exceljs: "^4.4.0",
+  "pdf-lib": "^1.17.1",
+  "@pdf-lib/fontkit": "^1.1.1",
+  "pdf-parse": "^2.4.5",
+  "csv-parse": "^6.1.0",
+};
+
+function ensureDocPackages(dir: string): boolean {
+  const nmDir = join(dir, "node_modules");
+  if (existsSync(join(nmDir, "mammoth"))) return true;
+
+  console.log("📦 Installing document processing packages (first-time setup)...");
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "jacoworks-doc-packages", private: true, dependencies: DOC_PACKAGES }),
+    );
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+    execSync(`${npmCmd} install --production --no-audit --no-fund`, {
+      cwd: dir,
+      timeout: 120_000,
+      stdio: "pipe",
+    });
+    console.log("✅ Document processing packages installed");
+    return true;
+  } catch (err) {
+    console.warn(`⚠️ Doc packages install failed: ${err instanceof Error ? err.message : err}`);
+    return false;
+  }
+}
+
+function setupNodePath(cfg: Config): void {
+  const sep = process.platform === "win32" ? ";" : ":";
+  const nodePaths: string[] = [];
+
+  // 1. DOC_PACKAGES_DIR from sidecar (production: extracted from bundled tar.gz)
+  const docPkgDir = process.env.DOC_PACKAGES_DIR;
+  if (docPkgDir) {
+    const docNm = join(docPkgDir, "node_modules");
+    if (existsSync(docNm)) {
+      nodePaths.push(docNm);
+    } else {
+      // First-time setup: install via npm (fallback when tar.gz not bundled)
+      if (ensureDocPackages(docPkgDir)) {
+        nodePaths.push(join(docPkgDir, "node_modules"));
+      }
+    }
+  }
+
+  // 2. Dev mode: vm-agent's own node_modules
+  const vmAgentRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+  const devNm = join(vmAgentRoot, "node_modules");
+  if (existsSync(devNm)) {
+    nodePaths.push(devNm);
+  }
+
+  // 3. Merge with existing NODE_PATH
+  if (process.env.NODE_PATH) {
+    nodePaths.push(...process.env.NODE_PATH.split(sep));
+  }
+
+  const uniquePaths = [...new Set(nodePaths)];
+  if (uniquePaths.length > 0) {
+    process.env.NODE_PATH = uniquePaths.join(sep);
+  }
+}
+
 // ─── Init & Session Pool ────────────────────────────
 
 export function initAgent(cfg: Config) {
@@ -232,11 +289,15 @@ export function initAgent(cfg: Config) {
     initEmbedding(cfg.openaiApiKey, undefined, cfg.embedTimeoutMs);
   }
 
+  // 设置 NODE_PATH 让文档处理脚本能找到预装包
+  setupNodePath(cfg);
+
   console.log("✅ Agent initialized");
   console.log(`   Default model: ${cfg.primaryProvider}/${cfg.primaryModel}`);
   console.log(`   LLM Proxy: ${cfg.proxyUrl}`);
   console.log(`   Workspace: ${cfg.workspaceDir}`);
   console.log(`   Memory root: ${cfg.memoryRootDir}`);
+  console.log(`   NODE_PATH: ${process.env.NODE_PATH || "(not set)"}`);
   console.log(`   Embedding: ${isEmbeddingAvailable() ? `text-embedding-3-small → ${cfg.embeddingBaseUrl || "https://api.openai.com/v1"}` : "disabled (no EMBEDDING_API_KEY / OPENAI_API_KEY)"}`);
 
   // 列出已注册的代理模型
@@ -304,6 +365,21 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     extensionFactories.push(cronService.getExtensionFactory());
   }
 
+  // Block read tool on binary document files — they produce garbled output
+  const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
+  extensionFactories.push((pi) => {
+    pi.on("tool_call", async (event) => {
+      if (event.toolName === "read" && typeof event.input?.path === "string") {
+        if (BINARY_DOC_EXTS.test(event.input.path)) {
+          return {
+            block: true,
+            reason: `Cannot read binary file "${event.input.path}" with the read tool. Write a .mjs script instead — mammoth (docx), exceljs (xlsx), pdf-parse/pdf-lib (pdf), pptxgenjs (pptx), csv-parse/csv-stringify (csv), jszip (zip), fast-xml-parser (xml), iconv-lite (GBK encoding) are pre-installed.`,
+          };
+        }
+      }
+    });
+  });
+
   if (config.toolDenyList.length > 0) {
     extensionFactories.push((pi) => {
       pi.on("tool_call", async (event) => {
@@ -345,6 +421,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     authStorage,
     modelRegistry,
     model,
+    thinkingLevel: model.reasoning ? "medium" : "off",
     tools: opts?.restricted ? [] : codingTools,
     resourceLoader,
     settingsManager,
@@ -364,8 +441,8 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
 /**
  * 解析请求中的 model 字段，支持格式：
- *   "proxy-claude/claude-sonnet-4-6"  → provider: proxy-claude, id: claude-sonnet-4-6
- *   "claude-sonnet-4-6"               → 自动匹配 provider
+ *   "proxy-claude/claude-opus-4-6"    → provider: proxy-claude, id: claude-opus-4-6
+ *   "claude-opus-4-6"                 → 自动匹配 provider
  *   "gpt-5.2"                          → 自动匹配 proxy-gpt
  */
 export function resolveModel(modelStr?: string) {

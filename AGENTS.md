@@ -199,9 +199,9 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 
 | Provider | 模型 |
 |----------|------|
-| `proxy-claude` (anthropic) | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001 |
+| `proxy-claude` (anthropic) | claude-opus-4-6, claude-haiku-4-5-20251001 |
 | `proxy-gpt` (openai) | gpt-5.3-codex, gpt-5.2 |
-| `proxy-gemini` (openai) | gemini-3.1-pro-preview, gemini-3-pro-preview, gemini-3-flash-preview |
+| `proxy-gemini` (openai) | gemini-3.1-pro-preview, gemini-3-pro-preview |
 | `proxy-grok` (openai) | grok-4.20-beta, grok-4.1-fast |
 
 **路由**: `"model-id"` (自动匹配) 或 `"provider/model-id"` (显式指定)
@@ -243,7 +243,7 @@ chat_agent: { url, token }  # 可选外部 ChatAgent
 - `LLM_PROXY_URL` / `LLM_PROXY_KEY` — 中转站 (网关下发, 无本地 fallback)
 - `WORKSPACE_DIR` — 默认 cwd (可被请求级 workspace 覆盖)
 - `MEMORY_ROOT_DIR` — 记忆根目录 (默认 `~/Library/Application Support/JAcoworks/memory`)
-- `PRIMARY_MODEL=claude-sonnet-4-6` / `PRIMARY_PROVIDER=proxy-claude`
+- `PRIMARY_MODEL=claude-opus-4-6` / `PRIMARY_PROVIDER=proxy-claude`
 - `MEMORY_ENABLED=true` / `HEARTBEAT_ENABLED=false` / `CRON_ENABLED=false`
 - `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` — 向量 embedding (可选, 回退 OPENAI_API_KEY)
 - `MEMORY_EMBED_TIMEOUT_MS=8000` / `MEMORY_EMBED_CACHE_MAX=10000`

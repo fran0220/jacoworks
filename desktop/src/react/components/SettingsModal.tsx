@@ -1,5 +1,7 @@
 import {
   Brain,
+  Bug,
+  Cpu,
   Download,
   FolderOpen,
   FolderSearch,
@@ -21,10 +23,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { selectFolder } from "../lib/cowork";
-import { getSettings, updateSettings } from "../lib/config";
+import { getSettings, updateSettings, MODEL_OPTIONS, THINKING_LEVELS, type AppSettings } from "../lib/config";
 import { useSkills, setSkills, type SkillDefinition } from "../lib/skills";
 
-type Tab = "general" | "memory" | "skills";
+type Tab = "general" | "model" | "memory" | "skills";
 
 interface MemoryStats {
   path: string;
@@ -48,6 +50,7 @@ function formatBytes(bytes: number): string {
 
 const TABS: { key: Tab; label: string; icon: typeof Settings }[] = [
   { key: "general", label: "通用", icon: Settings },
+  { key: "model", label: "模型", icon: Cpu },
   { key: "memory", label: "记忆", icon: Brain },
   { key: "skills", label: "技能", icon: Sparkles },
 ];
@@ -172,6 +175,106 @@ function GeneralTab() {
               </button>
             </div>
           )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Tab: Model ─────────────────────────────────────────
+
+function ModelTab() {
+  const [settings, setSettings] = useState(getSettings);
+  const [restartHint, setRestartHint] = useState(false);
+
+  const handleChange = (patch: Partial<AppSettings>) => {
+    const updated = { ...settings, ...patch };
+    updateSettings(updated);
+    setSettings(updated);
+    setRestartHint(true);
+  };
+
+  return (
+    <>
+      <div className="settings-section">
+        <div className="settings-section-title">模型配置</div>
+
+        <div className="settings-item">
+          <div className="settings-item-main">
+            <div className="settings-item-info">
+              <Cpu size={16} />
+              <div>
+                <div className="settings-item-label">默认模型</div>
+                <div className="settings-item-desc">
+                  新会话使用的默认 AI 模型
+                </div>
+              </div>
+            </div>
+            <select
+              className="settings-select"
+              value={settings.defaultModel}
+              onChange={(e) => handleChange({ defaultModel: e.target.value })}
+            >
+              {MODEL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="settings-item">
+          <div className="settings-item-main">
+            <div className="settings-item-info">
+              <Brain size={16} />
+              <div>
+                <div className="settings-item-label">思考等级</div>
+                <div className="settings-item-desc">
+                  控制模型的深度推理程度，等级越高回复越慢但质量更好
+                </div>
+              </div>
+            </div>
+            <select
+              className="settings-select"
+              value={settings.thinkingLevel}
+              onChange={(e) => handleChange({ thinkingLevel: e.target.value })}
+            >
+              {THINKING_LEVELS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {restartHint && (
+          <div className="settings-hint">新会话生效</div>
+        )}
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-title">调试</div>
+
+        <div className="settings-item">
+          <div className="settings-item-main">
+            <div className="settings-item-info">
+              <Bug size={16} />
+              <div>
+                <div className="settings-item-label">调试日志</div>
+                <div className="settings-item-desc">
+                  在界面底部显示 Agent RPC 通信日志
+                </div>
+              </div>
+            </div>
+            <button
+              className={`toggle ${settings.debugLogEnabled ? "on" : ""}`}
+              onClick={() => handleChange({ debugLogEnabled: !settings.debugLogEnabled })}
+            >
+              <span className="toggle-thumb" />
+            </button>
+          </div>
         </div>
       </div>
     </>
@@ -528,6 +631,7 @@ export default function SettingsModal({ onClose, onCreateSkill, onInstallSkill }
 
           <div className="settings-content">
             {tab === "general" && <GeneralTab />}
+            {tab === "model" && <ModelTab />}
             {tab === "memory" && <MemoryTab />}
             {tab === "skills" && <SkillsTab onCreateSkill={onCreateSkill} onInstallSkill={onInstallSkill} />}
           </div>

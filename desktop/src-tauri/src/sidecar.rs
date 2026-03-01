@@ -435,6 +435,38 @@ pub async fn start_agent(
             }
         }
 
+        // Document processing packages (NODE_PATH for .mjs scripts)
+        if let Ok(app_data) = app.path().app_data_dir() {
+            let doc_pkg_dir = app_data.join("doc-packages");
+
+            // Extract bundled archive on first launch
+            if !doc_pkg_dir.join("node_modules").exists() {
+                if let Ok(resource_dir) = app.path().resource_dir() {
+                    let archive = resource_dir.join("resources").join("doc-packages.tar.gz");
+                    if archive.exists() {
+                        let _ = std::fs::create_dir_all(&doc_pkg_dir);
+                        if let Ok(file) = std::fs::File::open(&archive) {
+                            let gz = flate2::read::GzDecoder::new(file);
+                            let mut tar = tar::Archive::new(gz);
+                            if tar.unpack(&doc_pkg_dir).is_ok() {
+                                eprintln!("[sidecar] Extracted doc-packages to {}", doc_pkg_dir.display());
+                            }
+                        }
+                    }
+                }
+            }
+
+            cmd.env("DOC_PACKAGES_DIR", doc_pkg_dir.to_string_lossy().as_ref());
+        }
+
+        // Bundled fonts directory
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            let fonts_dir = resource_dir.join("resources").join("fonts");
+            if fonts_dir.exists() {
+                cmd.env("FONTS_DIR", fonts_dir.to_string_lossy().as_ref());
+            }
+        }
+
         cmd.env("MEMORY_ENABLED", "true")
             .env("HEARTBEAT_ENABLED", "false")
             .env("CRON_ENABLED", "false")

@@ -5,6 +5,7 @@ import {
   startNativeStream,
 } from "../lib/agent";
 import { getUser } from "../lib/auth";
+import { getSettings } from "../lib/config";
 import {
   persistMessages,
   persistSessionMeta,
@@ -17,6 +18,12 @@ import type {
   StreamBlock,
 } from "../types";
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function buildPrompt(text: string, files: AttachedFile[]): string {
   if (files.length === 0) return text;
 
@@ -24,6 +31,8 @@ function buildPrompt(text: string, files: AttachedFile[]): string {
   for (const file of files) {
     if (file.type === "image") {
       chunks.push(`[图片附件] ${file.name}\n${file.data}`);
+    } else if (file.type === "binary") {
+      chunks.push(`[文档附件] ${file.name} (${formatFileSize(file.size)}) — 这是一个二进制文档文件，请使用 write_file + bash 工具写一个 .mjs 脚本来读取和处理它。文件位于当前工作目录中。`);
     } else {
       chunks.push(`[文本附件] ${file.name}\n${file.data}`);
     }
@@ -34,6 +43,26 @@ function buildPrompt(text: string, files: AttachedFile[]): string {
 
 function isUntitledTitle(title: string): boolean {
   return title === "新对话" || title === "新会话";
+}
+
+function truncate(str: string | undefined, max: number): string | undefined {
+  if (!str) return undefined;
+  return str.length <= max ? str : `${str.slice(0, max)}\n…[截断]`;
+}
+
+function collectMetaBlocks(blocks: StreamBlock[]): StreamBlock[] {
+  const result: StreamBlock[] = [];
+  for (const b of blocks) {
+    if (b.type === "thinking" && b.content.trim()) {
+      result.push(b);
+    } else if (b.type === "tool") {
+      const base = b.status === "running" ? { ...b, status: "completed" as const } : { ...b };
+      base.args = truncate(base.args, 1000);
+      base.result = truncate(base.result, 2000);
+      result.push(base);
+    }
+  }
+  return result;
 }
 
 interface UseChatStreamOptions {
@@ -104,7 +133,10 @@ export function useChatStream({
   }, []);
 
   useEffect(() => {
-    setLocalSession(session);
+    // Use updater to avoid overwriting in-flight local changes (e.g. user message
+    // queued by sendMessage) — React.StrictMode re-runs effects which would
+    // otherwise clobber the pending setLocalSession from sendMessage.
+    setLocalSession((prev) => (prev.id === session.id ? prev : session));
     localSessionRef.current = session;
   }, [session]);
 
@@ -120,15 +152,6 @@ export function useChatStream({
     () => localSession.messages.filter((message) => message.role !== "system"),
     [localSession.messages],
   );
-
-  const lastStreamingTextIndex = useMemo(() => {
-    for (let index = blocks.length - 1; index >= 0; index--) {
-      if (blocks[index]?.type === "text") {
-        return index;
-      }
-    }
-    return -1;
-  }, [blocks]);
 
   useEffect(() => {
     scheduleScrollToBottom();
@@ -157,7 +180,9 @@ export function useChatStream({
       .map((block) => block.content)
       .join("\n\n");
 
-    if (!assistantText.trim()) return;
+    const metaBlocks = collectMetaBlocks(blocksRef.current);
+
+    if (!assistantText.trim() && metaBlocks.length === 0) return;
 
     setBlocks([]);
     setStreaming(false);
@@ -165,6 +190,7 @@ export function useChatStream({
     const assistantMessage: ChatMessage = {
       role: "assistant",
       content: assistantText,
+      ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
     };
     const finalMessages = [...streamBaseRef.current, assistantMessage];
 
@@ -213,7 +239,14 @@ export function useChatStream({
       setErrorText(null);
 
       const sessionSnapshot = localSessionRef.current;
-      const userMessage: ChatMessage = { role: "user", content: text };
+      const fileRefs = files.length > 0
+        ? files.map(f => ({ name: f.name, type: f.type, size: f.size }))
+        : undefined;
+      const userMessage: ChatMessage = {
+        role: "user",
+        content: text,
+        ...(fileRefs ? { files: fileRefs } : {}),
+      };
       const nextMessages = [...sessionSnapshot.messages, userMessage];
       await persistSession(nextMessages);
 
@@ -224,9 +257,11 @@ export function useChatStream({
       streamBaseRef.current = nextMessages;
       abortedRef.current = false;
       stickToBottomRef.current = true;
+      let streamTimeoutId: ReturnType<typeof setInterval> | null = null;
 
       try {
         const currentUser = getUser();
+        const appSettings = getSettings();
         const response = await startNativeStream({
           session_id: sessionSnapshot.id,
           user_id: currentUser?.id || undefined,
@@ -234,10 +269,24 @@ export function useChatStream({
           message: buildPrompt(text, files),
           workspace: sessionSnapshot.workspacePath || undefined,
           restricted: false,
+          thinking_level: appSettings.thinkingLevel || undefined,
         });
+
+        const STREAM_TIMEOUT_MS = 120_000;
+        let lastActivity = Date.now();
+        streamTimeoutId = setInterval(() => {
+          if (Date.now() - lastActivity > STREAM_TIMEOUT_MS) {
+            if (streamTimeoutId) clearInterval(streamTimeoutId);
+            streamTimeoutId = null;
+            abortedRef.current = true;
+            setErrorText("响应超时，AI 长时间未返回内容");
+            abortNativeSession(sessionSnapshot.id).catch(() => {});
+          }
+        }, 5_000);
 
         for await (const packet of response.stream) {
           if (abortedRef.current) break;
+          lastActivity = Date.now();
 
           if (packet.type === "response") {
             if (packet.success === false) {
@@ -258,6 +307,8 @@ export function useChatStream({
             assistantMessageEvent?: { type?: string; delta?: string };
             toolCallId?: unknown;
             toolName?: unknown;
+            args?: unknown;
+            result?: unknown;
             isError?: unknown;
             reason?: unknown;
             attempt?: unknown;
@@ -266,6 +317,9 @@ export function useChatStream({
 
           if (event.type === "message_update") {
             const assistantEvent = event.assistantMessageEvent;
+            if (assistantEvent?.type === "thinking_delta" || assistantEvent?.type === "thinking_start" || assistantEvent?.type === "thinking_end") {
+              console.log("[thinking-ui]", assistantEvent.type, assistantEvent.delta?.slice?.(0, 50));
+            }
             if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
               const last = blocksRef.current[blocksRef.current.length - 1];
               if (last?.type === "text") {
@@ -282,28 +336,58 @@ export function useChatStream({
                 blocksRef.current.push({ type: "thinking", content: assistantEvent.delta });
               }
               scheduleBlocksRender();
+            } else if (assistantEvent?.type === "toolcall_start") {
+              // LLM started generating a tool call — show tool status immediately
+              // Extract tool name from the partial content at contentIndex
+              const partial = (assistantEvent as { partial?: { content?: Array<{ type: string; id?: string; name?: string }> }; contentIndex?: number }).partial;
+              const idx = (assistantEvent as { contentIndex?: number }).contentIndex;
+              const toolBlock = idx != null ? partial?.content?.[idx] : undefined;
+              const toolName = toolBlock?.name || "tool";
+              const toolId = toolBlock?.id || `tool-${Date.now()}`;
+              blocksRef.current.push({
+                type: "tool",
+                id: toolId,
+                name: toolName,
+                status: "running",
+              });
+              scheduleBlocksRender();
             }
           }
 
           if (event.type === "tool_execution_start") {
-            blocksRef.current.push({
-              type: "tool",
-              id: String(event.toolCallId || `tool-${Date.now()}`),
-              name: String(event.toolName || "tool"),
-              status: "running",
-            });
+            // Update existing block (created by toolcall_start) or create new one
+            const execId = String(event.toolCallId || "");
+            const existing = execId
+              ? blocksRef.current.find((b) => b.type === "tool" && b.id === execId)
+              : undefined;
+            if (existing && existing.type === "tool") {
+              existing.args = event.args ? JSON.stringify(event.args, null, 2) : undefined;
+            } else {
+              const argsStr = event.args ? JSON.stringify(event.args, null, 2) : undefined;
+              blocksRef.current.push({
+                type: "tool",
+                id: String(event.toolCallId || `tool-${Date.now()}`),
+                name: String(event.toolName || "tool"),
+                status: "running",
+                args: argsStr,
+              });
+            }
             scheduleBlocksRender();
           }
 
           if (event.type === "tool_execution_end") {
+            const endId = String(event.toolCallId || "");
             for (let i = blocksRef.current.length - 1; i >= 0; i -= 1) {
               const block = blocksRef.current[i];
               if (
                 block.type === "tool" &&
-                block.name === String(event.toolName) &&
-                block.status === "running"
+                (endId ? block.id === endId : block.name === String(event.toolName) && block.status === "running")
               ) {
                 block.status = event.isError ? "error" : "completed";
+                if (event.result !== undefined) {
+                  const raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2);
+                  block.result = raw.length > 4000 ? `${raw.slice(0, 4000)}\n…[截断]` : raw;
+                }
                 break;
               }
             }
@@ -327,6 +411,8 @@ export function useChatStream({
           }
         }
 
+        if (streamTimeoutId) { clearInterval(streamTimeoutId); streamTimeoutId = null; }
+
         if (!abortedRef.current) {
           await finalizeStream();
         }
@@ -335,6 +421,7 @@ export function useChatStream({
           setErrorText(error instanceof Error ? error.message : "请求失败");
         }
       } finally {
+        if (streamTimeoutId) clearInterval(streamTimeoutId);
         sendLockRef.current = false;
         setStreaming(false);
         cancelRenderFrame();
@@ -356,10 +443,13 @@ export function useChatStream({
       .map((block) => block.content)
       .join("\n\n");
 
-    if (assistantText.trim()) {
+    const metaBlocks = collectMetaBlocks(blocksRef.current);
+
+    if (assistantText.trim() || metaBlocks.length > 0) {
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: assistantText,
+        ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
       };
       await persistSession([...streamBaseRef.current, assistantMessage]);
     }
@@ -401,7 +491,6 @@ export function useChatStream({
     streaming,
     blocks,
     errorText,
-    lastStreamingTextIndex,
     messagesRef,
     sendMessage,
     stopStreaming,

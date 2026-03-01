@@ -53,13 +53,32 @@ fn resolve_scoped_path(path: &str, workspace: Option<&str>) -> Result<PathBuf, S
 /// For user-initiated read-only operations (preview, open, reveal):
 /// absolute paths that exist are allowed directly — the file was created by the agent
 /// and the user explicitly clicked a button to access it.
+///
+/// When an absolute (or tilde-expanded) path doesn't exist on disk, we fall back to
+/// searching by filename in the agent workspace / session workspace / CWD, because
+/// the LLM may hallucinate an absolute path while the file actually lives in the
+/// agent's default working directory.
 fn resolve_read_path(path: &str, workspace: Option<&str>) -> Result<PathBuf, String> {
-    let p = PathBuf::from(path);
-    if p.is_absolute() {
-        return p
-            .canonicalize()
-            .map_err(|e| format!("Cannot access path: {}", e));
+    // Expand tilde before checking absolute
+    let effective = expand_tilde(path).unwrap_or_else(|| PathBuf::from(path));
+
+    if effective.is_absolute() {
+        if let Ok(canonical) = effective.canonicalize() {
+            return Ok(canonical);
+        }
+        // Absolute path doesn't exist — try the filename in known workspaces
+        if let Some(name) = effective.file_name() {
+            let name_str = name.to_string_lossy();
+            let fallback = resolve_path(&name_str, workspace);
+            if fallback.exists() {
+                return fallback
+                    .canonicalize()
+                    .map_err(|e| format!("Cannot access path: {}", e));
+            }
+        }
+        return Err(format!("Cannot access path: No such file or directory (os error 2)"));
     }
+
     resolve_scoped_path(path, workspace)
 }
 
@@ -73,7 +92,22 @@ fn read_file_prefix(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Expand leading `~` or `~/` (or `~\` on Windows) to the user's home directory.
+fn expand_tilde(path: &str) -> Option<PathBuf> {
+    if path == "~" {
+        return dirs::home_dir();
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        return dirs::home_dir().map(|home| home.join(rest));
+    }
+    None
+}
+
 fn resolve_path(path: &str, workspace: Option<&str>) -> PathBuf {
+    // 0) Tilde expansion
+    if let Some(expanded) = expand_tilde(path) {
+        return expanded;
+    }
     let p = PathBuf::from(path);
     if p.is_absolute() {
         return p;
@@ -101,7 +135,29 @@ fn resolve_path(path: &str, workspace: Option<&str>) -> PathBuf {
             return full;
         }
     }
+    // 4) Fallback: user home directory
+    if let Some(home) = dirs::home_dir() {
+        let full = home.join(path);
+        if full.exists() {
+            return full;
+        }
+    }
     p
+}
+
+/// Return (and auto-create) the default workspace: `~/Documents/JAcoworks`.
+#[tauri::command]
+fn ensure_default_workspace() -> Result<String, String> {
+    let doc_dir = dirs::document_dir().ok_or("Cannot resolve Documents directory")?;
+    let workspace = doc_dir.join("JAcoworks");
+    if !workspace.exists() {
+        std::fs::create_dir_all(&workspace)
+            .map_err(|e| format!("Failed to create workspace: {}", e))?;
+    }
+    workspace
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Invalid path encoding".to_string())
 }
 
 /// Reveal file in system file manager (Finder / Explorer / Nautilus).
@@ -156,7 +212,8 @@ fn detect_category(name: &str, ext: &str) -> &'static str {
         "fig" | "sketch" | "psd" => "design",
         "js" | "mjs" | "ts" | "tsx" | "jsx" | "py" | "go" | "rs"
         | "json" | "yaml" | "yml" | "toml" | "html" | "css" | "sql"
-        | "sh" | "xml" | "csv" | "log" => "code",
+        | "sh" | "xml" | "log" => "code",
+        "csv" => "csv",
         "md" => "markdown",
         "txt" => "text",
         "docx" => "docx",
@@ -390,7 +447,7 @@ fn preview_file(path: String, workspace: Option<String>) -> Result<FilePreview, 
             metadata = Some(design_meta);
             (None, None)
         }
-        "code" | "markdown" | "text" => {
+        "code" | "markdown" | "text" | "csv" => {
             let max_size = 200 * 1024usize;
             let bytes = read_file_prefix(&full, max_size + 1)?;
             let text = if bytes.len() > max_size {
@@ -472,6 +529,7 @@ pub fn run() {
             sidecar::delete_user_skill,
             sidecar::reveal_user_skill,
             sidecar::write_remote_skills,
+            ensure_default_workspace,
             reveal_in_finder,
             open_file_default,
             resolve_file_path,

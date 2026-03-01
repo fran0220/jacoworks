@@ -4,7 +4,8 @@
 
 .PHONY: help dev dev-gateway dev-website dev-agent dev-desktop \
         build build-gateway build-website build-agent build-desktop \
-        deploy deploy-gateway deploy-website \
+        bundle-doc-packages compile-agent \
+        deploy deploy-gateway deploy-website push-skills \
         check check-gateway check-website check-agent check-desktop \
         db-reset db-migrate clean
 
@@ -65,7 +66,18 @@ build-agent: ## 构建 vm-agent
 	cd vm-agent && npm run build
 	@echo "✅ vm-agent/dist/"
 
-compile-agent: ## 编译 vm-agent 为单二进制 (bun compile, 当前平台)
+bundle-doc-packages: ## 打包文档处理 npm 包 (mammoth, docx, exceljs, pdf-lib, ...)
+	@echo "📦 Bundling document processing packages..."
+	@rm -rf /tmp/jacoworks-doc-packages
+	@mkdir -p /tmp/jacoworks-doc-packages
+	@echo '{"private":true,"dependencies":{"mammoth":"^1.11.0","docx":"^9.6.0","exceljs":"^4.4.0","pdf-lib":"^1.17.1","@pdf-lib/fontkit":"^1.1.1","pdf-parse":"^2.4.5","csv-parse":"^6.1.0"}}' > /tmp/jacoworks-doc-packages/package.json
+	@cd /tmp/jacoworks-doc-packages && npm install --production --no-audit --no-fund --silent 2>/dev/null
+	@mkdir -p desktop/src-tauri/resources
+	@tar -czf desktop/src-tauri/resources/doc-packages.tar.gz -C /tmp/jacoworks-doc-packages node_modules
+	@rm -rf /tmp/jacoworks-doc-packages
+	@echo "✅ doc-packages.tar.gz → desktop/src-tauri/resources/"
+
+compile-agent: bundle-doc-packages ## 编译 vm-agent 为单二进制 (bun compile, 当前平台)
 	cd vm-agent && npm run compile
 	@mkdir -p desktop/src-tauri/binaries
 	@cp vm-agent/dist/vm-agent desktop/src-tauri/binaries/vm-agent-$$(rustc -vV | grep host | cut -d' ' -f2)
@@ -81,7 +93,10 @@ build-desktop: compile-agent ## 构建 Desktop 安装包 (当前平台)
 #  部署 (SSH 到 jingao, 远程 git pull + 编译)
 # ═══════════════════════════════════════════
 
-deploy: deploy-gateway deploy-website ## 部署所有服务到 jingao
+push-skills: ## 推送 vm-agent/skills/ 到网关 (system skills)
+	./deploy/push-skills.sh
+
+deploy: deploy-gateway deploy-website push-skills ## 部署所有服务到 jingao
 
 deploy-sync: ## 同步代码到 jingao (git pull)
 	@echo "📥 同步代码到 jingao..."

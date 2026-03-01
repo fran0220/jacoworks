@@ -11,14 +11,22 @@ export interface MessageContent {
   image_url?: { url: string };
 }
 
+export interface FileRef {
+  name: string;
+  type: "image" | "text" | "binary";
+  size: number;
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string | MessageContent[];
+  files?: FileRef[];
+  blocks?: StreamBlock[];
 }
 
 export interface AttachedFile {
   name: string;
-  type: "image" | "text";
+  type: "image" | "text" | "binary";
   data: string;
   size: number;
 }
@@ -37,7 +45,7 @@ export interface ChatSession {
 export type StreamBlock =
   | { type: "thinking"; content: string }
   | { type: "text"; content: string }
-  | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error" }
+  | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error"; args?: string; result?: string }
   | { type: "status"; text: string };
 
 export interface FilePreview {
@@ -56,6 +64,7 @@ export interface FilePreview {
     | "video"
     | "audio"
     | "archive"
+    | "csv"
     | "design"
     | "binary";
   content: string | null;

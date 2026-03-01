@@ -9,6 +9,7 @@ interface NativePromptPayload {
   workspace?: string;
   restricted?: boolean;
   streaming_behavior?: "steer" | "followUp";
+  thinking_level?: string;
 }
 
 export interface AgentRpcEvent {

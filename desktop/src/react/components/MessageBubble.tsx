@@ -1,5 +1,8 @@
-import { Suspense, lazy } from "react";
-import type { ChatMessage, MessageContent } from "../types";
+import { File, FileImage, FileText } from "lucide-react";
+import hljs from "highlight.js/lib/core";
+import { Suspense, lazy, useState } from "react";
+import type { ChatMessage, FileRef, MessageContent, StreamBlock } from "../types";
+import ToolStatus from "./ToolStatus";
 
 const Markdown = lazy(() => import("./Markdown"));
 
@@ -18,24 +21,266 @@ function extractImages(content: string | MessageContent[]) {
     .map((part) => part.image_url!.url);
 }
 
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function FileIcon({ type }: { type: FileRef["type"] }) {
+  if (type === "image") return <FileImage size={14} />;
+  if (type === "binary") return <File size={14} />;
+  return <FileText size={14} />;
+}
+
+function FileBadges({ files }: { files: FileRef[] }) {
+  if (files.length === 0) return null;
+  return (
+    <div className="msg-files">
+      {files.map((file, i) => (
+        <div className="msg-file-badge" key={`${file.name}-${i}`}>
+          <FileIcon type={file.type} />
+          <span className="msg-file-name" title={file.name}>{file.name}</span>
+          <span className="msg-file-size">{formatSize(file.size)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function toolArgsSummary(name: string, args?: string): string {
+  if (!args) return "";
+  try {
+    const parsed = JSON.parse(args);
+    if (name === "read" || name === "edit" || name === "write") return parsed.path || "";
+    if (name === "bash") return parsed.command ? `$ ${parsed.command}`.slice(0, 80) : "";
+    if (name === "web_search" || name === "memory_search") return parsed.query || "";
+    if (name === "web_fetch") return parsed.url || "";
+    if (name === "grep") return parsed.pattern || "";
+    if (name === "find") return parsed.glob || parsed.pattern || "";
+    if (name === "ls") return parsed.path || "";
+    return "";
+  } catch { return ""; }
+}
+
+/* ---- Extension → highlight.js language map ---- */
+const EXT_LANG_MAP: Record<string, string> = {
+  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+  mjs: "javascript", py: "python", go: "go", rs: "rust", sql: "sql",
+  json: "json", yaml: "yaml", yml: "yaml", css: "css", html: "xml",
+  xml: "xml", sh: "bash", bash: "bash", toml: "yaml", md: "plaintext",
+  txt: "plaintext", log: "plaintext",
+};
+
+function langFromPath(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase() || "";
+  return EXT_LANG_MAP[ext] || "plaintext";
+}
+
+/* ---- Diff view for edit tool ---- */
+function DiffView({ result }: { result: string }) {
+  const lines = result.split("\n");
+  return (
+    <div className="tool-diff">
+      {lines.map((line, i) => {
+        let cls = "context";
+        if (line.startsWith("@@")) cls = "hunk";
+        else if (line.startsWith("+")) cls = "added";
+        else if (line.startsWith("-")) cls = "removed";
+        return (
+          <span key={i} className={`tool-diff-line ${cls}`}>
+            {line}
+            {"\n"}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---- Code view for read tool ---- */
+function CodeView({ filePath, result }: { filePath: string; result: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = result.split("\n");
+  const truncated = !expanded && lines.length > 50;
+  const display = truncated ? lines.slice(0, 50).join("\n") : result;
+  const lang = langFromPath(filePath);
+  const highlighted = hljs.getLanguage(lang)
+    ? hljs.highlight(display, { language: lang }).value
+    : display;
+
+  return (
+    <div>
+      <div className="tool-result-header">
+        <span className="tool-result-path">{filePath}</span>
+      </div>
+      <pre className="tool-code-result">
+        <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+      </pre>
+      {truncated && (
+        <button className="tool-show-more" onClick={() => setExpanded(true)}>
+          显示全部 ({lines.length} 行)
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ---- Grep/Find results ---- */
+function GrepView({ result }: { result: string }) {
+  const lines = result.split("\n").filter(Boolean);
+  return (
+    <div className="tool-grep-result">
+      {lines.map((line, i) => {
+        const match = line.match(/^(.+?):(\d+):(.*)$/);
+        if (match) {
+          return (
+            <div key={i} className="tool-grep-item">
+              <span className="tool-grep-file" title={match[1]}>{match[1]}</span>
+              <span className="tool-grep-line-num">{match[2]}</span>
+              <span className="tool-grep-text">{match[3]}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="tool-grep-item">
+            <span className="tool-grep-text">{line}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---- Bash terminal output ---- */
+function BashView({ args, result }: { args?: string; result?: string }) {
+  let command = "";
+  if (args) {
+    try { command = JSON.parse(args).command || ""; } catch { /* ignore */ }
+  }
+  return (
+    <div className="tool-bash-result">
+      {command && <div className="tool-bash-cmd">$ {command}</div>}
+      {result && <div className="tool-bash-output">{result}</div>}
+    </div>
+  );
+}
+
+/* ---- Unified tool result view ---- */
+function ToolResultView({ toolName, args, result }: { toolName: string; args?: string; result?: string }) {
+  if (toolName === "edit" && result) {
+    return (
+      <>
+        {args && <pre className="msg-tool-code">{args}</pre>}
+        <DiffView result={result} />
+      </>
+    );
+  }
+
+  if (toolName === "read" && result) {
+    let filePath = "";
+    if (args) {
+      try { filePath = JSON.parse(args).path || ""; } catch { /* ignore */ }
+    }
+    return filePath
+      ? <CodeView filePath={filePath} result={result} />
+      : <pre className="msg-tool-code">{result}</pre>;
+  }
+
+  if ((toolName === "grep" || toolName === "find") && result) {
+    return (
+      <>
+        {args && <pre className="msg-tool-code">{args}</pre>}
+        <GrepView result={result} />
+      </>
+    );
+  }
+
+  if (toolName === "bash") {
+    return <BashView args={args} result={result} />;
+  }
+
+  // Default: raw display
+  return (
+    <>
+      {args && <pre className="msg-tool-code">{args}</pre>}
+      {result && <pre className="msg-tool-code">{result}</pre>}
+    </>
+  );
+}
+
+function AssistantBlocks({ blocks }: { blocks: StreamBlock[] }) {
+  const thinkingBlocks = blocks.filter((b): b is Extract<StreamBlock, { type: "thinking" }> => b.type === "thinking");
+  const toolBlocks = blocks.filter((b): b is Extract<StreamBlock, { type: "tool" }> => b.type === "tool");
+
+  if (thinkingBlocks.length === 0 && toolBlocks.length === 0) return null;
+
+  return (
+    <>
+      {thinkingBlocks.map((block, i) => (
+        <div key={`thinking-${i}`} className="process-strip is-done is-thinking">
+          <div className="process-strip-inner">
+            <details className="process-strip-details">
+              <summary className="process-strip-summary">
+                <span className="process-strip-dot" />
+                <span className="process-strip-summary-text">思考过程</span>
+                <span className="process-strip-summary-arrow">▸</span>
+              </summary>
+              <div className="process-strip-section-content">{block.content}</div>
+            </details>
+          </div>
+        </div>
+      ))}
+      {toolBlocks.map((block) => {
+        const summary = toolArgsSummary(block.name, block.args);
+        const hasDetails = block.args || block.result;
+        return (
+          <div key={block.id} className="process-strip is-done">
+            <div className="process-strip-inner">
+              {hasDetails ? (
+                <details className="process-strip-details">
+                  <summary className="process-strip-summary">
+                    <ToolStatus toolName={block.name} status={block.status} />
+                    {summary && <span className="process-strip-hint">{summary}</span>}
+                    <span className="process-strip-summary-arrow">▸</span>
+                  </summary>
+                  <div className="process-strip-section-content">
+                    <ToolResultView toolName={block.name} args={block.args} result={block.result} />
+                  </div>
+                </details>
+              ) : (
+                <div className="process-strip-row">
+                  <ToolStatus toolName={block.name} status={block.status} />
+                  {summary && <span className="process-strip-hint">{summary}</span>}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export default function MessageBubble({
   message,
-  streaming = false,
   workspacePath,
 }: {
   message: ChatMessage;
-  streaming?: boolean;
   workspacePath?: string;
 }) {
   const isUser = message.role === "user";
   const text = extractText(message.content);
   const images = extractImages(message.content);
+  const files = message.files || [];
+  const blocks = message.blocks || [];
 
   return (
     <div className={`bubble-row ${isUser ? "user" : "assistant"}`}>
       <div className={`bubble ${isUser ? "user-bubble" : "assistant-bubble"}`}>
         {isUser ? (
           <>
+            <FileBadges files={files} />
             {images.length > 0 && (
               <div className="attached-images">
                 {images.map((url) => (
@@ -47,10 +292,12 @@ export default function MessageBubble({
           </>
         ) : (
           <>
-            <Suspense fallback={<pre className="assistant-plain-text">{text}</pre>}>
-              <Markdown content={text} workspacePath={workspacePath} />
-            </Suspense>
-            {streaming && <span className="cursor">▋</span>}
+            <AssistantBlocks blocks={blocks} />
+            {text.trim() && (
+              <Suspense fallback={<pre className="assistant-plain-text">{text}</pre>}>
+                <Markdown content={text} workspacePath={workspacePath} />
+              </Suspense>
+            )}
           </>
         )}
       </div>

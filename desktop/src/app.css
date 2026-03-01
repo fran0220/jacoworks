@@ -40,6 +40,17 @@
 	--accent-hover: #B06540;
 	--accent-light: rgba(196, 114, 74, 0.1);
 
+	/* 过程条 — 工具 (陶土色) */
+	--bg-process: rgba(196, 114, 74, 0.06);
+	--bg-process-shimmer: rgba(196, 114, 74, 0.14);
+	--bg-process-done: rgba(196, 114, 74, 0.04);
+
+	/* 过程条 — 思考 (蓝灰冷色) */
+	--accent-thinking: #7B8FA8;
+	--bg-thinking: rgba(123, 143, 168, 0.08);
+	--bg-thinking-shimmer: rgba(123, 143, 168, 0.16);
+	--bg-thinking-done: rgba(123, 143, 168, 0.05);
+
 	--danger: #D94040;
 	--danger-hover: #C03030;
 

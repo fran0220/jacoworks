@@ -1,5 +1,30 @@
 # Lessons Learned
 
+## 2026-03-01: 系统技能从未上传到网关 — 架构完整但缺少入口
+
+**触发**: 用户发现 agent 不加载技能（fontkit 不可用、处理过程不显示），排查发现网关 `skill_files` 表 `owner='system'` 为空。
+
+**根因**: 2/28 重构了技能为"网关 source of truth"架构，但只实现了 pull 和 push user skills，没有创建 **上传系统技能到网关** 的入口。`vm-agent/skills/` 里 146 个文件从未进入 DB。
+
+**修复**:
+1. 创建 `deploy/push-skills.sh` 脚本：读取 `vm-agent/skills/` → POST 到 `/api/skills/upload`（source=builtin）
+2. 支持三种认证方式：ADMIN_TOKEN env → gateway.yaml → 自动 login
+3. `make push-skills` 独立目标 + 纳入 `make deploy` 流程
+
+**规则**: 新建"source of truth 在远端"的架构时，必须同时创建数据初始化/同步入口并验证全链路（seed → store → pull → load）。
+
+---
+
+## 2026-03-01: 流式光标跳动 + process-strip 与持久化视图不一致
+
+**触发**: 用户反馈光标(▋)一会在上面一会在下面，处理过程不显示。
+
+**根因**: 流式渲染时，每个 text block 单独包在 `bubble-row` 里，tool/thinking 的 process-strip 作为兄弟元素散在 `.messages` 容器中。光标放在最后一个 text block 里，text→tool→text 交替导致跳动。而持久化消息中 process-strip 在 `.assistant-bubble` 内部，两种视图结构不一致。
+
+**修复**: 将所有流式块包在单个 `bubble-row > assistant-bubble` 内，光标始终在末尾。流式和持久化视图现在共用相同的 DOM 结构。
+
+---
+
 ## 2026-02-28: 技能架构重构 — 网关为唯一 source of truth
 
 **触发**: 更新了 `nano-banana-pro` 技能但只打包本地没更新网关，暴露了双源同步的根本缺陷。
@@ -9,6 +34,7 @@
 - 运行中：每 30 分钟轮询网关 checksum，有变化自动 pull
 - 新会话惰性加载最新技能（无需重启 Agent）
 - 管理员可随时 hotfix，所有桌面端自动生效
+- **初始化**: `make push-skills` 或 `deploy/push-skills.sh` 上传系统技能到网关 DB
 
 **规则**: 系统技能只在网关管理，桌面端只做 pull + 缓存。用户自建技能仍为本地管理 + push 同步。
 

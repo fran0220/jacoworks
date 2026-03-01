@@ -1,3 +1,4 @@
+import StreamingCursor from "../../components/StreamingCursor";
 import type { OcMessage } from "../types";
 import OcMarkdown from "./OcMarkdown";
 
@@ -14,7 +15,7 @@ export default function OcMessageBubble({
     <div className={`oc-row ${isUser ? "user" : "assistant"}`}>
       <div className={`oc-bubble ${isUser ? "user" : "assistant"}`}>
         {isUser ? <p className="oc-user-text">{message.content}</p> : <OcMarkdown content={message.content} />}
-        {streaming && !isUser && <span className="oc-cursor">▋</span>}
+        {streaming && !isUser && <StreamingCursor />}
       </div>
     </div>
   );

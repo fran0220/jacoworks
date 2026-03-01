@@ -30,6 +30,7 @@ interface PromptCommand extends RpcCommandBase {
   workspace?: string;
   restricted?: boolean;
   streaming_behavior?: "steer" | "followUp";
+  thinking_level?: string;
 }
 
 interface AbortCommand extends RpcCommandBase {
@@ -121,6 +122,14 @@ async function handlePrompt(command: PromptCommand) {
       await session.setModel(requestedModel);
     }
 
+    // Apply thinking level if specified
+    if (command.thinking_level) {
+      const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+      if (validLevels.includes(command.thinking_level)) {
+        session.setThinkingLevel(command.thinking_level as "off" | "minimal" | "low" | "medium" | "high" | "xhigh");
+      }
+    }
+
     sendResponse(id, command.type, true, { session_id: sessionId, model: modelKey });
 
     let finished = false;
@@ -136,6 +145,20 @@ async function handlePrompt(command: PromptCommand) {
 
     const unsub = session.subscribe((event) => {
       if (finished) return;
+
+      // Debug: log key events to stderr (visible in RPC log panel)
+      if (event.type === "message_update") {
+        const ame = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
+        if (ame?.type === "thinking_start") console.error("[stream] thinking_start");
+        else if (ame?.type === "thinking_delta") console.error(`[stream] thinking_delta (${ame.delta?.length || 0} chars)`);
+        else if (ame?.type === "thinking_end") console.error("[stream] thinking_end");
+      } else if (event.type === "agent_start" || event.type === "agent_end" || event.type === "turn_start" || event.type === "turn_end") {
+        console.error(`[stream] ${event.type}`);
+      } else if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
+        const te = event as { toolName?: string };
+        console.error(`[stream] ${event.type}: ${te.toolName || "?"}`);
+      }
+
       send({ id, type: "session_event", session_id: sessionId, event });
       if (event.type === "agent_end") {
         finish();

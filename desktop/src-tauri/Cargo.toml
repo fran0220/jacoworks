@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.1.9"
+version = "1.0.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -36,3 +36,4 @@ walkdir = "2"
 base64 = "0.22"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-updater = "2"
+dirs = "6"

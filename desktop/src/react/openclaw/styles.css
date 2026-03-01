@@ -244,10 +244,7 @@
   font-family: inherit;
 }
 
-.oc-cursor {
-  animation: blink 1s var(--ease-step-end) infinite;
-  color: var(--accent);
-}
+/* streaming cursor is now shared via StreamingCursor component + chat.css */
 
 .oc-inline-error {
   margin: 0 var(--space-6);

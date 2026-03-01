@@ -40,6 +40,31 @@
   background: var(--bg-hover);
 }
 
+/* ===== Debug Toggle ===== */
+
+.btn-debug {
+  width: var(--size-btn);
+  height: var(--size-btn);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.btn-debug:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.btn-debug.active {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
 /* ===== OpenClaw Pill Button ===== */
 
 .btn-openclaw {
