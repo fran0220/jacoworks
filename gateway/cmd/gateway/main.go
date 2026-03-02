@@ -411,29 +411,29 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 			"FAL_API_KEY":    llm.FalAPIKey,
 		}
 		deviceKey := wsProxy.GetDeviceKeyInfo()
-		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
-		if err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("provision container failed")
-			al.Log(admin.ID, "provision_container", "container", containerName, r.RemoteAddr)
-			writeJSON(w, http.StatusCreated, map[string]interface{}{
-				"user_id":   req.UserID,
-				"container": containerName,
-				"warning":   "container provisioning failed, admin can retry",
-			})
-			return
-		}
 
-		if err := s.UpdateContainer(r.Context(), req.UserID, containerName, ip, containerToken); err != nil {
-			log.Error().Err(err).Str("container", containerName).Str("user_id", req.UserID).Msg("persist provisioned container failed")
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "container provisioned but failed to persist state"})
-			return
-		}
+		// Respond immediately — provisioning runs in background (dir backend clone is slow)
 		al.Log(admin.ID, "provision_container", "container", containerName, r.RemoteAddr)
-		writeJSON(w, http.StatusCreated, map[string]interface{}{
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"user_id":   req.UserID,
 			"container": containerName,
-			"ip":        ip,
+			"status":    "provisioning",
 		})
+
+		go func() {
+			ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
+			if err != nil {
+				log.Error().Err(err).Str("container", containerName).Msg("async provision failed")
+				return
+			}
+			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer bgCancel()
+			if err := s.UpdateContainer(bgCtx, req.UserID, containerName, ip, containerToken); err != nil {
+				log.Error().Err(err).Str("container", containerName).Msg("async provision: persist failed")
+				return
+			}
+			log.Info().Str("container", containerName).Str("ip", ip).Str("user", req.Username).Msg("async provision complete")
+		}()
 	}
 }
 
@@ -683,34 +683,32 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			"FAL_API_KEY":    llm.FalAPIKey,
 		}
 		deviceKey := wsProxy.GetDeviceKeyInfo()
-		ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
-		if err != nil {
-			log.Error().Err(err).Str("container", containerName).Str("user_id", user.ID).Msg("self-provision failed")
-			al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
-			writeJSON(w, http.StatusAccepted, map[string]interface{}{
-				"status":         "provisioning",
-				"container_name": containerName,
-				"warning":        "container provisioning in progress, retry later",
-			})
-			return
-		}
 
-		// Use background context — HTTP request context may already be canceled
-		// after the long-running ProvisionContainer call.
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer bgCancel()
-		if err := s.UpdateContainer(bgCtx, user.ID, containerName, ip, containerToken); err != nil {
-			log.Error().Err(err).Str("container", containerName).Str("user_id", user.ID).Msg("persist self-provisioned container failed")
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "container provisioned but failed to persist state"})
-			return
-		}
+		// Respond immediately — provisioning runs in background (dir backend clone is slow)
 		al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"status":         "provisioning",
+			"container_name": containerName,
+		})
 
-		// Push memory + skills to newly provisioned container
+		userID := user.ID
 		go func() {
-			bgCtx := context.Background()
-			// Push memory
-			memFiles, err := s.GetAllMemoryFiles(bgCtx, user.ID)
+			ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
+			if err != nil {
+				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision failed")
+				return
+			}
+			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer bgCancel()
+			if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken); err != nil {
+				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision: persist failed")
+				return
+			}
+			log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async self-provision complete")
+
+			// Push memory + skills to newly provisioned container
+			bgCtx2 := context.Background()
+			memFiles, err := s.GetAllMemoryFiles(bgCtx2, userID)
 			if err == nil && len(memFiles) > 0 {
 				fileMap := make(map[string]string, len(memFiles))
 				for _, f := range memFiles {
@@ -720,9 +718,8 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 					log.Error().Err(err).Str("container", containerName).Msg("provision: push memory failed")
 				}
 			}
-			// Push skills (system + user)
-			for _, owner := range []string{"system", user.ID} {
-				skillFiles, err := s.GetSkillFiles(bgCtx, owner)
+			for _, owner := range []string{"system", userID} {
+				skillFiles, err := s.GetSkillFiles(bgCtx2, owner)
 				if err == nil && len(skillFiles) > 0 {
 					fileMap := make(map[string]string, len(skillFiles))
 					for _, f := range skillFiles {
@@ -734,12 +731,6 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 				}
 			}
 		}()
-
-		writeJSON(w, http.StatusCreated, map[string]interface{}{
-			"status":         "ready",
-			"container_name": containerName,
-			"ip":             ip,
-		})
 	}
 }
 
