@@ -272,7 +272,7 @@ export function useChatStream({
           thinking_level: appSettings.thinkingLevel || undefined,
         });
 
-        const STREAM_TIMEOUT_MS = 120_000;
+        const STREAM_TIMEOUT_MS = 180_000;
         let lastActivity = Date.now();
         streamTimeoutId = setInterval(() => {
           if (Date.now() - lastActivity > STREAM_TIMEOUT_MS) {
@@ -301,6 +301,7 @@ export function useChatStream({
 
           if (packet.type === "done") break;
           if (packet.type !== "session_event" || !packet.event) continue;
+          if ((packet.event as { type?: string }).type === "keepalive") continue;
 
           const event = packet.event as {
             type: string;
@@ -415,6 +416,13 @@ export function useChatStream({
 
         if (!abortedRef.current) {
           await finalizeStream();
+        } else {
+          const hasPartialText = blocksRef.current.some(
+            (b) => b.type === "text" && b.content.trim(),
+          );
+          if (hasPartialText) {
+            await finalizeStream();
+          }
         }
       } catch (error) {
         if (!abortedRef.current) {

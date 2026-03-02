@@ -126,6 +126,20 @@ renderer.code = ({ text, lang }) => {
   </div>`;
 };
 
+renderer.image = ({ href, title, text }) => {
+  if (!href) return `<img alt="${(text || "").replace(/"/g, "&quot;")}" />`;
+
+  const safeAlt = (text || "").replace(/"/g, "&quot;");
+  const safeTitle = title ? ` title="${title.replace(/"/g, "&quot;")}"` : "";
+
+  if (/^(https?:|data:)/i.test(href)) {
+    return `<img src="${href.replace(/"/g, "&quot;")}" alt="${safeAlt}"${safeTitle} loading="lazy" class="md-image" />`;
+  }
+
+  const escaped = href.replace(/"/g, "&quot;");
+  return `<img data-local-src="${escaped}" alt="${safeAlt}"${safeTitle} loading="lazy" class="md-image md-image-pending" />`;
+};
+
 renderer.codespan = ({ text }) => {
   const decoded = text
     .replace(/&amp;/g, "&")
@@ -194,7 +208,7 @@ export default function Markdown({
         ADD_TAGS: ["pre", "code", "img"],
         ADD_ATTR: [
           "class", "id", "data-code-id", "data-file-path", "data-ext", "data-kind",
-          "src", "alt", "width", "height", "loading", "title", "decoding",
+          "src", "alt", "width", "height", "loading", "title", "decoding", "data-local-src",
         ],
       }),
     [content],
@@ -270,6 +284,54 @@ export default function Markdown({
     return () => {
       disposed = true;
     };
+  }, [html, workspacePath]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const localImgs = Array.from(
+      root.querySelectorAll<HTMLImageElement>("img[data-local-src]"),
+    );
+    if (!localImgs.length) return;
+
+    let disposed = false;
+
+    const resolveImg = async (node: HTMLImageElement) => {
+      if (disposed || node.src) return;
+      const localPath = node.getAttribute("data-local-src");
+      if (!localPath) return;
+
+      let assetUrl = thumbUrlCacheRef.current.get(localPath);
+      if (!assetUrl) {
+        try {
+          const resolved = await invoke<string>("resolve_file_path", {
+            path: localPath,
+            workspace: workspacePath || null,
+          });
+          assetUrl = convertFileSrc(resolved);
+          thumbUrlCacheRef.current.set(localPath, assetUrl);
+        } catch {
+          node.alt = `[图片加载失败: ${localPath}]`;
+          node.classList.remove("md-image-pending");
+          return;
+        }
+      }
+
+      if (disposed) return;
+      node.onload = () => node.classList.remove("md-image-pending");
+      node.onerror = () => {
+        node.alt = `[图片加载失败: ${localPath}]`;
+        node.classList.remove("md-image-pending");
+      };
+      node.src = assetUrl;
+    };
+
+    for (const img of localImgs) {
+      void resolveImg(img);
+    }
+
+    return () => { disposed = true; };
   }, [html, workspacePath]);
 
   const onClick: MouseEventHandler<HTMLDivElement> = (event) => {

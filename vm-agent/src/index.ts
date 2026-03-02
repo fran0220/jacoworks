@@ -94,6 +94,8 @@ function normalizeId(id: RpcId | undefined): RpcId {
   return id ?? `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const promptInFlight = new Map<string, boolean>();
+
 async function handlePrompt(command: PromptCommand) {
   const id = normalizeId(command.id);
 
@@ -110,6 +112,15 @@ async function handlePrompt(command: PromptCommand) {
     : `${config.primaryProvider}/${config.primaryModel}`;
   const sessionId = command.session_id || modelKey;
 
+  if (promptInFlight.get(sessionId)) {
+    sendResponse(id, command.type, false, { error: "prompt already in-flight for this session" });
+    sendError(id, sessionId, "prompt already in-flight for this session");
+    sendDone(id, sessionId);
+    return;
+  }
+
+  promptInFlight.set(sessionId, true);
+
   try {
     const { session } = await getSession(sessionId, {
       userId: command.user_id,
@@ -122,7 +133,6 @@ async function handlePrompt(command: PromptCommand) {
       await session.setModel(requestedModel);
     }
 
-    // Apply thinking level if specified
     if (command.thinking_level) {
       const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
       if (validLevels.includes(command.thinking_level)) {
@@ -133,9 +143,15 @@ async function handlePrompt(command: PromptCommand) {
     sendResponse(id, command.type, true, { session_id: sessionId, model: modelKey });
 
     let finished = false;
+    const keepaliveId = setInterval(() => {
+      send({ id, type: "session_event", session_id: sessionId, event: { type: "keepalive" } });
+    }, 15_000);
+
     const finish = (error?: string) => {
       if (finished) return;
       finished = true;
+      clearInterval(keepaliveId);
+      promptInFlight.delete(sessionId);
       if (error) {
         sendError(id, sessionId, error);
       }
@@ -146,7 +162,6 @@ async function handlePrompt(command: PromptCommand) {
     const unsub = session.subscribe((event) => {
       if (finished) return;
 
-      // Debug: log key events to stderr (visible in RPC log panel)
       if (event.type === "message_update") {
         const ame = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
         if (ame?.type === "thinking_start") console.error("[stream] thinking_start");
@@ -157,12 +172,11 @@ async function handlePrompt(command: PromptCommand) {
       } else if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
         const te = event as { toolName?: string };
         console.error(`[stream] ${event.type}: ${te.toolName || "?"}`);
+      } else if (event.type === "auto_compaction_start" || event.type === "auto_compaction_end" || event.type === "auto_retry_start" || event.type === "auto_retry_end") {
+        console.error(`[stream] ${event.type}`);
       }
 
       send({ id, type: "session_event", session_id: sessionId, event });
-      if (event.type === "agent_end") {
-        finish();
-      }
     });
 
     const options = session.isStreaming
@@ -175,6 +189,7 @@ async function handlePrompt(command: PromptCommand) {
         finish(err instanceof Error ? err.message : "prompt failed");
       });
   } catch (err) {
+    promptInFlight.delete(sessionId);
     const error = err instanceof Error ? err.message : "prompt failed";
     sendResponse(id, command.type, false, { error });
     sendError(id, sessionId, error);

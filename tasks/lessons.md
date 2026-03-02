@@ -1,5 +1,28 @@
 # Lessons Learned
 
+## 2026-03-02: 4-5 轮对话后响应超时 — Pi SDK 事件流架构缺陷
+
+**触发**: 用户反馈 4-5 轮对话后出现"响应超时，AI 长时间未返回内容"，部分情况下生成图片无法预览。
+
+**根因**: `handlePrompt` 在收到第一个 `agent_end` 事件时就调用 `finish()` (发送 "done" + 取消订阅)。但 Pi SDK 的 `session.prompt()` 在 `agent_end` 之后还有内部工作：
+1. **自动重试**: LLM 返回 429/502/overloaded 错误时，SDK 内部 `_handleRetryableError` 启动重试 (`agent.continue()`)，新的 agent run 事件因 listener 已取消订阅而丢失
+2. **自动压缩**: 上下文超过 `contextWindow - reserveTokens` (200K - 16K = 184K) 时，SDK 发起额外 LLM 调用做摘要压缩
+3. **前置压缩**: `session.prompt()` 在发送用户消息之前先检查是否需要压缩（line 559-563），压缩期间无流式事件
+
+**修复**:
+1. **vm-agent**: 移除 `agent_end` 作为 finish 触发，改用 `session.prompt().then()` 作为唯一 finish 信号，确保订阅覆盖整个重试/压缩周期
+2. **vm-agent**: 添加 15s keepalive 心跳，防止长静默期（压缩/慢 LLM）触发前端超时
+3. **vm-agent**: 添加 per-session in-flight 锁，防止重叠 prompt 导致状态混乱
+4. **desktop**: 超时阈值 120s → 180s；超时时保存部分响应内容
+5. **desktop**: Markdown 添加 `renderer.image` + `convertFileSrc` 解析本地图片路径
+
+**规则**:
+- Pi SDK 的 `agent_end` 只表示"一次 agent run 结束"，不代表整个 prompt 生命周期完成
+- 订阅 Pi SDK 事件时，必须保持到 `session.prompt()` Promise settle 才取消
+- 长时间静默操作（压缩、重试）需要 keepalive 机制保持前端连接活跃
+
+---
+
 ## 2026-03-01: 系统技能从未上传到网关 — 架构完整但缺少入口
 
 **触发**: 用户发现 agent 不加载技能（fontkit 不可用、处理过程不显示），排查发现网关 `skill_files` 表 `owner='system'` 为空。
