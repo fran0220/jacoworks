@@ -54,8 +54,18 @@ func (c *SSHClient) Clone(templateName, newName string) error {
 
 func (c *SSHClient) Start(name string) error {
 	log.Info().Str("name", name).Msg("starting container")
-	_, err := c.lxc("start", name)
-	return err
+	if _, err := c.lxc("start", name); err != nil {
+		return err
+	}
+
+	// Wait for systemd to initialize
+	time.Sleep(3 * time.Second)
+
+	// Ensure OpenClaw service is running
+	if err := c.EnsureService(name); err != nil {
+		log.Warn().Err(err).Str("name", name).Msg("ensure service after start failed")
+	}
+	return nil
 }
 
 func (c *SSHClient) Stop(name string) error {
@@ -87,13 +97,20 @@ func (c *SSHClient) Unfreeze(name string) error {
 		}
 	}
 
-	// Wait for OpenClaw gateway to be ready
+	// Wait for network to be ready
+	time.Sleep(2 * time.Second)
+
+	// Ensure OpenClaw service is running (may have died before freeze)
+	if err := c.EnsureService(name); err != nil {
+		log.Warn().Err(err).Str("name", name).Msg("ensure service after unfreeze failed")
+	}
+
 	ip, err := c.GetIP(name)
 	if err != nil {
 		return fmt.Errorf("get IP after unfreeze: %w", err)
 	}
 
-	return c.waitForHealth(ip, 10*time.Second)
+	return c.WaitForHealth(ip, 30*time.Second)
 }
 
 // Exec runs a command inside a container via lxc exec.
@@ -199,11 +216,13 @@ func (c *SSHClient) List() ([]ContainerStatus, error) {
 	return containers, nil
 }
 
-// waitForHealth polls the OpenClaw health endpoint until ready.
-func (c *SSHClient) waitForHealth(ip string, timeout time.Duration) error {
+// WaitForHealth polls the OpenClaw health endpoint until ready.
+func (c *SSHClient) WaitForHealth(ip string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	healthURL := fmt.Sprintf("http://%s:%d/health", ip, c.openclawPort)
 	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 %s", healthURL)
+
+	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
 
 	for time.Now().Before(deadline) {
 		out, err := c.sshExec(curlCmd)
@@ -212,6 +231,7 @@ func (c *SSHClient) waitForHealth(ip string, timeout time.Duration) error {
 			// Any HTTP response (2xx, 4xx) means the server is up.
 			// OpenClaw may return 404 for /health — that's fine.
 			if len(code) == 3 && code[0] >= '1' && code[0] <= '5' && code != "000" {
+				log.Info().Str("url", healthURL).Str("status", code).Msg("container healthy")
 				return nil
 			}
 		}
@@ -373,7 +393,7 @@ func (c *SSHClient) ProvisionContainer(name, containerToken string, envVars map[
 	}
 
 	// 7. Wait for health
-	if err := c.waitForHealth(ip, 30*time.Second); err != nil {
+	if err := c.WaitForHealth(ip, 30*time.Second); err != nil {
 		log.Warn().Err(err).Str("name", name).Msg("container started but health check failed")
 	}
 
@@ -541,6 +561,22 @@ func (c *SSHClient) PushSkillFiles(containerName string, files map[string]string
 	}
 
 	log.Info().Str("container", containerName).Int("files", len(files)).Msg("skill files pushed")
+	return nil
+}
+
+// EnsureService checks if the OpenClaw service is active inside the container
+// and starts it if not. This handles cases where the service exited cleanly
+// before a freeze/stop cycle and systemd didn't auto-restart it.
+func (c *SSHClient) EnsureService(containerName string) error {
+	out, err := c.lxc("exec", containerName, "--", "systemctl", "is-active", "openclaw.service")
+	if err == nil && strings.TrimSpace(out) == "active" {
+		return nil
+	}
+
+	log.Info().Str("container", containerName).Str("status", strings.TrimSpace(out)).Msg("openclaw service not active, starting")
+	if _, err := c.lxc("exec", containerName, "--", "systemctl", "start", "openclaw.service"); err != nil {
+		return fmt.Errorf("start openclaw service: %w", err)
+	}
 	return nil
 }
 

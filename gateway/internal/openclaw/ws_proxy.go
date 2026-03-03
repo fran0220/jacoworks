@@ -380,7 +380,22 @@ func (p *WSProxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, 
 
 	switch strings.ToUpper(status.Status) {
 	case "RUNNING":
-		return nil
+		if err := p.lxdClient.WaitForHealth(info.ContainerIP, 5*time.Second); err == nil {
+			return nil
+		}
+		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("container running but service not healthy, restarting openclaw")
+		if err := p.lxdClient.EnsureService(info.ContainerName); err != nil {
+			return fmt.Errorf("restart openclaw service: %w", err)
+		}
+		ip := info.ContainerIP
+		if ip == "" {
+			var getErr error
+			ip, getErr = p.lxdClient.GetIP(info.ContainerName)
+			if getErr != nil {
+				return fmt.Errorf("get IP for health check: %w", getErr)
+			}
+		}
+		return p.lxdClient.WaitForHealth(ip, 30*time.Second)
 	case "FROZEN":
 		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("unfreezing for ws")
 		if err := p.lxdClient.Unfreeze(info.ContainerName); err != nil {
@@ -412,7 +427,8 @@ func (p *WSProxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, 
 		if p.onContainerReady != nil {
 			go p.onContainerReady(userID, info.ContainerName)
 		}
-		return nil
+		// Wait for OpenClaw to be ready
+		return p.lxdClient.WaitForHealth(ip, 30*time.Second)
 	default:
 		return fmt.Errorf("container in unexpected state: %s", status.Status)
 	}
