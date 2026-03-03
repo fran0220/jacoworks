@@ -23,6 +23,12 @@ const (
 	defaultIdleTTL      = 5 * time.Minute
 	defaultRingBufSize  = 1024
 	subscriberQueueSize = 256
+
+	pongWait       = 60 * time.Second
+	pingPeriod     = 20 * time.Second
+	writeWait      = 10 * time.Second
+	dialRetryTotal = 8 * time.Second
+	dialRetryDelay = 300 * time.Millisecond
 )
 
 var (
@@ -250,7 +256,9 @@ func (c *UserChannel) SendRequest(method string, params json.RawMessage, request
 	}
 
 	c.upstreamWriteMu.Lock()
+	_ = upstream.SetWriteDeadline(time.Now().Add(writeWait))
 	err = upstream.WriteMessage(websocket.TextMessage, payload)
+	_ = upstream.SetWriteDeadline(time.Time{})
 	c.upstreamWriteMu.Unlock()
 	if err != nil {
 		c.reconnecting.Store(true)
@@ -336,7 +344,7 @@ func (c *UserChannel) run() {
 		}
 
 		upstreamURL := fmt.Sprintf("ws://%s:%d", info.ContainerIP, c.pool.proxy.openclawPort)
-		upstream, _, err := websocket.DefaultDialer.Dial(upstreamURL, nil)
+		upstream, err := dialWithRetry(upstreamURL, dialRetryTotal)
 		if err != nil {
 			log.Warn().Err(err).Str("user_id", c.userID).Str("url", upstreamURL).Msg("openclaw channel: upstream dial failed")
 			c.publishProxyError("upstream connection failed, reconnecting")
@@ -367,12 +375,41 @@ func (c *UserChannel) run() {
 		backoff = reconnectBaseDelay
 		c.publishProxyReady()
 
+		// Set up pong-based liveness detection
+		upstream.SetReadLimit(1 << 20)
+		_ = upstream.SetReadDeadline(time.Now().Add(pongWait))
+		upstream.SetPongHandler(func(string) error {
+			return upstream.SetReadDeadline(time.Now().Add(pongWait))
+		})
+
+		pingDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(pingPeriod)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					c.upstreamWriteMu.Lock()
+					err := upstream.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait))
+					c.upstreamWriteMu.Unlock()
+					if err != nil {
+						return
+					}
+				case <-pingDone:
+					return
+				case <-c.stopCh:
+					return
+				}
+			}
+		}()
+
 		if err := c.readLoop(upstream, info.ContainerName); err != nil {
 			if !c.closed.Load() {
 				log.Warn().Err(err).Str("user_id", c.userID).Str("container", info.ContainerName).Msg("openclaw channel: upstream disconnected")
 				c.publishProxyError("upstream disconnected, reconnecting")
 			}
 		}
+		close(pingDone)
 
 		c.mu.Lock()
 		if c.upstream == upstream {
@@ -489,6 +526,22 @@ func jitter(base time.Duration) time.Duration {
 		return 0
 	}
 	return time.Duration(rand.Int64N(int64(window) + 1))
+}
+
+func dialWithRetry(url string, total time.Duration) (*websocket.Conn, error) {
+	deadline := time.Now().Add(total)
+	var lastErr error
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+
+	for time.Now().Before(deadline) {
+		conn, _, err := dialer.Dial(url, nil)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		time.Sleep(dialRetryDelay)
+	}
+	return nil, fmt.Errorf("dial timeout after %s: %w", total, lastErr)
 }
 
 func mapUpstreamToEvent(msg []byte) (string, bool) {

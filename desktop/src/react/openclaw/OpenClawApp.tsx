@@ -86,6 +86,7 @@ export default function OpenClawApp({
   const sessionRef = useRef<OcSession | null>(null);
   const activeAssistantIdRef = useRef<string | null>(null);
   const sessionLoadedRef = useRef(false);
+  const lastEventAtRef = useRef<number>(0);
 
   const connectionReady = phase === "ready";
 
@@ -181,6 +182,8 @@ export default function OpenClawApp({
 
   const handleOcEvent = useCallback(
     (event: OcEvent) => {
+      lastEventAtRef.current = Date.now();
+
       if (event.event === "agent") {
         const payload = asRecord(event.payload);
         if (!payload) return;
@@ -242,6 +245,23 @@ export default function OpenClawApp({
     }
   }, [connectionReady, loadOrCreateSession]);
 
+  const STALL_TIMEOUT_MS = 60_000;
+  const STALL_CHECK_INTERVAL_MS = 5_000;
+
+  useEffect(() => {
+    if (!isStreaming) return;
+
+    const interval = window.setInterval(() => {
+      const elapsed = Date.now() - lastEventAtRef.current;
+      if (lastEventAtRef.current > 0 && elapsed > STALL_TIMEOUT_MS) {
+        setMessageError("响应超时，AI 长时间未返回内容");
+        finalizeStreamingMessage();
+      }
+    }, STALL_CHECK_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [isStreaming, finalizeStreamingMessage]);
+
   // --- Send / Abort ---
 
   const sendMessage = useCallback(
@@ -288,6 +308,7 @@ export default function OpenClawApp({
 
       activeAssistantIdRef.current = assistantMessage.id;
       setIsStreaming(true);
+      lastEventAtRef.current = Date.now();
 
       try {
         await sse.sendChat({
