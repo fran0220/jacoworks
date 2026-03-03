@@ -214,12 +214,12 @@ export function useChatStream({
       requestTitleGeneration(userMessage, assistantText).then(async (aiTitle) => {
         if (!aiTitle) return;
 
-        const latestSession = localSessionRef.current;
         if (titleRequestVersionRef.current !== titleRequestVersion) return;
-        if (latestSession.id !== targetSessionId || !isUntitledTitle(latestSession.title)) return;
+        const latestSession = localSessionRef.current;
+        if (latestSession.id !== targetSessionId) return;
 
         setLocalSession((prev) => {
-          if (prev.id !== targetSessionId || !isUntitledTitle(prev.title)) return prev;
+          if (prev.id !== targetSessionId) return prev;
           return { ...prev, title: aiTitle };
         });
 
