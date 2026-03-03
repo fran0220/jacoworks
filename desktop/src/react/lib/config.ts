@@ -7,14 +7,14 @@ export const OPENCLAW_WS_URL =
 export const DEFAULT_MODEL = "proxy-claude/claude-opus-4-6";
 
 export const MODEL_OPTIONS = [
+  { value: "proxy-claude/claude-sonnet-4-6", label: "Sonnet 4.6" },
   { value: "proxy-claude/claude-opus-4-6", label: "Opus 4.6" },
-  { value: "proxy-claude/claude-haiku-4-5-20251001", label: "Haiku 4.5" },
-  { value: "proxy-gpt/gpt-5.2", label: "GPT-5.2" },
   { value: "proxy-gpt/gpt-5.3-codex", label: "GPT-5.3 Codex" },
+  { value: "proxy-gpt/gpt-5.2", label: "GPT-5.2" },
   { value: "proxy-gemini/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-  { value: "proxy-gemini/gemini-3-pro-preview", label: "Gemini 3 Pro" },
+  { value: "proxy-gemini/gemini-3-flash-preview", label: "Gemini 3 Flash" },
   { value: "proxy-grok/grok-4.20-beta", label: "Grok 4.20" },
-  { value: "proxy-grok/grok-4.1-fast", label: "Grok 4.1 Fast" },
+  { value: "proxy-glm/glm-5", label: "GLM-5" },
 ] as const;
 
 export const THINKING_LEVELS = [

@@ -16,7 +16,13 @@ type Config struct {
 	LXD       LXDConfig       `yaml:"lxd"`
 	LLM       LLMConfig       `yaml:"llm"`
 	Database  DatabaseConfig  `yaml:"database"`
+	GitHub    GitHubConfig    `yaml:"github"`
 	ChatAgent ChatAgentConfig `yaml:"chat_agent"`
+}
+
+type GitHubConfig struct {
+	Token string `yaml:"token"`
+	Repo  string `yaml:"repo"`
 }
 
 type ChatAgentConfig struct {
@@ -134,6 +140,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_DATABASE_URL"); v != "" {
 		cfg.Database.URL = v
+	}
+	if v := os.Getenv("GATEWAY_GITHUB_TOKEN"); v != "" {
+		cfg.GitHub.Token = v
+	}
+	if v := os.Getenv("GATEWAY_GITHUB_REPO"); v != "" {
+		cfg.GitHub.Repo = v
 	}
 	if v := os.Getenv("GATEWAY_LLM_PROXY_URL"); v != "" {
 		cfg.LLM.ProxyURL = v

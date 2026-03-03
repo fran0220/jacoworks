@@ -8,14 +8,17 @@
 gateway/                         Go 管理网关 (jingao :8847, OpenResty 反代 jacoapi.jingao.club)
   cmd/gateway/main.go            入口 (认证 + 会话 CRUD + 管理 + WS 代理)
   internal/
-    config/config.go             YAML + env override, ChatAgentConfig
+    config/config.go             YAML + env override, ChatAgentConfig, GitHubConfig
     auth/{middleware,handlers}.go Goth 飞书 SSO + bcrypt + 激活码
     auth/feishu/                 Goth Feishu Provider
     store/{pg,users,sessions,containers,invites,settings,memory,skills,games}.go  PostgreSQL (pgx/v5)
     proxy/handler.go             ReverseProxy (OpenClaw HTTP + ChatAgent)
     cowork/handler.go            文件操作 (upload/download/changes)
     openclaw/ws_proxy.go         WebSocket 代理 (Ed25519 设备密钥)
-    lxd/{client,ssh_client,freezer}.go  LXD 容器生命周期 + 记忆/技能文件推拉
+    openclaw/ws_handler.go       新 WS 传输 (ticket auth + 容器健康管理)
+    openclaw/ws_ticket.go        WS ticket 签发/验证 (HMAC-SHA256, 30s TTL)
+    github/client.go             GitHub API 客户端 (Issue 创建 + 图片上传到 feedback-assets 分支)
+    lxd/{client,ssh_client,freezer.go}  LXD 容器生命周期 + 记忆/技能推拉 + 健康检查
     feishubot/{client,handler}.go  飞书 Bot webhook + 消息路由到容器
     games/handler.go             游戏画廊 API (tar.gz 部署 + 静态文件)
     audit/logger.go
@@ -24,7 +27,7 @@ vm-agent/                        本地 Agent sidecar (Pi SDK + RPC stdio)
   src/
     index.ts                     RPC 主循环 (stdin/stdout JSON lines)
     config.ts                    环境变量 (网关下发, 无本地 fallback)
-    agent.ts                     Session 池 + 4 Provider + per-user 隔离 + title 生成
+    agent.ts                     Session 池 + 5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离 + title 生成
     prompts/system.ts            系统提示词 (核心身份 + SOUL.md overlay + 动态能力)
     extensions/memory.ts         记忆系统 (context hook 纯本地读 + memory_search/save 工具)
     services/{heartbeat,cron}.ts 后台服务 (sidecar 模式默认关闭)
@@ -190,6 +193,7 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 | POST | `/api/games/deploy` | 游戏部署 (tar.gz + metadata) |
 | GET | `/api/games` | 游戏列表 (公开) |
 | DELETE | `/api/games/{id}` | 删除游戏 (作者或管理员) |
+| POST | `/api/feedback` | 提交桌面端反馈并同步 GitHub Issue (支持最多 3 张截图) |
 | POST | `/api/feishu/webhook` | 飞书 Bot webhook (无需认证) |
 | GET | `/api/admin/settings` | 读取系统设置 (LLM 密钥等) |
 | PUT | `/api/admin/settings` | 更新系统设置 + 热重载内存配置 |
@@ -208,10 +212,11 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 
 | Provider | 模型 |
 |----------|------|
-| `proxy-claude` (anthropic) | claude-opus-4-6, claude-haiku-4-5-20251001 |
+| `proxy-claude` (anthropic) | claude-sonnet-4-6, claude-opus-4-6 |
 | `proxy-gpt` (openai) | gpt-5.3-codex, gpt-5.2 |
-| `proxy-gemini` (openai) | gemini-3.1-pro-preview, gemini-3-pro-preview |
-| `proxy-grok` (openai) | grok-4.20-beta, grok-4.1-fast |
+| `proxy-gemini` (openai) | gemini-3.1-pro-preview, gemini-3-flash-preview |
+| `proxy-grok` (openai) | grok-4.20-beta |
+| `proxy-glm` (openai) | glm-5 |
 
 **路由**: `"model-id"` (自动匹配) 或 `"provider/model-id"` (显式指定)
 
@@ -227,7 +232,7 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_
 | `containers` | user_id UNIQUE, container_name, container_ip, status('running'\|'stopped'\|'frozen'\|'creating'\|'error') |
 | `invite_codes` | code PK, role, max_uses, used_count |
 | `audit_logs` | user_id, action, detail JSONB |
-| `system_settings` | key TEXT PK, value TEXT, description TEXT (LLM 密钥等运行时配置) |
+| `system_settings` | key TEXT PK, value TEXT, description TEXT (LLM/GitHub 等运行时配置，含 `github_token` `github_repo`) |
 | `user_memory` | user_id + file_path UNIQUE, content TEXT, checksum TEXT |
 | `skill_files` | owner + file_path UNIQUE, content TEXT, checksum TEXT (owner='system' 或 user_id) |
 | `games` | id TEXT PK, user_id → users, author_name, title, description, thumbnail_url, play_url, status, play_count |
@@ -245,9 +250,12 @@ server: { port: 8847, host: "0.0.0.0", public_url: "https://jacoapi.jingao.club"
 auth: { admin_token, feishu_client_id, feishu_client_secret, session_ttl_hours: 720 }
 database: { url: "postgresql://...@127.0.0.1:5432/jacoworks" }
 llm: { proxy_url, proxy_key }   # 留空, LLM 配置统一由 DB system_settings 管理
+github: { token, repo }         # 反馈同步 GitHub Issues (可由 system_settings: github_token/github_repo 覆盖)
 lxd: { ssh_target: "opc@10.0.1.3", template: "tpl-openclaw", network: "jaconet", openclaw_port: 18789 }
 chat_agent: { url, token }  # 可选外部 ChatAgent
 ```
+
+- `GATEWAY_GITHUB_TOKEN` / `GATEWAY_GITHUB_REPO` — 网关 GitHub 反馈同步配置 (Issue + feedback-assets 截图分支)
 
 **vm-agent** (.env, Tauri 启动时注入):
 - `LLM_PROXY_URL` / `LLM_PROXY_KEY` — 中转站 (网关下发, 无本地 fallback)
@@ -577,6 +585,10 @@ make clean             # 清理构建产物
 - [x] 游戏 AI 开发技能 (vm-agent/skills/开发/game-dev-ai/)
 - [x] Apple 代码签名 (Developer ID Application 证书 + Entitlements JIT 权限)
 - [x] 桌面端发布流程打通 (macOS 本地构建 + Windows CI + jingao 分发 + DB 注册)
+- [x] OpenClaw WebSocket 传输 (ticket auth + 容器健康管理 + liveness 检测)
+- [x] 桌面端反馈系统 (设置面板反馈 Tab + 截图压缩 + GitHub Issue 自动同步)
+- [x] GitHub 反馈集成 (gateway github 客户端 + Issue 创建 + 截图上传到 feedback-assets 分支)
+- [x] 模型列表更新 (Sonnet 4.6 + GLM-5, 移除 Haiku 4.5 + Grok 4.1 Fast + Gemini 3 Pro)
 - [ ] Apple 公证 (notarization) 端到端验证
 - [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
 - [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)

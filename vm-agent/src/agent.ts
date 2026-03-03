@@ -94,8 +94,8 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
     api: "anthropic-messages",
     models: [
       {
-        id: "claude-opus-4-6",
-        name: "Claude Opus 4.6",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
         reasoning: true,
         input: ["text", "image"],
         contextWindow: 200000,
@@ -103,12 +103,12 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       {
-        id: "claude-haiku-4-5-20251001",
-        name: "Claude Haiku 4.5",
-        reasoning: false,
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        reasoning: true,
         input: ["text", "image"],
         contextWindow: 200000,
-        maxTokens: 8192,
+        maxTokens: 16384,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ],
@@ -157,15 +157,14 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       {
-        id: "gemini-3-pro-preview",
-        name: "Gemini 3 Pro",
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash",
         reasoning: false,
         input: ["text", "image"],
         contextWindow: 1000000,
         maxTokens: 8192,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-
     ],
   });
 
@@ -184,13 +183,22 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         maxTokens: 8192,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
+    ],
+  });
+
+  // 5. GLM — OpenAI 兼容协议
+  registry.registerProvider("proxy-glm", {
+    baseUrl: `${proxyUrl}/v1`,
+    apiKey: proxyKey,
+    api: "openai-completions",
+    models: [
       {
-        id: "grok-4.1-fast",
-        name: "Grok 4.1 Fast",
+        id: "glm-5",
+        name: "GLM-5",
         reasoning: false,
-        input: ["text"],
+        input: ["text", "image"],
         contextWindow: 128000,
-        maxTokens: 8192,
+        maxTokens: 16384,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ],

@@ -6,8 +6,10 @@ import {
   FolderOpen,
   FolderSearch,
   HardDrive,
+  ImagePlus,
   Info,
   Lock,
+  MessageSquarePlus,
   Package,
   Pencil,
   Plus,
@@ -17,16 +19,18 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { selectFolder } from "../lib/cowork";
-import { getSettings, updateSettings, MODEL_OPTIONS, THINKING_LEVELS, type AppSettings } from "../lib/config";
+import { getSettings, updateSettings, GATEWAY_URL, MODEL_OPTIONS, THINKING_LEVELS, type AppSettings } from "../lib/config";
+import { getToken } from "../lib/auth";
+import { httpFetch } from "../lib/transport";
 import { useSkills, setSkills, type SkillDefinition } from "../lib/skills";
 
-type Tab = "general" | "model" | "memory" | "skills";
+type Tab = "general" | "model" | "memory" | "skills" | "feedback";
 
 interface MemoryStats {
   path: string;
@@ -53,6 +57,7 @@ const TABS: { key: Tab; label: string; icon: typeof Settings }[] = [
   { key: "model", label: "模型", icon: Cpu },
   { key: "memory", label: "记忆", icon: Brain },
   { key: "skills", label: "技能", icon: Sparkles },
+  { key: "feedback", label: "反馈", icon: MessageSquarePlus },
 ];
 
 // ─── Tab: General ───────────────────────────────────────
@@ -446,6 +451,223 @@ function BuiltinSkillCard({ skill }: { skill: SkillDefinition }) {
   );
 }
 
+// ─── Tab: Feedback ──────────────────────────────────────
+
+function FeedbackTab() {
+  const [category, setCategory] = useState("bug");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [images, setImages] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ number: number; url: string } | null>(null);
+  const [error, setError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const compressImage = useCallback((file: File | Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 1920;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxW) {
+          h = Math.round((h * maxW) / w);
+          w = maxW;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+        const base64 = dataUrl.split(",")[1];
+        const sizeBytes = Math.round((base64.length * 3) / 4);
+        if (sizeBytes > 2 * 1024 * 1024) {
+          reject(new Error("图片压缩后仍超过 2MB"));
+          return;
+        }
+        resolve(base64);
+      };
+      img.onerror = () => reject(new Error("图片加载失败"));
+      img.src = URL.createObjectURL(file instanceof File ? file : file);
+    });
+  }, []);
+
+  const addImage = useCallback(async (file: File | Blob) => {
+    if (images.length >= 3) return;
+    try {
+      const base64 = await compressImage(file);
+      setImages((prev) => [...prev, base64]);
+      setError("");
+    } catch (e: any) {
+      setError(e.message || "图片处理失败");
+    }
+  }, [images.length, compressImage]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (blob) addImage(blob);
+        break;
+      }
+    }
+  }, [addImage]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) addImage(file);
+    e.target.value = "";
+  }, [addImage]);
+
+  const removeImage = useCallback((index: number) => {
+    setImages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleSubmit = async () => {
+    if (!title.trim() || !description.trim()) {
+      setError("请填写标题和描述");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    setResult(null);
+    try {
+      let version = "unknown";
+      try {
+        version = await getVersion();
+      } catch {}
+
+      const tok = getToken();
+      const resp = await httpFetch(`${GATEWAY_URL}/api/feedback`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
+        },
+        body: JSON.stringify({
+          category,
+          title: title.trim(),
+          description: description.trim(),
+          images,
+          version,
+        }),
+      });
+
+      if (resp.status !== 200) {
+        const data = JSON.parse(resp.body);
+        throw new Error(data.error || "提交失败");
+      }
+
+      const data = JSON.parse(resp.body);
+      setResult({ number: data.issue_number, url: data.issue_url });
+      setTitle("");
+      setDescription("");
+      setImages([]);
+      setCategory("bug");
+    } catch (e: any) {
+      setError(e.message || "提交失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const CATEGORIES = [
+    { value: "bug", label: "Bug 报告" },
+    { value: "feature", label: "功能建议" },
+    { value: "question", label: "使用问题" },
+    { value: "other", label: "其他" },
+  ];
+
+  return (
+    <div className="settings-section" onPaste={handlePaste}>
+      <div className="settings-section-title">提交反馈</div>
+
+      <div className="settings-feedback-form">
+        <select
+          className="settings-select settings-feedback-select"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+        >
+          {CATEGORIES.map((c) => (
+            <option key={c.value} value={c.value}>{c.label}</option>
+          ))}
+        </select>
+
+        <input
+          type="text"
+          className="settings-feedback-input"
+          placeholder="简要描述问题或建议"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+
+        <textarea
+          className="settings-feedback-textarea"
+          placeholder="详细描述...（支持 Markdown）"
+          rows={4}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+
+        <div className="settings-feedback-images-section">
+          {images.length > 0 && (
+            <div className="settings-feedback-images">
+              {images.map((img, i) => (
+                <div key={i} className="settings-feedback-thumb">
+                  <img src={`data:image/jpeg;base64,${img}`} alt={`截图 ${i + 1}`} />
+                  <button className="settings-feedback-thumb-delete" onClick={() => removeImage(i)}>
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {images.length < 3 && (
+            <button
+              className="settings-btn-outline"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <ImagePlus size={13} />
+              添加截图
+            </button>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={handleFileSelect}
+          />
+          {images.length === 0 && (
+            <span className="settings-feedback-paste-hint">可直接粘贴剪贴板截图</span>
+          )}
+        </div>
+
+        {error && <div className="settings-hint" style={{ paddingLeft: 0, color: "var(--danger)" }}>{error}</div>}
+        {result && (
+          <div className="settings-hint success" style={{ paddingLeft: 0 }}>
+            ✓ 反馈已提交 {result.number > 0 ? `(#${result.number})` : ""}
+          </div>
+        )}
+
+        <div className="settings-feedback-footer">
+          <span className="settings-feedback-footer-hint">反馈将同步到 GitHub Issues，自动附带版本号</span>
+          <button
+            className="settings-feedback-submit"
+            onClick={handleSubmit}
+            disabled={submitting || !title.trim() || !description.trim()}
+          >
+            {submitting ? "提交中..." : "提交反馈"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SkillsTab({
   onCreateSkill,
   onInstallSkill,
@@ -634,6 +856,7 @@ export default function SettingsModal({ onClose, onCreateSkill, onInstallSkill }
             {tab === "model" && <ModelTab />}
             {tab === "memory" && <MemoryTab />}
             {tab === "skills" && <SkillsTab onCreateSkill={onCreateSkill} onInstallSkill={onInstallSkill} />}
+            {tab === "feedback" && <FeedbackTab />}
           </div>
         </div>
       </div>

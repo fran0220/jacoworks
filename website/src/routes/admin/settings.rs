@@ -53,7 +53,7 @@ fn is_secret_key(key: &str) -> bool {
         key,
         "llm_proxy_key" | "openai_api_key" | "exa_api_key" | "tavily_api_key"
         | "embedding_api_key" | "fal_api_key" | "jimeng_api_key"
-        | "feishu_client_secret" | "admin_token"
+        | "feishu_client_secret" | "admin_token" | "github_token"
     )
 }
 
@@ -79,6 +79,8 @@ pub struct UpdateSettingsForm {
     feishu_client_id: Option<String>,
     feishu_client_secret: Option<String>,
     admin_token: Option<String>,
+    github_token: Option<String>,
+    github_repo: Option<String>,
 }
 
 pub async fn update(
@@ -120,6 +122,12 @@ pub async fn update(
             settings.insert("jimeng_api_url".to_string(), v);
         }
     }
+    if let Some(v) = form.github_repo {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            settings.insert("github_repo".to_string(), v);
+        }
+    }
     for (key, value) in [
         ("llm_proxy_key", form.llm_proxy_key),
         ("openai_api_key", form.openai_api_key),
@@ -130,6 +138,7 @@ pub async fn update(
         ("jimeng_api_key", form.jimeng_api_key),
         ("feishu_client_secret", form.feishu_client_secret),
         ("admin_token", form.admin_token),
+        ("github_token", form.github_token),
     ] {
         if let Some(v) = value {
             let v = v.trim().to_string();

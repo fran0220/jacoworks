@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/cowork"
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	"github.com/fran0220/jacoworks/gateway/internal/games"
+	"github.com/fran0220/jacoworks/gateway/internal/github"
 	"github.com/fran0220/jacoworks/gateway/internal/lxd"
 	"github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/proxy"
@@ -92,6 +94,10 @@ func main() {
 				cfg.Auth.FeishuClientSecret = setting.Value
 			case "admin_token":
 				cfg.Auth.AdminToken = setting.Value
+			case "github_token":
+				cfg.GitHub.Token = setting.Value
+			case "github_repo":
+				cfg.GitHub.Repo = setting.Value
 			}
 		}
 		cfg.UpdateLLM(llm)
@@ -169,6 +175,7 @@ func main() {
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
 	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, channelPool)
 	gamesHandler := games.NewHandler(s)
+	ghClient := github.NewClient(cfg.GitHub.Token, cfg.GitHub.Repo)
 
 	mux := http.NewServeMux()
 
@@ -216,6 +223,7 @@ func main() {
 	mux.HandleFunc("GET /api/games", gamesHandler.List)
 	mux.Handle("POST /api/games/deploy", authMiddleware.Authenticate(http.HandlerFunc(gamesHandler.Deploy)))
 	mux.Handle("DELETE /api/games/{id}", authMiddleware.Authenticate(http.HandlerFunc(gamesHandler.Delete)))
+	mux.Handle("POST /api/feedback", authMiddleware.Authenticate(http.HandlerFunc(feedbackHandler(s, ghClient))))
 
 	// Authenticated: chat proxy
 	mux.Handle("POST /v1/chat/completions", authMiddleware.Authenticate(http.HandlerFunc(proxyHandler.ChatCompletions)))
@@ -246,7 +254,7 @@ func main() {
 
 	// Admin: settings
 	mux.Handle("GET /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(getSettingsHandler(s)))))
-	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger, feishuBotClient)))))
+	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger, feishuBotClient, ghClient)))))
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -765,13 +773,12 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
-				{"id": "claude-haiku-4-5-20251001", "provider": "proxy-claude", "label": "Haiku 4.5"},
 				{"id": "gpt-5.3-codex", "provider": "proxy-gpt", "label": "GPT-5.3 Codex"},
 				{"id": "gpt-5.2", "provider": "proxy-gpt", "label": "GPT-5.2"},
 				{"id": "gemini-3.1-pro-preview", "provider": "proxy-gemini", "label": "Gemini 3.1 Pro"},
 				{"id": "gemini-3-flash-preview", "provider": "proxy-gemini", "label": "Gemini 3 Flash"},
 				{"id": "grok-4.20-beta", "provider": "proxy-grok", "label": "Grok 4.20"},
-				{"id": "grok-4.1-fast", "provider": "proxy-grok", "label": "Grok 4.1 Fast"},
+				{"id": "glm-5", "provider": "proxy-glm", "label": "GLM-5"},
 			},
 		})
 	}
@@ -788,7 +795,7 @@ func getSettingsHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger, feishuBot *feishubot.Client) http.HandlerFunc {
+func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger, feishuBot *feishubot.Client, ghClient *github.Client) http.HandlerFunc {
 	type updateRequest struct {
 		Settings map[string]string `json:"settings"`
 	}
@@ -807,6 +814,8 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"feishu_client_id":     true,
 		"feishu_client_secret": true,
 		"admin_token":          true,
+		"github_token":         true,
+		"github_repo":          true,
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -871,6 +880,13 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		if v, ok := req.Settings["admin_token"]; ok && v != "" {
 			cfg.Auth.AdminToken = v
 		}
+		if v, ok := req.Settings["github_token"]; ok {
+			cfg.GitHub.Token = v
+		}
+		if v, ok := req.Settings["github_repo"]; ok {
+			cfg.GitHub.Repo = v
+		}
+		ghClient.Update(cfg.GitHub.Token, cfg.GitHub.Repo)
 
 		// Hot-reload Feishu Bot credentials
 		feishuBot.UpdateCredentials(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
@@ -1190,6 +1206,156 @@ func skillsPullHandler(s *store.Store) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"files":    files,
 			"checksum": etag,
+		})
+	}
+}
+
+func feedbackHandler(s *store.Store, gh *github.Client) http.HandlerFunc {
+	type feedbackRequest struct {
+		Category    string   `json:"category"`
+		Title       string   `json:"title"`
+		Description string   `json:"description"`
+		Images      []string `json:"images"`
+		Version     string   `json:"version"`
+	}
+
+	categoryLabels := map[string]string{
+		"bug":      "bug",
+		"feature":  "enhancement",
+		"question": "question",
+		"other":    "feedback",
+	}
+
+	// DB feedback 表 category 列约束是 bug/feature/general，做映射。
+	categoryDB := map[string]string{
+		"bug":      "bug",
+		"feature":  "feature",
+		"question": "general",
+		"other":    "general",
+	}
+
+	titlePrefix := map[string]string{
+		"bug":      "[Bug]",
+		"feature":  "[Feature]",
+		"question": "[Question]",
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req feedbackRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+
+		req.Category = strings.ToLower(strings.TrimSpace(req.Category))
+		req.Title = strings.TrimSpace(req.Title)
+		req.Description = strings.TrimSpace(req.Description)
+		req.Version = strings.TrimSpace(req.Version)
+
+		if req.Title == "" || req.Description == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title and description required"})
+			return
+		}
+
+		if len(req.Images) > 3 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "max 3 images"})
+			return
+		}
+
+		label, ok := categoryLabels[req.Category]
+		if !ok {
+			label = "feedback"
+		}
+		dbCat, ok := categoryDB[req.Category]
+		if !ok {
+			dbCat = "general"
+		}
+
+		// Upload images to GitHub.
+		imageURLs := make([]string, 0, len(req.Images))
+		if gh.Configured() {
+			for i, img := range req.Images {
+				img = strings.TrimSpace(img)
+				if img == "" {
+					continue
+				}
+
+				// Support optional data URL prefix: data:image/jpeg;base64,xxxx.
+				if idx := strings.Index(img, ","); idx > 0 && strings.Contains(img[:idx], "base64") {
+					img = img[idx+1:]
+				}
+
+				data, err := base64.StdEncoding.DecodeString(img)
+				if err != nil {
+					log.Warn().Err(err).Int("index", i).Msg("feedback: invalid base64 image, skipping")
+					continue
+				}
+
+				now := time.Now()
+				path := fmt.Sprintf("%s-%02d.jpg", now.Format("2006/01/02-150405"), i)
+				rawURL, err := gh.UploadImage(path, data)
+				if err != nil {
+					log.Error().Err(err).Int("index", i).Msg("feedback: upload image failed")
+					continue
+				}
+				imageURLs = append(imageURLs, rawURL)
+			}
+		}
+
+		// Build issue body.
+		var body strings.Builder
+		body.WriteString(req.Description)
+		body.WriteString("\n\n")
+		for _, imageURL := range imageURLs {
+			body.WriteString(fmt.Sprintf("![screenshot](%s)\n\n", imageURL))
+		}
+		body.WriteString("---\n")
+		body.WriteString(fmt.Sprintf("> 提交者: %s | 版本: %s | 时间: %s\n",
+			user.Name,
+			req.Version,
+			time.Now().Format("2006-01-02 15:04"),
+		))
+
+		issueNumber := 0
+		issueURL := ""
+		if gh.Configured() {
+			prefix := titlePrefix[req.Category]
+			if prefix == "" {
+				prefix = "[Feedback]"
+			}
+
+			var err error
+			issueNumber, issueURL, err = gh.CreateIssue(
+				fmt.Sprintf("%s %s", prefix, req.Title),
+				body.String(),
+				[]string{label},
+			)
+			if err != nil {
+				log.Error().Err(err).Msg("feedback: create github issue failed")
+			}
+		}
+
+		if _, err := s.Pool().Exec(
+			r.Context(),
+			`INSERT INTO feedback (id, name, email, category, message, status, created_at, updated_at)
+			 VALUES (gen_random_uuid()::text, $1, $2, $3, $4, 'open', now(), now())`,
+			user.Name,
+			user.Email,
+			dbCat,
+			req.Description,
+		); err != nil {
+			log.Error().Err(err).Msg("feedback: save to db failed")
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"issue_number": issueNumber,
+			"issue_url":    issueURL,
 		})
 	}
 }

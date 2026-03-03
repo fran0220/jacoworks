@@ -26,5 +26,7 @@ INSERT INTO system_settings (key, description) VALUES
     ('embedding_api_key', 'Embedding API 密钥'),
     ('fal_api_key', 'fal.ai 图片生成 API 密钥'),
     ('jimeng_api_url', '即梦网关地址 (Seedance 视频生成)'),
-    ('jimeng_api_key', '即梦网关 API 密钥')
+    ('jimeng_api_key', '即梦网关 API 密钥'),
+    ('github_token', 'GitHub Personal Access Token (反馈同步 Issues)'),
+    ('github_repo', 'GitHub 仓库 (owner/repo 格式, 反馈同步 Issues)')
 ON CONFLICT (key) DO NOTHING;

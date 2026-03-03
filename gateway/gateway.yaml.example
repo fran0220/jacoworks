@@ -19,6 +19,10 @@ llm:
   exa_api_key: ""          # Exa 搜索 (可选)
   tavily_api_key: ""       # Tavily 搜索 (可选)
 
+github:
+  token: ""                # GitHub PAT (repo scope), 用于反馈 Issue + 截图上传
+  repo: "fran0220/jacoworks"
+
 lxd:
   ssh_target: "lxdhost"
   template: "tpl-openclaw"

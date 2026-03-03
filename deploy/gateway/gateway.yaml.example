@@ -16,6 +16,10 @@ llm:
   proxy_url: "http://67.230.182.59:8317"
   proxy_key: "YOUR_LLM_PROXY_KEY"
 
+github:
+  token: ""                # GitHub PAT (repo scope), 用于反馈 Issue + 截图上传
+  repo: "fran0220/jacoworks"
+
 lxd:
   ssh_target: "opc@10.0.1.3"
   template: "tpl-openclaw"
