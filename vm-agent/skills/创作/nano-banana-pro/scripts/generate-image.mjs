@@ -118,15 +118,18 @@ async function generateWithProxy(args) {
   parts.push({ text: args.prompt });
 
   const body = {
-    contents: [{ parts }],
-    generationConfig: { responseModalities: ["IMAGE", "TEXT"] },
+    contents: [{ role: "user", parts }],
+    generationConfig: { 
+      responseModalities: ["IMAGE"],
+      responseImageMimeType: "image/png"
+    },
   };
   if (resolution !== "1K") {
     body.generationConfig.imageConfig = { imageSize: resolution };
   }
 
-  const url = `${PROXY_URL}/v1beta/models/nano-banana-pro:generateContent`;
-  console.error(`[proxy] ${isEdit ? "Editing" : "Generating"} with nano-banana-pro (${resolution})...`);
+  const url = `${PROXY_URL}/v1beta/models/gemini-3.1-flash-image-preview:generateContent`;
+  console.error(`[proxy] ${isEdit ? "Editing" : "Generating"} with gemini-3.1-flash-image-preview (${resolution})...`);
 
   const res = await fetch(url, {
     method: "POST",
