@@ -97,45 +97,38 @@ async function downloadToBuffer(url) {
 }
 
 // ---------------------------------------------------------------------------
-// Primary: nano-banana-2 via LLM Proxy (Gemini generateContent protocol)
+// Primary: gemini-3.1-flash-image-preview via LLM Proxy (OpenAI-compatible format)
 // ---------------------------------------------------------------------------
 async function generateWithProxy(args) {
   const isEdit = !!args.inputImage;
-  const parts = [];
-
-  let resolution = args.resolution;
+  
+  // Build prompt with image if editing
+  let content = args.prompt;
   if (isEdit) {
     const imgBuffer = readFileSync(args.inputImage);
     const mimeType = mimeTypeFromExt(args.inputImage);
-    parts.push({ inlineData: { mimeType, data: imgBuffer.toString("base64") } });
+    const base64 = imgBuffer.toString("base64");
+    content = [
+      { type: "text", text: args.prompt },
+      { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } }
+    ];
     console.error(`Loaded input image: ${args.inputImage}`);
-    if (resolution === "1K") {
-      resolution = autoDetectResolution(args.inputImage);
-      console.error(`Auto-detected resolution: ${resolution}`);
-    }
   }
-
-  parts.push({ text: args.prompt });
 
   const body = {
-    contents: [{ role: "user", parts }],
-    generationConfig: { 
-      responseModalities: ["IMAGE"],
-      responseImageMimeType: "image/png"
-    },
+    model: "gemini-3.1-flash-image-preview",
+    messages: [{ role: "user", content }],
+    max_tokens: 2000
   };
-  if (resolution !== "1K") {
-    body.generationConfig.imageConfig = { imageSize: resolution };
-  }
 
-  const url = `${PROXY_URL}/v1beta/models/gemini-3.1-flash-image-preview:generateContent`;
-  console.error(`[proxy] ${isEdit ? "Editing" : "Generating"} with gemini-3.1-flash-image-preview (${resolution})...`);
+  const url = `${PROXY_URL}/v1/chat/completions`;
+  console.error(`[proxy] ${isEdit ? "Editing" : "Generating"} with gemini-3.1-flash-image-preview...`);
 
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-goog-api-key": PROXY_KEY,
+      "Authorization": `Bearer ${PROXY_KEY}`,
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
@@ -147,20 +140,20 @@ async function generateWithProxy(args) {
   }
 
   const data = await res.json();
-  const candidates = data.candidates || [];
-  if (candidates.length === 0) {
-    throw new Error("Proxy API: no candidates in response");
+  const images = data.choices?.[0]?.message?.images;
+  if (!images || images.length === 0) {
+    throw new Error("Proxy API: no images in response");
   }
 
-  const responseParts = candidates[0].content?.parts || [];
-  for (const part of responseParts) {
-    if (part.text) console.error(`Model: ${part.text}`);
-    if (part.inlineData?.data) {
-      return { buffer: Buffer.from(part.inlineData.data, "base64"), mime: part.inlineData.mimeType };
-    }
+  // Extract base64 image data from image_url field
+  const imageUrl = images[0].image_url?.url;
+  if (!imageUrl) {
+    throw new Error("Proxy API: no image URL in response");
   }
 
-  throw new Error("Proxy API: no image in response");
+  // Remove data URL prefix if present
+  const base64Data = imageUrl.replace(/^data:image\/\w+;base64,/, "");
+  return { buffer: Buffer.from(base64Data, "base64"), mime: "image/png" };
 }
 
 // ---------------------------------------------------------------------------
