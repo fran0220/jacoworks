@@ -10,7 +10,7 @@ import {
   listOcSessions,
   updateOcSession,
 } from "./lib/sessions";
-import type { OpenClawSSE } from "./lib/sse";
+import type { OpenClawWS } from "./lib/ws";
 import {
   createOcId,
   type OcAttachment,
@@ -73,7 +73,7 @@ export default function OpenClawApp({
   statusText: string;
   containerName: string;
   errorText: string | null;
-  sseRef: React.MutableRefObject<OpenClawSSE | null>;
+  sseRef: React.MutableRefObject<OpenClawWS | null>;
   onRetry: () => void;
   setEventHandler: (handler: ((event: OcEvent) => void) | null) => void;
   setResponseHandler: (handler: ((response: OcRes) => void) | null) => void;

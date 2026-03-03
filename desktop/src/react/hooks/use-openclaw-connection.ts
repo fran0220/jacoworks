@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checkContainerStatus, provisionContainer } from "../openclaw/lib/api";
-import { OpenClawSSE } from "../openclaw/lib/sse";
+import { OpenClawWS } from "../openclaw/lib/ws";
 import type { OcEvent, OcRes } from "../openclaw/types";
 
 export type OcConnectionPhase =
@@ -40,7 +40,7 @@ export function useOpenClawConnection() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  const sseRef = useRef<OpenClawSSE | null>(null);
+  const sseRef = useRef<OpenClawWS | null>(null);
   const phaseRef = useRef<OcConnectionPhase>("idle");
   const cancelTokenRef = useRef(0);
   const drawerOpenRef = useRef(false);
@@ -96,7 +96,7 @@ export function useOpenClawConnection() {
         setPhaseSync("connecting");
         setStatusText("正在连接 OpenClaw...");
 
-        // Create SSE and wait for ready
+        // Create WS and wait for ready
         await new Promise<void>((resolve, reject) => {
           if (cancelled()) {
             reject(new Error("cancelled"));
@@ -111,7 +111,7 @@ export function useOpenClawConnection() {
             reject(new Error("连接 OpenClaw 超时"));
           }, CONNECT_TIMEOUT_MS);
 
-          const sse = new OpenClawSSE({
+          const sse = new OpenClawWS({
             onReady: () => {
               firstReady = true;
               setPhaseSync("ready");

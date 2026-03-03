@@ -93,8 +93,8 @@ func main() {
 			case "admin_token":
 				cfg.Auth.AdminToken = setting.Value
 			}
-			}
-			cfg.UpdateLLM(llm)
+		}
+		cfg.UpdateLLM(llm)
 		log.Info().Msg("loaded settings from database")
 	}
 
@@ -160,6 +160,9 @@ func main() {
 	wsProxy := openclaw.NewWSProxy(s, lxdClient, freezer, cfg.LXD.OpenClawPort, "data")
 	channelPool := openclaw.NewChannelPool(wsProxy, 5*time.Minute, 1024)
 	defer channelPool.Close()
+	wsTicketStore := openclaw.NewTicketStore(30 * time.Second)
+	defer wsTicketStore.Close()
+	wsHandler := openclaw.NewWSHandler(channelPool, wsTicketStore)
 	sseHandler := openclaw.NewSSEHandler(channelPool)
 
 	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
@@ -219,6 +222,12 @@ func main() {
 
 	// Authenticated: OpenClaw WebSocket proxy
 	mux.Handle("GET /ws/openclaw", authMiddleware.Authenticate(wsProxy))
+
+	// OpenClaw browser WebSocket bridge (ticket auth)
+	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(wsTicketStore.IssueTicket)))
+	mux.Handle("GET /ws/oc", wsHandler)
+
+	// OpenClaw SSE/HTTP bridge (legacy compatibility)
 	mux.Handle("GET /api/oc/stream", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.StreamEvents)))
 	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
 	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
@@ -270,10 +279,10 @@ func main() {
 // --- CORS ---
 
 var allowedOrigins = map[string]bool{
-	"http://localhost:1420":        true,
-	"tauri://localhost":            true,  // macOS WebKit
-	"https://tauri.localhost":      true,  // Windows WebView2
-	"https://jaco.jingao.club":     true,
+	"http://localhost:1420":    true,
+	"tauri://localhost":        true, // macOS WebKit
+	"https://tauri.localhost":  true, // Windows WebView2
+	"https://jaco.jingao.club": true,
 }
 
 func isAllowedOrigin(origin string) bool {
