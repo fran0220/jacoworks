@@ -2,10 +2,10 @@
 /**
  * Unified image generation & editing script
  *
- * Primary:  nano-banana-2 via LLM Proxy  (Gemini 3.1 Flash Image — fast)
- * Fallback: nano-banana-2 via fal.ai     (same model, alternate channel)
+ * Primary:  nano-banana-pro via LLM Proxy  (Google image generation model)
+ * Fallback: nano-banana-2 via fal.ai       (same model family, alternate channel)
  *
- * Both use Gemini 3.1 Flash Image backend. Proxy is preferred (unified billing),
+ * Proxy is preferred (unified billing),
  * fal.ai is fallback when proxy channel is unavailable.
  *
  * Usage:
@@ -21,7 +21,7 @@ import { resolve, dirname, extname } from "node:path";
 // ---------------------------------------------------------------------------
 // Config from environment
 // ---------------------------------------------------------------------------
-const PROXY_URL = (process.env.LLM_PROXY_URL || "http://67.230.171.248:8317").replace(/\/+$/, "");
+const PROXY_URL = (process.env.LLM_PROXY_URL || "http://67.230.182.59:8317").replace(/\/+$/, "");
 const PROXY_KEY = process.env.LLM_PROXY_KEY || "";
 const FAL_KEY = process.env.FAL_KEY || "";
 
@@ -125,13 +125,14 @@ async function generateWithProxy(args) {
     body.generationConfig.imageConfig = { imageSize: resolution };
   }
 
-  const url = `${PROXY_URL}/v1beta/models/nano-banana-2:generateContent?key=${PROXY_KEY}`;
-  console.error(`[proxy] ${isEdit ? "Editing" : "Generating"} with nano-banana-2 (${resolution})...`);
+  const url = `${PROXY_URL}/v1beta/models/nano-banana-pro:generateContent`;
+  console.error(`[proxy] ${isEdit ? "Editing" : "Generating"} with nano-banana-pro (${resolution})...`);
 
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "x-goog-api-key": PROXY_KEY,
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),

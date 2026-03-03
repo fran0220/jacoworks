@@ -70,6 +70,16 @@ pub struct MemoryFileEntry {
     pub content: String,
 }
 
+impl MemoryFileEntry {
+    /// Create with forward-slash normalized path for cross-platform consistency.
+    fn new(path: String, content: String) -> Self {
+        Self {
+            path: path.replace('\\', "/"),
+            content,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSkillFile {
     pub file_path: String,
@@ -228,10 +238,7 @@ fn collect_files_recursive(
                     .map_err(|e| format!("Path strip error: {}", e))?
                     .to_string_lossy()
                     .to_string();
-                entries.push(MemoryFileEntry {
-                    path: rel,
-                    content,
-                });
+                entries.push(MemoryFileEntry::new(rel, content));
             }
         }
     }
@@ -650,7 +657,7 @@ pub fn get_user_skills_dir(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn delete_user_skill(app: AppHandle, skill_id: String) -> Result<(), String> {
-    if skill_id.is_empty() || skill_id.contains("..") || skill_id.contains('/') {
+    if skill_id.is_empty() || skill_id.contains("..") || skill_id.contains('/') || skill_id.contains('\\') {
         return Err("Invalid skill id".to_string());
     }
     let dir = user_skills_dir(&app)?;

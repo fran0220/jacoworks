@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface Config {
   port: number;
@@ -114,7 +115,9 @@ function resolveSkillsPaths(envVal?: string): string[] {
     return envVal.split(",").map((s) => s.trim()).filter(Boolean);
   }
   // Default: look for skills/ relative to vm-agent root
-  const vmAgentRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+  // Use fileURLToPath to correctly handle Windows paths (e.g. file:///C:/...)
+  const currentFile = fileURLToPath(import.meta.url);
+  const vmAgentRoot = resolve(dirname(currentFile), "..");
   const defaultPaths = [
     join(vmAgentRoot, "skills"),   // vm-agent/skills (monorepo & bundled)
     "/shared/skills",              // container fallback

@@ -120,7 +120,7 @@ node {baseDir}/scripts/search.mjs \
 |------|------|
 | `EXA_API_KEY` | Exa 搜索 API 密钥 |
 | `TAVILY_API_KEY` | Tavily 搜索 API 密钥 |
-| `LLM_PROXY_URL` | LLM 中转站地址（Grok 源使用，默认 `http://67.230.171.248:8317`） |
+| `LLM_PROXY_URL` | LLM 中转站地址（Grok 源使用，默认 `http://67.230.182.59:8317`） |
 | `LLM_PROXY_KEY` | LLM 中转站密钥（Grok 源使用） |
 | `GROK_MODEL` | Grok 模型名（默认 `grok-4.1-fast`） |
 

@@ -13,7 +13,7 @@ database:
   url: "postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks"
 
 llm:
-  proxy_url: "http://67.230.171.248:8317"
+  proxy_url: "http://67.230.182.59:8317"
   proxy_key: "change-me"
   openai_api_key: ""      # OpenAI Embedding API (记忆向量搜索, 中转站不支持 Embedding)
   exa_api_key: ""          # Exa 搜索 (可选)

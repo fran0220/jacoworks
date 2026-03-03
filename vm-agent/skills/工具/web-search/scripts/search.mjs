@@ -167,7 +167,7 @@ function getKeys() {
   if (process.env.EXA_API_KEY) keys.exa = process.env.EXA_API_KEY;
   if (process.env.TAVILY_API_KEY) keys.tavily = process.env.TAVILY_API_KEY;
 
-  const proxyUrl = (process.env.LLM_PROXY_URL || "http://67.230.171.248:8317").replace(/\/+$/, "");
+  const proxyUrl = (process.env.LLM_PROXY_URL || "http://67.230.182.59:8317").replace(/\/+$/, "");
   const proxyKey = process.env.LLM_PROXY_KEY || "";
   if (proxyKey) {
     keys.grok_url = proxyUrl + "/v1";

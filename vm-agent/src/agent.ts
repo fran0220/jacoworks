@@ -80,7 +80,7 @@ function getSettingsManager(workspace: string): SettingsManager {
 }
 
 // ─── LLM 中转站模型注册 ────────────────────────────
-// 中转站 http://67.230.171.248:8317 支持 4 种原生协议：
+// 中转站 http://67.230.182.59:8317 支持 4 种原生协议：
 //   Claude  → POST /v1/messages           (anthropic-messages)
 //   GPT     → POST /v1/chat/completions   (openai-completions)
 //   Gemini  → POST /v1/chat/completions   (openai-completions, 兼容模式)

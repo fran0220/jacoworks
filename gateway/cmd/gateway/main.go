@@ -108,36 +108,36 @@ func main() {
 		cfg.LXD.OpenClawPort,
 	)
 
-	freezer := lxd.NewFreezer(lxdClient, 30*time.Minute, 5*time.Minute)
+	freezer := lxd.NewFreezer(lxdClient, 5*24*time.Hour, 1*time.Hour)
 	freezer.Start()
 	defer freezer.Stop()
 
-	// Pull memory files from container before freezing
+	// Pull memory files from container before stopping
 	freezer.SetOnBeforeFreeze(func(containerName string) {
 		ctx := context.Background()
 		userID, err := s.GetUserIDByContainerName(ctx, containerName)
 		if err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("freeze: lookup user failed")
+			log.Error().Err(err).Str("container", containerName).Msg("idle stop: lookup user failed")
 			return
 		}
 		files, err := lxdClient.PullMemoryFiles(containerName)
 		if err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("freeze: pull memory failed")
+			log.Error().Err(err).Str("container", containerName).Msg("idle stop: pull memory failed")
 			return
 		}
 		for filePath, content := range files {
 			ck := store.ContentChecksum(content)
 			if err := s.UpsertMemoryFile(ctx, userID, filePath, content, ck); err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("file", filePath).Msg("freeze: save memory failed")
+				log.Error().Err(err).Str("container", containerName).Str("file", filePath).Msg("idle stop: save memory failed")
 			}
 		}
 		if len(files) > 0 {
-			log.Info().Str("container", containerName).Int("files", len(files)).Msg("freeze: memory pulled")
+			log.Info().Str("container", containerName).Int("files", len(files)).Msg("idle stop: memory pulled")
 		}
 	})
 	freezer.SetOnAfterFreeze(func(containerName string) {
-		if err := s.UpdateContainerStatusByName(context.Background(), containerName, "frozen"); err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("freeze: update frozen status failed")
+		if err := s.UpdateContainerStatusByName(context.Background(), containerName, "stopped"); err != nil {
+			log.Error().Err(err).Str("container", containerName).Msg("idle stop: update status failed")
 		}
 	})
 
@@ -1107,8 +1107,9 @@ func skillsUploadHandler(s *store.Store) http.HandlerFunc {
 
 		storeFiles := make([]store.SkillFile, 0, len(req.Files))
 		for _, f := range req.Files {
+			// Normalize path separators to forward slashes (Windows clients may send \)
 			storeFiles = append(storeFiles, store.SkillFile{
-				FilePath: f.Path,
+				FilePath: filepath.ToSlash(f.Path),
 				Content:  f.Content,
 				Checksum: store.ContentChecksum(f.Content),
 			})

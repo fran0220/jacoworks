@@ -786,7 +786,7 @@ lxd:
   network: "jaconet"
   openclaw_port: 18789
 llm:
-  proxy_url: "http://67.230.171.248:8317"
+  proxy_url: "http://67.230.182.59:8317"
   proxy_key: "<key>"
 ```
 

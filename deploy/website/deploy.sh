@@ -36,5 +36,5 @@ ssh "$HOST" "systemctl restart frpc 2>/dev/null || systemctl restart frps 2>/dev
 
 rm -rf "$TMPDIR"
 
-echo "=== Done! Website should be live at http://67.230.171.248:9527 ==="
+echo "=== Done! Website should be live at http://67.230.182.59:9527 ==="
 echo "Check status: ssh $HOST 'systemctl status jacoworks-website'"

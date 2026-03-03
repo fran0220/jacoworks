@@ -1,6 +1,6 @@
 # JAcoworks — 企业 AI 协同办公平台
 
-> Tauri 桌面端内嵌 Pi SDK Agent sidecar 直接读写本地文件。Go 网关 (jingao 云主机, OpenResty 反代) 提供认证、会话存储和管理 API。Rust 官网 (Axum, 同机部署) 提供公开页面、文档、反馈、管理后台和 Tauri 更新 API。LLM 中转站 (`http://67.230.171.248:8317`) 统一接入 Claude/GPT/Gemini/Grok。本地宿主机通过 WireGuard VPN 提供 LXD 容器 (OpenClaw)。
+> Tauri 桌面端内嵌 Pi SDK Agent sidecar 直接读写本地文件。Go 网关 (jingao 云主机, OpenResty 反代) 提供认证、会话存储和管理 API。Rust 官网 (Axum, 同机部署) 提供公开页面、文档、反馈、管理后台和 Tauri 更新 API。LLM 中转站 (`http://67.230.182.59:8317`) 统一接入 Claude/GPT/Gemini/Grok。本地宿主机通过 WireGuard VPN 提供 LXD 容器 (OpenClaw)。
 
 ## 1. 代码结构
 
@@ -11,12 +11,13 @@ gateway/                         Go 管理网关 (jingao :8847, OpenResty 反代
     config/config.go             YAML + env override, ChatAgentConfig
     auth/{middleware,handlers}.go Goth 飞书 SSO + bcrypt + 激活码
     auth/feishu/                 Goth Feishu Provider
-    store/{pg,users,sessions,containers,invites,settings,memory,skills}.go  PostgreSQL (pgx/v5)
+    store/{pg,users,sessions,containers,invites,settings,memory,skills,games}.go  PostgreSQL (pgx/v5)
     proxy/handler.go             ReverseProxy (OpenClaw HTTP + ChatAgent)
     cowork/handler.go            文件操作 (upload/download/changes)
     openclaw/ws_proxy.go         WebSocket 代理 (Ed25519 设备密钥)
     lxd/{client,ssh_client,freezer}.go  LXD 容器生命周期 + 记忆/技能文件推拉
     feishubot/{client,handler}.go  飞书 Bot webhook + 消息路由到容器
+    games/handler.go             游戏画廊 API (tar.gz 部署 + 静态文件)
     audit/logger.go
 
 vm-agent/                        本地 Agent sidecar (Pi SDK + RPC stdio)
@@ -67,11 +68,12 @@ website/                         Rust 官网 + 管理后台 (Axum :9527, jingao 
     db.rs                        sqlx PgPool 工厂
     error.rs                     AppError → IntoResponse
     auth.rs                      Admin cookie 认证 + AdminUser 提取器 (bcrypt + sha256 双格式)
-    models/                      user, invite, release, feedback, audit, session, auth_session
+    models/                      user, invite, release, feedback, audit, session, auth_session, game, skill
     routes/
       pages.rs                   首页 / 下载 / 关于
       docs.rs                    文档渲染 (Markdown → HTML)
       feedback.rs                反馈表单 (公开)
+      games.rs                   游戏画廊 (gallery + play 页面)
       update.rs                  Tauri Updater API (GET /api/update/:target/:arch/:version)
       admin/
         mod.rs                   Admin 路由组
@@ -83,6 +85,7 @@ website/                         Rust 官网 + 管理后台 (Axum :9527, jingao 
         feedback.rs              反馈管理 (回复/状态变更)
         audit.rs                 审计日志 (分页+筛选)
         settings.rs              系统设置 (LLM 密钥管理, 网关/DB 状态, 模型列表)
+        skills.rs                技能管理 (上传/列表/删除)
     services/
       docs.rs                    Markdown 解析 + TOC + 导航树
       gateway.rs                 Gateway Admin API HTTP 客户端
@@ -91,11 +94,12 @@ website/                         Rust 官网 + 管理后台 (Axum :9527, jingao 
     pages/{index,download,about}.html
     docs/{layout,index}.html     文档三栏布局
     feedback.html                反馈表单
+    games/{gallery,play}.html    游戏画廊 + 游戏播放页
     admin/
       login.html                 管理登录 (独立布局)
       layout.html                管理后台布局 (深色侧边栏)
       {dashboard,users,invites,releases,release_edit}.html
-      {containers,feedback_list,audit,settings}.html
+      {containers,feedback_list,audit,settings,skills}.html
   static/css/style.css           自定义样式
   static/js/app.js               平台检测 + Toast + HTMX 事件
   content/                       Markdown 文档源文件
@@ -111,6 +115,7 @@ deploy/
   sql/002_website_tables.sql         官网表: releases, release_assets, feedback
   sql/003_system_settings.sql        system_settings 表 (LLM 密钥管理)
   sql/004_memory_and_skills.sql      user_memory + skill_files 表 (记忆/技能同步)
+  sql/005_games.sql                  games 表 (游戏画廊)
   sql/002_seed_test_data.sql         测试数据 (admin 用户 + 激活码)
   gateway/{frpc.toml,jacoworks-gateway.service,gateway.yaml.example}
   website/{deploy.sh,jacoworks-website.service}
@@ -122,7 +127,8 @@ deploy/
   release-desktop.yml              git tag v* 触发跨平台 Tauri 构建 → GitHub Release
 
 Makefile                           根目录统一命令入口 (dev/build/deploy/check)
-vm-agent/skills/                 预制技能包 (创作/办公/工具)
+vm-agent/skills/                 预制技能包 (创作/办公/工具/开发)
+  开发/game-dev-ai/             游戏 AI 开发技能
 docs/design-system.md            Design Token 完整规范
 docs/ci-cd.md                    CI/CD 与本地开发完整指南
 tasks/                           lessons.md next-steps.md
@@ -181,6 +187,9 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 | POST | `/api/memory/sync` | 记忆双向同步 (manifest + push/pull) |
 | POST | `/api/skills/upload` | 技能文件上传 |
 | GET | `/api/skills/checksum` | 技能文件校验和 |
+| POST | `/api/games/deploy` | 游戏部署 (tar.gz + metadata) |
+| GET | `/api/games` | 游戏列表 (公开) |
+| DELETE | `/api/games/{id}` | 删除游戏 (作者或管理员) |
 | POST | `/api/feishu/webhook` | 飞书 Bot webhook (无需认证) |
 | GET | `/api/admin/settings` | 读取系统设置 (LLM 密钥等) |
 | PUT | `/api/admin/settings` | 更新系统设置 + 热重载内存配置 |
@@ -208,7 +217,7 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 
 ## 5. 数据库
 
-PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_init_business_tables.sql` + `002_website_tables.sql` + `003_system_settings.sql` + `004_memory_and_skills.sql`
+PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_init_business_tables.sql` + `002_website_tables.sql` + `003_system_settings.sql` + `004_memory_and_skills.sql` + `005_games.sql`
 
 | 表 | 关键字段 |
 |-----|------|
@@ -221,6 +230,7 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_
 | `system_settings` | key TEXT PK, value TEXT, description TEXT (LLM 密钥等运行时配置) |
 | `user_memory` | user_id + file_path UNIQUE, content TEXT, checksum TEXT |
 | `skill_files` | owner + file_path UNIQUE, content TEXT, checksum TEXT (owner='system' 或 user_id) |
+| `games` | id TEXT PK, user_id → users, author_name, title, description, thumbnail_url, play_url, status, play_count |
 | `releases` | id TEXT PK, version UNIQUE, notes, pub_date, is_latest BOOL |
 | `release_assets` | release_id → releases, platform, download_url, signature, file_size, download_count |
 | `feedback` | id TEXT PK, name, email, category, message, status, admin_reply |
@@ -282,7 +292,7 @@ base_url = "https://jaco.jingao.club"
 | 1Panel | jingao 82.156.239.212 | :8090, OpenResty + SSL 证书管理 |
 | WireGuard | jingao ↔ jpdata ↔ oracle | wg1: 10.0.1.1 ↔ 10.0.1.254 ↔ 10.0.1.3, UDP 51820 |
 | LXD 容器 | oracle 161.33.28.249 | jaconet 10.20.20.0/24, tpl-openclaw (ARM), SSH: `opc@10.0.1.3` |
-| LLM 中转站 | 67.230.171.248 | :8317 LLM 中转 |
+| LLM 中转站 | 67.230.182.59 | :8317 LLM 中转 |
 | WG relay (jpdata) | 185.200.65.233 | :51820 WireGuard hub, xTom Japan Tokyo |
 | Oracle 主机 | 161.33.28.249 | Oracle Linux 9.7 ARM, 4 vCPU, 22GB RAM, 200GB Disk |
 | Windows 构建 VM | local 192.168.31.162 (KVM) | win-build, IP 192.168.122.98, Win11 LTSC x64, SSH builder/build2026 |
@@ -559,10 +569,12 @@ make clean             # 清理构建产物
 - [x] GitHub Secrets 配置 (JINGAO_HOST/SSH_KEY/SSH_USER + TAURI_SIGNING_*)
 - [x] 官网下载页对接 releases 表 + 平台检测
 - [x] jingao GitHub 访问 (jpdata SSH ProxyJump + deploy key)
+- [x] 游戏画廊功能 (games 表 + 网关 API + 官网 gallery/play 页面)
 - [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
 - [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
 - [x] vm-agent 编译为单二进制 (bun build --compile)
-- [x] 预制技能 (vm-agent/skills/ — 创作/办公/工具 三大类)
+- [x] 预制技能 (vm-agent/skills/ — 创作/办公/工具/开发 四大类)
+- [x] 游戏 AI 开发技能 (vm-agent/skills/开发/game-dev-ai/)
 - [x] Apple 代码签名 (Developer ID Application 证书 + Entitlements JIT 权限)
 - [x] 桌面端发布流程打通 (macOS 本地构建 + Windows CI + jingao 分发 + DB 注册)
 - [ ] Apple 公证 (notarization) 端到端验证

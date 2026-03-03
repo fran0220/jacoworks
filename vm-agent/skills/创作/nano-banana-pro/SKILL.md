@@ -1,17 +1,17 @@
 ---
 name: nano-banana-pro
 display-name: 图片生成
-display-description: 使用 Nano Banana 2 生成或编辑图片 (中转站优先, fal.ai fallback)
+display-description: 使用 Nano Banana Pro 生成或编辑图片 (中转站优先, fal.ai fallback)
 description: >
-  Generate or edit images with Nano Banana 2 (Gemini 3.1 Flash Image, fast & cheap).
-  Primary via LLM Proxy, auto-fallback to fal.ai if proxy unavailable.
+  Generate or edit images with Nano Banana Pro (Google image generation model).
+  Primary via LLM Proxy (x-goog-api-key auth), auto-fallback to fal.ai nano-banana-2 if proxy unavailable.
   Supports text-to-image and image-to-image editing.
   Use when user asks to create, generate, draw, or edit an image.
 ---
 
 # 图片生成与编辑
 
-双引擎图片生成：优先 LLM 中转站 nano-banana-2 (统一计费)，失败自动 fallback 到 fal.ai nano-banana-2。
+双引擎图片生成：优先 LLM 中转站 nano-banana-pro (统一计费, x-goog-api-key 认证)，失败自动 fallback 到 fal.ai nano-banana-2。
 
 ## 使用方法
 
@@ -51,10 +51,10 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 
 | 引擎 | 模型 | 协议 | 条件 |
 |------|------|------|------|
-| **Primary** | nano-banana-2 via LLM Proxy | Gemini generateContent (`?key=` query param) | `LLM_PROXY_KEY` 已配置 |
+| **Primary** | nano-banana-pro via LLM Proxy | Gemini generateContent (`x-goog-api-key` header) | `LLM_PROXY_KEY` 已配置 |
 | **Fallback** | nano-banana-2 via fal.ai | fal.ai REST | `FAL_KEY` 已配置 |
 
-脚本自动选择：LLM_PROXY_KEY 有值 → 中转站 nano-banana-2；失败或无 key → fallback fal.ai。
+脚本自动选择：LLM_PROXY_KEY 有值 → 中转站 nano-banana-pro；失败或无 key → fallback fal.ai nano-banana-2。
 
 ## 宽高比映射 (nano-banana-2)
 
@@ -106,7 +106,7 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 
 | 变量 | 说明 |
 |------|------|
-| `LLM_PROXY_URL` | 中转站地址 (primary, 默认 `http://67.230.171.248:8317`) |
+| `LLM_PROXY_URL` | 中转站地址 (primary, 默认 `http://67.230.182.59:8317`) |
 | `LLM_PROXY_KEY` | 中转站 API 密钥 (primary) |
 | `FAL_KEY` | fal.ai API 密钥 (fallback) |
 

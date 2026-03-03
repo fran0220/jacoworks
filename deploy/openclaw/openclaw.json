@@ -51,6 +51,15 @@
           {id: "grok-imagine-1.0", name: "Grok Imagine", contextWindow: 8000, maxTokens: 8000, input: ["text"]},
         ],
       },
+      // GLM (OpenAI 兼容协议)
+      "proxy-glm": {
+        baseUrl: "${LLM_PROXY_URL}/v1",
+        apiKey: "${LLM_PROXY_KEY}",
+        api: "openai-completions",
+        models: [
+          {id: "glm-5", name: "GLM-5", contextWindow: 128000, maxTokens: 16384, input: ["text", "image"]},
+        ],
+      },
     },
   },
 
@@ -60,7 +69,7 @@
   agents: {
     defaults: {
       model: {
-        primary: "proxy-claude/claude-opus-4-6",
+        primary: "proxy-glm/glm-5",
         fallbacks: [
           "proxy-gpt/gpt-5.2",
           "proxy-gemini/gemini-3-pro-preview",
@@ -144,7 +153,7 @@
     port: 18789,
     bind: "lan",
     mode: "local",
-    controlUi: {enabled: true},
+    controlUi: {enabled: true, dangerouslyAllowHostHeaderOriginFallback: true},
     auth: {mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}"},
     remote: {token: "${OPENCLAW_GATEWAY_TOKEN}"},
     reload: {mode: "hybrid"},

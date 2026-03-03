@@ -13,7 +13,7 @@ database:
   url: "postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/jacoworks"
 
 llm:
-  proxy_url: "http://67.230.171.248:8317"
+  proxy_url: "http://67.230.182.59:8317"
   proxy_key: "YOUR_LLM_PROXY_KEY"
 
 lxd:

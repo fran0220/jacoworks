@@ -402,9 +402,11 @@ func (p *WSProxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, 
 		if err != nil {
 			return err
 		}
-		// Update IP in DB and in-memory info
 		if err := p.store.UpdateContainerIP(ctx, userID, ip); err != nil {
 			return fmt.Errorf("update container ip: %w", err)
+		}
+		if err := p.store.UpdateContainerStatusByName(ctx, info.ContainerName, "running"); err != nil {
+			return fmt.Errorf("update container status after start: %w", err)
 		}
 		info.ContainerIP = ip
 		if p.onContainerReady != nil {
