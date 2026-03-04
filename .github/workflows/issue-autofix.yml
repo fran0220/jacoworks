@@ -1,0 +1,300 @@
+name: Issue Auto-fix
+
+on:
+  issues:
+    types: [opened, labeled]
+
+# 同一 issue 只跑一次
+concurrency:
+  group: autofix-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # ── Phase 1: Triage — LLM 判断合理性 ──
+  triage:
+    runs-on: ubuntu-latest
+    # 新建 issue 且带 bug/enhancement 标签时触发（来自 feedback 系统）
+    # 手动加 bug-confirmed 标签时跳过 triage 直接进 autofix
+    if: >-
+      github.event.action == 'opened' && (
+        contains(github.event.issue.labels.*.name, 'bug') ||
+        contains(github.event.issue.labels.*.name, 'enhancement')
+      )
+    outputs:
+      verdict: ${{ steps.analyze.outputs.verdict }}
+      analysis: ${{ steps.analyze.outputs.analysis }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Analyze issue with LLM
+        id: analyze
+        env:
+          LLM_PROXY_URL: ${{ secrets.LLM_PROXY_URL }}
+          LLM_PROXY_KEY: ${{ secrets.LLM_PROXY_KEY }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+        run: |
+          # 调用中转站 LLM 分析 issue 合理性
+          RESPONSE=$(curl -s -X POST "${LLM_PROXY_URL}/v1/chat/completions" \
+            -H "Authorization: Bearer ${LLM_PROXY_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg title "$ISSUE_TITLE" \
+              --arg body "$ISSUE_BODY" \
+              --arg labels "$ISSUE_LABELS" \
+              '{
+                model: "gpt-5.2",
+                temperature: 0.1,
+                messages: [
+                  {
+                    role: "system",
+                    content: "你是 JAcoworks 项目的 Issue 分诊专家。分析用户提交的 Issue，判断是否是一个合理的、可操作的问题。\n\n项目结构：\n- gateway/ — Go 管理网关 (认证/会话/API)\n- desktop/ — Tauri v2 + React 桌面客户端\n- vm-agent/ — Node.js Agent sidecar (Pi SDK)\n- website/ — Rust 官网 (Axum)\n\n你必须返回严格的 JSON（不要包含 markdown 代码块），格式：\n{\"verdict\": \"confirm|needsinfo|invalid\", \"reason\": \"简短中文原因\", \"category\": \"bug|feature|question\", \"affected_module\": \"gateway|desktop|vm-agent|website|unknown\", \"severity\": \"critical|high|medium|low\", \"root_cause_hint\": \"可能的根因方向（如果是 bug）\"}"
+                  },
+                  {
+                    role: "user",
+                    content: ("标题: " + $title + "\n标签: " + $labels + "\n内容:\n" + $body)
+                  }
+                ]
+              }')")
+
+          echo "Raw LLM response (first 500 chars):"
+          echo "$RESPONSE" | head -c 500
+
+          # 提取 LLM 返回内容
+          CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$CONTENT" ]; then
+            echo "::warning::LLM response empty, defaulting to confirm"
+            echo "verdict=confirm" >> "$GITHUB_OUTPUT"
+            echo "analysis=LLM 分析不可用，默认通过分诊" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 解析 JSON 结果
+          VERDICT=$(echo "$CONTENT" | jq -r '.verdict // "confirm"')
+          REASON=$(echo "$CONTENT" | jq -r '.reason // "无"')
+          MODULE=$(echo "$CONTENT" | jq -r '.affected_module // "unknown"')
+          SEVERITY=$(echo "$CONTENT" | jq -r '.severity // "medium"')
+          ROOT_HINT=$(echo "$CONTENT" | jq -r '.root_cause_hint // "待分析"')
+
+          echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT"
+          echo "analysis=${CONTENT}" >> "$GITHUB_OUTPUT"
+
+          echo "## Triage Result"
+          echo "- Verdict: ${VERDICT}"
+          echo "- Module: ${MODULE}"
+          echo "- Severity: ${SEVERITY}"
+          echo "- Reason: ${REASON}"
+          echo "- Root cause hint: ${ROOT_HINT}"
+
+      - name: Comment triage result
+        uses: actions/github-script@v7
+        env:
+          VERDICT: ${{ steps.analyze.outputs.verdict }}
+          ANALYSIS: ${{ steps.analyze.outputs.analysis }}
+        with:
+          script: |
+            const verdict = process.env.VERDICT;
+            let analysis;
+            try {
+              analysis = JSON.parse(process.env.ANALYSIS);
+            } catch {
+              analysis = { reason: process.env.ANALYSIS, severity: 'unknown', affected_module: 'unknown', root_cause_hint: '—' };
+            }
+
+            const severityEmoji = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' };
+            const verdictEmoji = { confirm: '✅', needsinfo: '❓', invalid: '❌' };
+
+            let body = `### ${verdictEmoji[verdict] || '🔍'} AI 分诊结果\n\n`;
+            body += `| 项目 | 结果 |\n|------|------|\n`;
+            body += `| **判定** | ${verdict === 'confirm' ? '确认有效' : verdict === 'needsinfo' ? '需要更多信息' : '无效'} |\n`;
+            body += `| **严重度** | ${severityEmoji[analysis.severity] || '⚪'} ${analysis.severity || 'unknown'} |\n`;
+            body += `| **影响模块** | \`${analysis.affected_module || 'unknown'}\` |\n`;
+            body += `| **原因** | ${analysis.reason || '—'} |\n`;
+
+            if (verdict === 'confirm' && analysis.root_cause_hint) {
+              body += `\n**🔍 根因方向**: ${analysis.root_cause_hint}\n`;
+              body += `\n> 🤖 即将启动自动修复流程...`;
+            } else if (verdict === 'needsinfo') {
+              body += `\n> ℹ️ 请补充以上信息后，添加 \`bug-confirmed\` 标签触发自动修复。`;
+            } else if (verdict === 'invalid') {
+              body += `\n> 此 Issue 被判定为无效，如有疑问请联系维护者。`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
+            // 根据判定结果添加标签
+            const labelsToAdd = [];
+            if (verdict === 'confirm') {
+              labelsToAdd.push('bug-confirmed');
+              if (analysis.severity === 'critical' || analysis.severity === 'high') {
+                labelsToAdd.push('priority-high');
+              }
+              if (analysis.affected_module && analysis.affected_module !== 'unknown') {
+                labelsToAdd.push(`module:${analysis.affected_module}`);
+              }
+            } else if (verdict === 'needsinfo') {
+              labelsToAdd.push('needs-info');
+            } else {
+              labelsToAdd.push('invalid');
+            }
+
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labelsToAdd
+              });
+            }
+
+  # ── Phase 2: Auto-fix — mini-swe-agent 深度分析 + 修复 ──
+  autofix:
+    needs: triage
+    # 两种触发路径:
+    # 1) triage 通过 (verdict=confirm)
+    # 2) 手动加 bug-confirmed 标签 (triage 被 skip，直接进入)
+    if: >-
+      always() && (
+        needs.triage.outputs.verdict == 'confirm' ||
+        (needs.triage.result == 'skipped' && github.event.action == 'labeled' && github.event.label.name == 'bug-confirmed')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install mini-swe-agent
+        run: pip install mini-swe-agent
+
+      - name: Create agent config
+        env:
+          LLM_PROXY_URL: ${{ secrets.LLM_PROXY_URL }}
+          LLM_PROXY_KEY: ${{ secrets.LLM_PROXY_KEY }}
+        run: |
+          cat > swe-config.yaml << 'EOF'
+          agent:
+            model:
+              name: openai/gpt-5.3-codex
+              api_base: ${LLM_PROXY_URL}
+              api_key: ${LLM_PROXY_KEY}
+              per_instance_cost_limit: 0
+              total_cost_limit: 0
+              per_instance_call_limit: 80
+              max_input_tokens: 0
+            history_processors: []
+          EOF
+          # 替换环境变量
+          sed -i "s|\${LLM_PROXY_URL}|${LLM_PROXY_URL}|g" swe-config.yaml
+          sed -i "s|\${LLM_PROXY_KEY}|${LLM_PROXY_KEY}|g" swe-config.yaml
+
+      - name: Create system prompt
+        env:
+          TRIAGE_ANALYSIS: ${{ needs.triage.outputs.analysis }}
+        run: |
+          cat > agent-prompt.md << 'PROMPT'
+          你是 JAcoworks 项目的高级工程师。你的任务是根据 GitHub Issue 从根源上修复问题。
+
+          ## 项目结构
+          - gateway/ — Go 管理网关 (HTTP API, 认证, WS 代理, PostgreSQL)
+          - desktop/ — Tauri v2 + React 18 桌面客户端 (CSS 变量, hooks)
+          - vm-agent/ — Node.js/Bun Agent sidecar (Pi SDK, RPC, 记忆系统)
+          - website/ — Rust 官网 (Axum + Askama 模板 + HTMX)
+          - deploy/sql/ — PostgreSQL schema
+
+          ## 修复原则
+          1. **根因分析**: 不要治标不治本，找到问题的根本原因
+          2. **最小改动**: 只修改必要的代码，不做无关的重构
+          3. **遵循约定**: Go 标准风格 / TS strict / React 纯 CSS 变量 / Rust Axum
+          4. **Design Token**: desktop 样式必须用 CSS 变量 (--space-*, --text-*, --radius-*)
+          5. **测试**: 如果修改了有测试的模块，确保测试通过
+
+          ## AI 分诊结果
+          PROMPT
+          echo "${TRIAGE_ANALYSIS}" >> agent-prompt.md
+
+      - name: Run mini-swe-agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.LLM_PROXY_KEY }}
+          OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
+        run: |
+          mini --config swe-config.yaml \
+               --agent.system_prompt "$(cat agent-prompt.md)" \
+               --issue "${{ github.event.issue.html_url }}" \
+            || echo "::warning::mini-swe-agent exited with non-zero code"
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes detected"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Changes detected:"
+            git diff --stat
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: autofix/issue-${{ github.event.issue.number }}
+          delete-branch: true
+          title: "fix: auto-fix #${{ github.event.issue.number }} — ${{ github.event.issue.title }}"
+          body: |
+            ## 🤖 AI 自动修复
+
+            关联 Issue: #${{ github.event.issue.number }}
+
+            ### 分诊分析
+            ```json
+            ${{ needs.triage.outputs.analysis }}
+            ```
+
+            ### 修复说明
+            此 PR 由 mini-swe-agent (GPT-5.3 Codex) 自动生成。
+
+            **请人工 Review 后合并。**
+
+            ---
+            Closes #${{ github.event.issue.number }}
+          labels: |
+            autofix
+            ai-generated
+          commit-message: "fix: auto-fix #${{ github.event.issue.number }}"
+
+      - name: Comment on issue (no fix)
+        if: steps.changes.outputs.has_changes == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '### 🤖 自动修复结果\n\nAgent 分析了此问题但未能生成有效的修复。可能原因：\n- 问题涉及外部依赖或基础设施配置\n- 需要更多上下文信息\n- 修复方案需要人工介入\n\n已标记为需要人工处理。'
+            });
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['needs-human']
+            });

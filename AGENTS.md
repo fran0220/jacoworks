@@ -126,7 +126,7 @@ deploy/
 
 .github/workflows/
   ci.yml                           PR/push CI (按模块变更检测, 只跑有改动的 job)
-  deploy.yml                       push main 自动部署 gateway/website 到 jingao (SSH)
+  issue-autofix.yml                issue opened/labeled → AI 分诊 + mini-swe-agent 自动修复 → PR
   release-desktop.yml              git tag v* 触发跨平台 Tauri 构建 → GitHub Release
 
 Makefile                           根目录统一命令入口 (dev/build/deploy/check)
@@ -313,6 +313,7 @@ base_url = "https://jaco.jingao.club"
 | 工作流 | 触发 | 作用 |
 |--------|------|------|
 | `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job (go vet/test, cargo check/test, tsc) |
+| `issue-autofix.yml` | issue opened/labeled | AI 分诊 (GPT-5.2) → mini-swe-agent 自动修复 (GPT-5.3 Codex) → 创建 PR |
 | `release-desktop.yml` | git tag `v*` | (CI 付费暂停) 构建 vm-agent sidecar → Windows Tauri 构建 → GitHub Release + jingao 分发 |
 
 > **注意**: 自动部署已移除。gateway/website 通过 `make deploy` 手动部署 (SSH 到 jingao 远程 git pull + 本地编译)。
@@ -460,6 +461,8 @@ gh release create vX.Y.Z --repo fran0220/jacoworks --title "JAcoworks vX.Y.Z" <�
 | `APPLE_ID` | zhangfan0220@gmail.com |
 | `APPLE_PASSWORD` | App-Specific Password (appleid.apple.com 生成) |
 | `APPLE_TEAM_ID` | 9UUWCMKMDH |
+| `LLM_PROXY_URL` | LLM 中转站地址 (http://67.230.182.59:8317), issue-autofix 分诊 + mini-swe-agent |
+| `LLM_PROXY_KEY` | LLM 中转站密钥, issue-autofix 使用 |
 
 ### 部署策略
 
@@ -589,6 +592,7 @@ make clean             # 清理构建产物
 - [x] 桌面端反馈系统 (设置面板反馈 Tab + 截图压缩 + GitHub Issue 自动同步)
 - [x] GitHub 反馈集成 (gateway github 客户端 + Issue 创建 + 截图上传到 feedback-assets 分支)
 - [x] 模型列表更新 (Sonnet 4.6 + GLM-5, 移除 Haiku 4.5 + Grok 4.1 Fast + Gemini 3 Pro)
+- [x] Issue 自动修复 (issue-autofix.yml: AI 分诊 GPT-5.2 + mini-swe-agent GPT-5.3 Codex → 自动 PR)
 - [ ] Apple 公证 (notarization) 端到端验证
 - [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
 - [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
