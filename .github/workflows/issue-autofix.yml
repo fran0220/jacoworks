@@ -188,11 +188,9 @@ jobs:
           OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
         run: |
           mkdir -p ~/.config/mini-swe-agent
-          cat > ~/.config/mini-swe-agent/.env << EOF
-          MSWEA_MODEL_NAME=openai/gpt-5.3-codex
-          OPENAI_API_KEY=${OPENAI_API_KEY}
-          OPENAI_API_BASE=${OPENAI_API_BASE}
-          EOF
+          printf "MSWEA_MODEL_NAME=openai/gpt-5.3-codex\nOPENAI_API_KEY=%s\nOPENAI_API_BASE=%s\n" "${OPENAI_API_KEY}" "${OPENAI_API_BASE}" > ~/.config/mini-swe-agent/.env
+          echo "Global config created:"
+          cat ~/.config/mini-swe-agent/.env | sed 's/=.*/=***/'
 
       - name: Create agent config
         env:
@@ -200,41 +198,41 @@ jobs:
           LLM_PROXY_KEY: ${{ secrets.LLM_PROXY_KEY }}
           TRIAGE_ANALYSIS: ${{ needs.triage.outputs.analysis }}
         run: |
-          # 构建 system prompt 内容
-          cat > /tmp/system_prompt.txt << 'SYSPROMPT'
-          你是 JAcoworks 项目的高级工程师。你的任务是根据 GitHub Issue 从根源上修复问题。
+          # 用 python 生成 YAML 避免 heredoc 缩进问题
+          python3 -c "
+          import yaml, os
+          config = {
+            'model': {
+              'model_name': 'openai/gpt-5.3-codex',
+              'api_base': os.environ['LLM_PROXY_URL'],
+              'api_key': os.environ['LLM_PROXY_KEY'],
+              'cost_limit': 0,
+              'call_limit': 80,
+              'input_tokens_limit': 0,
+            },
+            'agent': {
+              'system_template': '''你是 JAcoworks 项目的高级工程师。根据 GitHub Issue 从根源上修复问题。
 
-          ## 项目结构
+          项目结构:
           - gateway/ — Go 管理网关 (HTTP API, 认证, WS 代理, PostgreSQL)
           - desktop/ — Tauri v2 + React 18 桌面客户端 (CSS 变量, hooks)
           - vm-agent/ — Node.js/Bun Agent sidecar (Pi SDK, RPC, 记忆系统)
           - website/ — Rust 官网 (Axum + Askama 模板 + HTMX)
-          - deploy/sql/ — PostgreSQL schema
 
-          ## 修复原则
-          1. **根因分析**: 不要治标不治本，找到问题的根本原因
-          2. **最小改动**: 只修改必要的代码，不做无关的重构
-          3. **遵循约定**: Go 标准风格 / TS strict / React 纯 CSS 变量 / Rust Axum
-          4. **Design Token**: desktop 样式必须用 CSS 变量 (--space-*, --text-*, --radius-*)
-          5. **测试**: 如果修改了有测试的模块，确保测试通过
-          SYSPROMPT
+          修复原则:
+          1. 根因分析: 不要治标不治本
+          2. 最小改动: 只改必要的代码
+          3. 遵循约定: Go/TS strict/React CSS变量/Rust Axum
+          4. 测试: 修改有测试的模块确保通过
 
-          # 写入 YAML 配置 (system_template 用 | 多行)
-          cat > swe-config.yaml << EOF
-          model:
-            model_name: openai/gpt-5.3-codex
-            api_base: ${LLM_PROXY_URL}
-            api_key: ${LLM_PROXY_KEY}
-            cost_limit: 0
-            call_limit: 80
-            input_tokens_limit: 0
-          agent:
-            system_template: |
-              $(cat /tmp/system_prompt.txt)
-
-              ## AI 分诊结果
-              ${TRIAGE_ANALYSIS}
-          EOF
+          AI 分诊结果: ''' + os.environ.get('TRIAGE_ANALYSIS', '无'),
+            }
+          }
+          with open('swe-config.yaml', 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+          "
+          echo "Config created:"
+          cat swe-config.yaml | sed 's/api_key:.*/api_key: ***/'
 
       - name: Run mini-swe-agent
         env:
