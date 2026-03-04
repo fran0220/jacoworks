@@ -231,6 +231,8 @@ jobs:
           OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
           MSWEA_MODEL_NAME: openai/gpt-5.3-codex
           MSWEA_COST_TRACKING: ignore_errors
+          ISSUE_TASK: "Fix: ${{ github.event.issue.title }} | ${{ github.event.issue.html_url }}"
+          ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
           python3 << 'PYEOF'
           import os
@@ -238,7 +240,9 @@ jobs:
           from minisweagent.models.litellm_model import LitellmModel
           from minisweagent.environments.local import LocalEnvironment
 
-          task = os.environ.get("ISSUE_TASK", "No task provided")
+          task_title = os.environ.get("ISSUE_TASK", "")
+          task_body = os.environ.get("ISSUE_BODY", "")
+          task = f"{task_title}\n\n{task_body}"
 
           model = LitellmModel(
               model_name="openai/gpt-5.3-codex",
@@ -249,14 +253,6 @@ jobs:
           agent = DefaultAgent(model=model, environment=env)
           agent.run(task)
           PYEOF
-        env:
-          ISSUE_TASK: |
-            Fix GitHub issue: ${{ github.event.issue.title }}
-
-            Issue URL: ${{ github.event.issue.html_url }}
-
-            Issue body:
-            ${{ github.event.issue.body }}
 
       - name: Check for changes
         id: changes
