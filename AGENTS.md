@@ -626,3 +626,37 @@ make clean             # 清理构建产物
 2. **颜色必须用变量**: 禁止硬编码 `#hex` / `rgb()`
 3. **白色文字**: 强调色背景用 `var(--text-on-accent)`
 4. 例外: `0`/`auto`/%/`1px`/`opacity`/`em`/SVG/`@keyframes`
+
+## Cursor Cloud specific instructions
+
+### System dependencies
+
+The update script handles Go 1.24, Bun, Rust stable, PostgreSQL 16, and Tauri Linux libs. After that, `npm ci` is run for `vm-agent/` and `desktop/`.
+
+### Running services
+
+All commands documented in the root `Makefile` (`make help`). Key dev caveats:
+
+- **Gateway**: `cd gateway && go run ./cmd/gateway gateway.yaml` (NOT `-config gateway.yaml`; `main.go` treats `os.Args[1]` as path, not a flag).
+- **Website**: `cd website && cargo run` — reads `website.toml` in cwd.
+- **Desktop Vite**: `cd desktop && npm run dev` — serves the React app on `:1420`. Full Tauri desktop (`cargo tauri dev`) requires a display server and the compiled vm-agent sidecar binary, which is not available in headless Cloud VMs.
+- **vm-agent**: unit tests (`npm test`) always work locally; E2E tests (`npm run test:e2e`) require a live gateway with valid LLM keys.
+
+### Local PostgreSQL
+
+The update script installs PostgreSQL 16 and runs migrations + seed data automatically. Connection string: `postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks`. No SSH tunnel needed — the DB runs locally in Cloud VMs.
+
+### Config files
+
+Created from templates by the update script if missing:
+- `gateway/gateway.yaml` ← `gateway.yaml.example`
+- `website/website.toml` ← `website.toml.example` (with DB password and admin_token filled)
+- `vm-agent/.env` ← `.env.template`
+- `desktop/.env` ← `.env.example` (VITE_GATEWAY_URL=http://localhost:8847)
+
+### Gotchas
+
+- Go 1.24+ is required (gateway `go.mod` specifies `go 1.24.0`). The pre-installed Go in the VM image is 1.22 — the update script handles the upgrade.
+- Rust stable must be >= 1.85 for website deps (`time-macros` requires edition2024). `rustup update stable` handles this.
+- `vm-agent` and `desktop` both use `package-lock.json` (npm lockfile), not pnpm. Use `npm ci` to respect the lockfile.
+- The Rust website will delete and recreate `Cargo.lock` on first build after a Rust upgrade — this is expected.
