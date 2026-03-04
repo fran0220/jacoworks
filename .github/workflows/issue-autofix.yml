@@ -250,7 +250,7 @@ jobs:
               call_limit=80,
           )
           env = LocalEnvironment()
-          agent = DefaultAgent(model=model, environment=env)
+          agent = DefaultAgent(model=model, env=env)
           agent.run(task)
           PYEOF
 
