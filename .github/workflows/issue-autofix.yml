@@ -187,10 +187,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.LLM_PROXY_KEY }}
           OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
         run: |
-          mkdir -p ~/.config/mini-swe-agent
-          printf "MSWEA_MODEL_NAME=openai/gpt-5.3-codex\nOPENAI_API_KEY=%s\nOPENAI_API_BASE=%s\n" "${OPENAI_API_KEY}" "${OPENAI_API_BASE}" > ~/.config/mini-swe-agent/.env
-          echo "Global config created:"
-          cat ~/.config/mini-swe-agent/.env | sed 's/=.*/=***/'
+          mini-extra config set MSWEA_MODEL_NAME "openai/gpt-5.3-codex"
+          mini-extra config set OPENAI_API_KEY "${OPENAI_API_KEY}"
+          mini-extra config set OPENAI_API_BASE "${OPENAI_API_BASE}"
+          mini-extra config set MSWEA_COST_TRACKING "ignore_errors"
+          echo "Global config set."
 
       - name: Create agent config
         env:
