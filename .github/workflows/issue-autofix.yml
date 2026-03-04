@@ -18,10 +18,10 @@ jobs:
   # ── Phase 1: Triage — LLM 判断合理性 ──
   triage:
     runs-on: ubuntu-latest
-    # 新建 issue 且带 bug/enhancement 标签时触发（来自 feedback 系统）
+    # 新建 issue 或 添加 bug/enhancement 标签时触发
     # 手动加 bug-confirmed 标签时跳过 triage 直接进 autofix
     if: >-
-      github.event.action == 'opened' && (
+      github.event.label.name != 'bug-confirmed' && (
         contains(github.event.issue.labels.*.name, 'bug') ||
         contains(github.event.issue.labels.*.name, 'enhancement')
       )
