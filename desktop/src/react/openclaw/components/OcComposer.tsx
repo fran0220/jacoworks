@@ -1,5 +1,5 @@
 import { AlertCircle, FileText, Loader2, Paperclip, SendHorizontal, Square, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEventHandler } from "react";
 import type { OcAttachment } from "../types";
 
@@ -53,14 +53,28 @@ interface PendingFile {
   size: number;
 }
 
+function ElapsedTime({ startedAt }: { startedAt: number }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  if (elapsed < 5) return null;
+  const min = Math.floor(elapsed / 60);
+  const sec = elapsed % 60;
+  return <span className="streaming-elapsed">{min > 0 ? `${min}m${sec}s` : `${sec}s`}</span>;
+}
+
 export default function OcComposer({
   disabled,
   isStreaming,
+  streamingStartedAt,
   onSend,
   onAbort,
 }: {
   disabled?: boolean;
   isStreaming: boolean;
+  streamingStartedAt?: number | null;
   onSend: (text: string, attachments?: OcAttachment[]) => void;
   onAbort: () => void;
 }) {
@@ -226,10 +240,13 @@ export default function OcComposer({
 
       <div className="oc-actions">
         {isStreaming ? (
-          <button type="button" className="oc-action-btn danger" onClick={onAbort}>
-            <Square size={14} />
-            停止
-          </button>
+          <>
+            {streamingStartedAt && <ElapsedTime startedAt={streamingStartedAt} />}
+            <button type="button" className="oc-action-btn danger" onClick={onAbort}>
+              <Square size={14} />
+              停止
+            </button>
+          </>
         ) : (
           <button type="button" className="oc-action-btn primary" onClick={send} disabled={!canSend}>
             <SendHorizontal size={14} />

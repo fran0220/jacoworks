@@ -7,6 +7,7 @@ import OcMessageBubble from "./OcMessageBubble";
 export default function OcChatView({
   session,
   isStreaming,
+  streamingStartedAt,
   errorText,
   disabled,
   onSend,
@@ -14,6 +15,7 @@ export default function OcChatView({
 }: {
   session: OcSession | null;
   isStreaming: boolean;
+  streamingStartedAt?: number | null;
   errorText: string | null;
   disabled?: boolean;
   onSend: (text: string, attachments?: OcAttachment[]) => void;
@@ -49,7 +51,7 @@ export default function OcChatView({
         )}
       </div>
 
-      <OcComposer disabled={disabled} isStreaming={isStreaming} onSend={onSend} onAbort={onAbort} />
+      <OcComposer disabled={disabled} isStreaming={isStreaming} streamingStartedAt={streamingStartedAt} onSend={onSend} onAbort={onAbort} />
     </div>
   );
 }

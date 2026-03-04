@@ -10,7 +10,6 @@ import {
   type OcRes,
 } from "../types";
 
-const PING_INTERVAL_MS = 30_000;
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 15_000;
 const RECONNECT_JITTER_RATIO = 0.2;
@@ -145,7 +144,6 @@ export class OpenClawWS {
   private ready = false;
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
-  private pingTimer: number | null = null;
   private lastSeenSeq = 0;
   private connectRunId = 0;
   private lifecycleListenersBound = false;
@@ -173,7 +171,6 @@ export class OpenClawWS {
     this.reconnectAttempt = 0;
 
     this.cancelReconnectTimer();
-    this.stopPing();
     this.unbindLifecycleListeners();
 
     this.connectRunId += 1;
@@ -234,7 +231,6 @@ export class OpenClawWS {
         if (!this.isActiveSocket(socket, runId)) return;
         this.connected = true;
         this.connecting = false;
-        this.startPing();
       };
 
       socket.onmessage = (event) => {
@@ -360,7 +356,6 @@ export class OpenClawWS {
     this.ready = false;
     this.connected = false;
     this.connecting = false;
-    this.stopPing();
     this.socket = null;
 
     this.handlers.onDisconnect?.(reason);
@@ -387,28 +382,6 @@ export class OpenClawWS {
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
-    }
-  }
-
-  private startPing() {
-    this.stopPing();
-
-    this.pingTimer = window.setInterval(() => {
-      const socket = this.socket;
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-      try {
-        socket.send(JSON.stringify({ type: "ping" }));
-      } catch {
-        this.handlers.onError?.(new Error("发送 OpenClaw 心跳失败"));
-      }
-    }, PING_INTERVAL_MS);
-  }
-
-  private stopPing() {
-    if (this.pingTimer !== null) {
-      window.clearInterval(this.pingTimer);
-      this.pingTimer = null;
     }
   }
 

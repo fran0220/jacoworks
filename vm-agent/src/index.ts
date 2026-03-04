@@ -94,7 +94,7 @@ function normalizeId(id: RpcId | undefined): RpcId {
   return id ?? `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const promptInFlight = new Map<string, boolean>();
+const promptInFlight = new Map<string, { finish: (error?: string) => void }>();
 
 async function handlePrompt(command: PromptCommand) {
   const id = normalizeId(command.id);
@@ -112,14 +112,15 @@ async function handlePrompt(command: PromptCommand) {
     : `${config.primaryProvider}/${config.primaryModel}`;
   const sessionId = command.session_id || modelKey;
 
-  if (promptInFlight.get(sessionId)) {
+  if (promptInFlight.has(sessionId)) {
     sendResponse(id, command.type, false, { error: "prompt already in-flight for this session" });
     sendError(id, sessionId, "prompt already in-flight for this session");
     sendDone(id, sessionId);
     return;
   }
 
-  promptInFlight.set(sessionId, true);
+  // Mark as in-flight immediately (finish callback will be set below)
+  promptInFlight.set(sessionId, { finish: () => {} });
 
   try {
     const { session } = await getSession(sessionId, {
@@ -158,6 +159,9 @@ async function handlePrompt(command: PromptCommand) {
       sendDone(id, sessionId);
       unsub();
     };
+
+    // Update with real finish callback
+    promptInFlight.set(sessionId, { finish });
 
     const unsub = session.subscribe((event) => {
       if (finished) return;
@@ -236,6 +240,18 @@ async function handleCommand(command: RawCommand) {
         return;
       }
       const aborted = await abortSession(sessionId);
+
+      // Fallback: if prompt is still in-flight after abort, force finish
+      const inFlight = promptInFlight.get(sessionId);
+      if (inFlight?.finish) {
+        // Give Pi SDK 3s to settle naturally, then force
+        setTimeout(() => {
+          if (promptInFlight.has(sessionId)) {
+            inFlight.finish("aborted");
+          }
+        }, 3_000);
+      }
+
       sendResponse(command.id, command.type, aborted, { aborted, session_id: sessionId });
       return;
     }

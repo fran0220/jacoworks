@@ -684,8 +684,8 @@ export function listAvailableSkills(): SkillInfo[] {
       seen.add(s.name);
       const { displayName, displayDesc } = readDisplayFields(s.filePath);
       const rel = relative(dir, s.filePath);
-      const parts = rel.split("/");
-      const dirGroup = parts.length > 2 ? parts[0] : undefined;
+      const parts = rel.split(/[\\/]+/).filter(Boolean);
+      const dirGroup = parts.length >= 3 && parts[0] !== ".." ? parts[0] : undefined;
       skills.push({
         id: s.name,
         name: displayName || s.name,

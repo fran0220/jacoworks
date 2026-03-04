@@ -24,8 +24,8 @@ const (
 	defaultRingBufSize  = 1024
 	subscriberQueueSize = 256
 
-	pongWait       = 60 * time.Second
-	pingPeriod     = 20 * time.Second
+	pongWait       = 120 * time.Second
+	pingPeriod     = 30 * time.Second
 	writeWait      = 10 * time.Second
 	dialRetryTotal = 8 * time.Second
 	dialRetryDelay = 300 * time.Millisecond

@@ -19,6 +19,18 @@ import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { useSkills } from "../lib/skills";
 import type { AttachedFile } from "../types";
 
+function ElapsedTime({ startedAt }: { startedAt: number }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  if (elapsed < 5) return null;
+  const min = Math.floor(elapsed / 60);
+  const sec = elapsed % 60;
+  return <span className="streaming-elapsed">{min > 0 ? `${min}m${sec}s` : `${sec}s`}</span>;
+}
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const imageExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
 const binaryDocExts = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
@@ -60,6 +72,7 @@ function formatSize(bytes: number): string {
 
 export default function Composer({
   isStreaming,
+  streamingStartedAt,
   workspacePath,
   model,
   onWorkspaceChange,
@@ -68,6 +81,7 @@ export default function Composer({
   onStop,
 }: {
   isStreaming: boolean;
+  streamingStartedAt?: number | null;
   workspacePath: string;
   model: string;
   onWorkspaceChange: (workspacePath: string) => void;
@@ -437,9 +451,12 @@ export default function Composer({
             </select>
           </div>
           {isStreaming ? (
-            <button className="btn-stop" onClick={onStop}>
-              <Square size={16} />
-            </button>
+            <>
+              {streamingStartedAt && <ElapsedTime startedAt={streamingStartedAt} />}
+              <button className="btn-stop" onClick={onStop}>
+                <Square size={16} />
+              </button>
+            </>
           ) : (
             <button className="btn-send" disabled={sendDisabled} onClick={onSendClick}>
               <SendHorizontal size={16} />

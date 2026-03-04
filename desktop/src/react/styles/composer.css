@@ -292,3 +292,9 @@
 .btn-stop:hover {
   background: var(--danger-hover);
 }
+
+.streaming-elapsed {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}

@@ -44,6 +44,7 @@ export default function ChatView({
     localSession,
     visibleMessages,
     streaming,
+    streamingStartedAt,
     blocks,
     errorText,
     messagesRef,
@@ -144,6 +145,7 @@ export default function ChatView({
 
       <Composer
         isStreaming={streaming}
+        streamingStartedAt={streamingStartedAt}
         workspacePath={localSession.workspacePath}
         model={localSession.model}
         onWorkspaceChange={updateWorkspacePath}

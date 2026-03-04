@@ -7,6 +7,7 @@
         bundle-doc-packages compile-agent \
         deploy deploy-gateway deploy-website push-skills \
         check check-gateway check-website check-agent check-desktop \
+        check-gateway-e2e check-journeys check-all \
         db-reset db-migrate clean
 
 # ─── 配置 ───
@@ -153,6 +154,14 @@ check-agent: ## TypeScript typecheck + 单元测试
 
 check-desktop: ## Desktop typecheck
 	cd desktop && npm run check
+
+check-gateway-e2e: ## Gateway API E2E (需真实网关)
+	cd vm-agent && npm run test:gateway-e2e
+
+check-journeys: ## 全链路 E2E (需完整基础设施)
+	cd vm-agent && npm run test:journeys
+
+check-all: check check-gateway-e2e ## 全量检查 (hermetic + E2E)
 
 # ═══════════════════════════════════════════
 #  数据库

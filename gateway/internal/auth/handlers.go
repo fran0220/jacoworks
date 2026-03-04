@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -17,12 +18,27 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
+type authStore interface {
+	GetUserByEmail(ctx context.Context, email string) (*store.User, error)
+	GetUserByName(ctx context.Context, name string) (*store.User, error)
+	CreateAuthSession(ctx context.Context, token, userID string, ttl time.Duration, ip, userAgent string) error
+	ValidateInviteCode(ctx context.Context, code string) (*store.InviteCode, error)
+	CreateUser(ctx context.Context, name, email, passwordHash, role string) (*store.User, error)
+	UseInviteCode(ctx context.Context, code, userID string) error
+	DeleteAuthSession(ctx context.Context, token string) error
+	FindOrCreateFeishuUser(ctx context.Context, feishuOpenID, name, email string) (*store.User, error)
+}
+
 type Handlers struct {
-	store      *store.Store
+	store      authStore
 	sessionTTL time.Duration
 }
 
 func NewHandlers(s *store.Store, sessionTTLHours int) *Handlers {
+	return NewHandlersWithStore(s, sessionTTLHours)
+}
+
+func NewHandlersWithStore(s authStore, sessionTTLHours int) *Handlers {
 	if sessionTTLHours <= 0 {
 		sessionTTLHours = 168 // 7 days
 	}
@@ -72,6 +88,10 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Username == "" || req.Password == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
+		return
+	}
+	if h.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 
@@ -133,6 +153,10 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code, username, password required"})
 		return
 	}
+	if h.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 
 	invite, err := h.store.ValidateInviteCode(r.Context(), req.Code)
 	if err != nil {
@@ -180,7 +204,7 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 // POST /api/auth/logout (requires Bearer token)
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
-	if token != "" {
+	if token != "" && h.store != nil {
 		h.store.DeleteAuthSession(r.Context(), token)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -266,6 +290,10 @@ func (h *Handlers) FeishuCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error().Err(err).Msg("feishu fetch user failed")
 		redirectWithError(w, r, stateData.Redirect, "fetch_user_failed")
+		return
+	}
+	if h.store == nil {
+		redirectWithError(w, r, stateData.Redirect, "internal_error")
 		return
 	}
 

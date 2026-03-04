@@ -340,16 +340,16 @@ func (p *WSProxy) forward(downstream, upstream *websocket.Conn, userID, containe
 		}
 	}()
 
-	// Server-side heartbeat: WS-level ping every 20s to detect dead connections.
+	// Server-side heartbeat: WS-level ping to detect dead connections.
 	// Do NOT send app-level {"type":"ping"} to upstream — OpenClaw rejects it.
 	go func() {
-		ticker := time.NewTicker(20 * time.Second)
+		ticker := time.NewTicker(pingPeriod)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
-				deadline := time.Now().Add(10 * time.Second)
+				deadline := time.Now().Add(writeWait)
 				if err := writeDownstreamControl(websocket.PingMessage, nil, deadline); err != nil {
 					log.Debug().Err(err).Str("user_id", userID).Msg("openclaw ws: downstream ping control write error")
 					return

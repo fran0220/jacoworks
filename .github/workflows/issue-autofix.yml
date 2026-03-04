@@ -189,26 +189,42 @@ jobs:
           OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
           MSWEA_MODEL_NAME: openai/gpt-5.3-codex
           MSWEA_COST_TRACKING: ignore_errors
+          MSWEA_CONFIGURED: "true"
           ISSUE_TASK: "Fix: ${{ github.event.issue.title }} | ${{ github.event.issue.html_url }}"
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
           python3 << 'PYEOF'
           import os
-          from minisweagent.agents.default import DefaultAgent
-          from minisweagent.models.litellm_model import LitellmModel
-          from minisweagent.environments.local import LocalEnvironment
+          from minisweagent.config import get_config_from_spec
+          from minisweagent.agents import get_agent
+          from minisweagent.models import get_model
+          from minisweagent.environments import get_environment
+          from minisweagent.utils.serialize import recursive_merge
 
           task_title = os.environ.get("ISSUE_TASK", "")
           task_body = os.environ.get("ISSUE_BODY", "")
           task = f"{task_title}\n\n{task_body}"
 
-          model = LitellmModel(
-              model_name="openai/gpt-5.3-codex",
-              cost_limit=0,
-              call_limit=80,
-          )
-          env = LocalEnvironment()
-          agent = DefaultAgent(model=model, env=env, config_path="mini.yaml")
+          # Load builtin mini.yaml config (contains system_template, instance_template, etc.)
+          config = get_config_from_spec("mini.yaml")
+
+          # Override: yolo mode (no confirmation), higher call limit, no cost limit
+          config = recursive_merge(config, {
+              "agent": {
+                  "mode": "yolo",
+                  "cost_limit": 0,
+                  "step_limit": 80,
+                  "confirm_exit": False,
+              },
+              "model": {
+                  "model_name": "openai/gpt-5.3-codex",
+                  "model_kwargs": {"drop_params": True},
+              },
+          })
+
+          model = get_model(config=config.get("model", {}))
+          env = get_environment(config.get("environment", {}), default_type="local")
+          agent = get_agent(model, env, config.get("agent", {}), default_type="interactive")
           agent.run(task)
           PYEOF
 

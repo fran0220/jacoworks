@@ -528,6 +528,11 @@ pub async fn start_agent(
                     signal_ready(&ready_tx_stdout);
                 }
             }
+            // Agent stdout closed (process exited or crashed) — notify all listening streams
+            let _ = app_stdout.emit("agent-rpc-event", serde_json::json!({
+                "type": "error",
+                "error": "Agent 进程已退出"
+            }));
         });
 
         let app_stderr = app.clone();

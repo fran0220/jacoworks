@@ -82,12 +82,14 @@ export function useChatStream({
 }: UseChatStreamOptions) {
   const [localSession, setLocalSession] = useState(session);
   const [streaming, setStreaming] = useState(false);
+  const [streamingStartedAt, setStreamingStartedAt] = useState<number | null>(null);
   const [blocks, setBlocks] = useState<StreamBlock[]>([]);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const localSessionRef = useRef(session);
   const abortedRef = useRef(false);
   const sendLockRef = useRef(false);
+  const streamCancelRef = useRef<(() => void) | null>(null);
   const blocksRef = useRef<StreamBlock[]>([]);
   const streamBaseRef = useRef<ChatMessage[]>([]);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -250,6 +252,7 @@ export function useChatStream({
       const nextMessages = [...sessionSnapshot.messages, userMessage];
       await persistSession(nextMessages);
 
+      setStreamingStartedAt(Date.now());
       setStreaming(true);
       setBlocks([]);
       cancelRenderFrame();
@@ -257,7 +260,6 @@ export function useChatStream({
       streamBaseRef.current = nextMessages;
       abortedRef.current = false;
       stickToBottomRef.current = true;
-      let streamTimeoutId: ReturnType<typeof setInterval> | null = null;
 
       try {
         const currentUser = getUser();
@@ -271,22 +273,10 @@ export function useChatStream({
           restricted: false,
           thinking_level: appSettings.thinkingLevel || undefined,
         });
-
-        const STREAM_TIMEOUT_MS = 180_000;
-        let lastActivity = Date.now();
-        streamTimeoutId = setInterval(() => {
-          if (Date.now() - lastActivity > STREAM_TIMEOUT_MS) {
-            if (streamTimeoutId) clearInterval(streamTimeoutId);
-            streamTimeoutId = null;
-            abortedRef.current = true;
-            setErrorText("响应超时，AI 长时间未返回内容");
-            abortNativeSession(sessionSnapshot.id).catch(() => {});
-          }
-        }, 5_000);
+        streamCancelRef.current = response.cancel;
 
         for await (const packet of response.stream) {
           if (abortedRef.current) break;
-          lastActivity = Date.now();
 
           if (packet.type === "response") {
             if (packet.success === false) {
@@ -412,8 +402,6 @@ export function useChatStream({
           }
         }
 
-        if (streamTimeoutId) { clearInterval(streamTimeoutId); streamTimeoutId = null; }
-
         if (!abortedRef.current) {
           await finalizeStream();
         } else {
@@ -429,9 +417,10 @@ export function useChatStream({
           setErrorText(error instanceof Error ? error.message : "请求失败");
         }
       } finally {
-        if (streamTimeoutId) clearInterval(streamTimeoutId);
+        streamCancelRef.current = null;
         sendLockRef.current = false;
         setStreaming(false);
+        setStreamingStartedAt(null);
         cancelRenderFrame();
         setBlocks([]);
         blocksRef.current = [];
@@ -442,6 +431,8 @@ export function useChatStream({
 
   const stopStreaming = useCallback(async () => {
     abortedRef.current = true;
+    streamCancelRef.current?.();
+    streamCancelRef.current = null;
 
     const sessionId = localSessionRef.current.id;
     await abortNativeSession(sessionId).catch(() => {});
@@ -497,6 +488,7 @@ export function useChatStream({
     localSession,
     visibleMessages,
     streaming,
+    streamingStartedAt,
     blocks,
     errorText,
     messagesRef,

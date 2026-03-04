@@ -125,3 +125,4 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm run check
+      - run: npm test

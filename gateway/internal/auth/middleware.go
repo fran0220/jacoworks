@@ -22,12 +22,21 @@ type UserInfo struct {
 	Role  string `json:"role"`
 }
 
+type middlewareStore interface {
+	ValidateAuthSession(ctx context.Context, token string) (*store.User, error)
+	GetUserByContainerToken(ctx context.Context, token string) (*store.User, error)
+}
+
 type Middleware struct {
-	store      *store.Store
+	store      middlewareStore
 	adminToken string
 }
 
 func NewMiddleware(s *store.Store, adminToken string) *Middleware {
+	return NewMiddlewareWithStore(s, adminToken)
+}
+
+func NewMiddlewareWithStore(s middlewareStore, adminToken string) *Middleware {
 	return &Middleware{
 		store:      s,
 		adminToken: adminToken,
@@ -48,6 +57,11 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 				ID: "admin", Name: "admin", Email: "admin@jacoworks.local", Role: "admin",
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		if m.store == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
 			return
 		}
 

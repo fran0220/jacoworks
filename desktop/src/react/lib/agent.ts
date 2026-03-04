@@ -81,6 +81,7 @@ async function sendRpcCommand(command: Record<string, unknown>) {
 export async function startNativeStream(payload: NativePromptPayload): Promise<{
   requestId: string;
   stream: AsyncGenerator<AgentRpcEvent>;
+  cancel: () => void;
 }> {
   if (!isTauri()) {
     throw new Error("RPC transport is only available in Tauri runtime");
@@ -105,6 +106,11 @@ export async function startNativeStream(payload: NativePromptPayload): Promise<{
     throw err;
   }
 
+  const cancel = () => {
+    queue.close();
+    unlisten();
+  };
+
   const stream = (async function* () {
     try {
       while (true) {
@@ -117,7 +123,7 @@ export async function startNativeStream(payload: NativePromptPayload): Promise<{
     }
   })();
 
-  return { requestId, stream };
+  return { requestId, stream, cancel };
 }
 
 export async function abortNativeSession(sessionId: string) {

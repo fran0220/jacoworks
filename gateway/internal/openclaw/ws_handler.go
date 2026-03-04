@@ -17,7 +17,6 @@ import (
 
 const (
 	wsClientWriteQueueSize = 256
-	wsClientIdleTimeout    = 90 * time.Second
 	wsClientReadLimit      = 1 << 20
 )
 
@@ -100,7 +99,10 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, userID string, replay []SSEEvent, updates <-chan SSEEvent) {
 	conn.SetReadLimit(wsClientReadLimit)
-	_ = conn.SetReadDeadline(time.Now().Add(wsClientIdleTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
 
 	outbound := make(chan []byte, wsClientWriteQueueSize)
 	done := make(chan struct{})
@@ -144,6 +146,24 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
 				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 					log.Debug().Err(err).Str("user_id", userID).Msg("openclaw ws bridge: write failed")
+					return
+				}
+			}
+		}
+	}()
+
+	// Ping ticker: keep client connection alive during long LLM streaming
+	go func() {
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
+					log.Debug().Err(err).Str("user_id", userID).Msg("openclaw ws bridge: ping failed")
 					return
 				}
 			}
@@ -200,7 +220,7 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Info().Str("user_id", userID).Msg("openclaw ws bridge: client idle timeout")
+				log.Info().Str("user_id", userID).Msg("openclaw ws bridge: client pong timeout")
 			} else if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				log.Debug().Err(err).Str("user_id", userID).Msg("openclaw ws bridge: read failed")
 			}
@@ -213,12 +233,9 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 			continue
 		}
 
-		activity, err := h.handleClientMessage(channel, payload, enqueue)
+		_, err = h.handleClientMessage(channel, payload, enqueue)
 		if err != nil {
 			log.Debug().Err(err).Str("user_id", userID).Msg("openclaw ws bridge: invalid client frame")
-		}
-		if activity {
-			_ = conn.SetReadDeadline(time.Now().Add(wsClientIdleTimeout))
 		}
 	}
 }
