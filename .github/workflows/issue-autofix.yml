@@ -186,28 +186,10 @@ jobs:
         env:
           LLM_PROXY_URL: ${{ secrets.LLM_PROXY_URL }}
           LLM_PROXY_KEY: ${{ secrets.LLM_PROXY_KEY }}
-        run: |
-          cat > swe-config.yaml << 'EOF'
-          agent:
-            model:
-              name: openai/gpt-5.3-codex
-              api_base: ${LLM_PROXY_URL}
-              api_key: ${LLM_PROXY_KEY}
-              per_instance_cost_limit: 0
-              total_cost_limit: 0
-              per_instance_call_limit: 80
-              max_input_tokens: 0
-            history_processors: []
-          EOF
-          # 替换环境变量
-          sed -i "s|\${LLM_PROXY_URL}|${LLM_PROXY_URL}|g" swe-config.yaml
-          sed -i "s|\${LLM_PROXY_KEY}|${LLM_PROXY_KEY}|g" swe-config.yaml
-
-      - name: Create system prompt
-        env:
           TRIAGE_ANALYSIS: ${{ needs.triage.outputs.analysis }}
         run: |
-          cat > agent-prompt.md << 'PROMPT'
+          # 构建 system prompt 内容
+          cat > /tmp/system_prompt.txt << 'SYSPROMPT'
           你是 JAcoworks 项目的高级工程师。你的任务是根据 GitHub Issue 从根源上修复问题。
 
           ## 项目结构
@@ -223,10 +205,24 @@ jobs:
           3. **遵循约定**: Go 标准风格 / TS strict / React 纯 CSS 变量 / Rust Axum
           4. **Design Token**: desktop 样式必须用 CSS 变量 (--space-*, --text-*, --radius-*)
           5. **测试**: 如果修改了有测试的模块，确保测试通过
+          SYSPROMPT
 
-          ## AI 分诊结果
-          PROMPT
-          echo "${TRIAGE_ANALYSIS}" >> agent-prompt.md
+          # 写入 YAML 配置 (system_template 用 | 多行)
+          cat > swe-config.yaml << EOF
+          model:
+            model_name: openai/gpt-5.3-codex
+            api_base: ${LLM_PROXY_URL}
+            api_key: ${LLM_PROXY_KEY}
+            cost_limit: 0
+            call_limit: 80
+            input_tokens_limit: 0
+          agent:
+            system_template: |
+              $(cat /tmp/system_prompt.txt)
+
+              ## AI 分诊结果
+              ${TRIAGE_ANALYSIS}
+          EOF
 
       - name: Run mini-swe-agent
         env:
@@ -235,8 +231,8 @@ jobs:
           OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
         run: |
           mini --config swe-config.yaml \
-               --agent.system_prompt "$(cat agent-prompt.md)" \
-               --issue "${{ github.event.issue.html_url }}" \
+               --task "Fix GitHub issue: ${{ github.event.issue.title }}. Issue URL: ${{ github.event.issue.html_url }}. Issue body: $(echo '${{ github.event.issue.body }}' | head -c 2000)" \
+               --yolo \
             || echo "::warning::mini-swe-agent exited with non-zero code"
 
       - name: Check for changes
