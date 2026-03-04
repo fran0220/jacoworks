@@ -182,17 +182,6 @@ jobs:
       - name: Install mini-swe-agent
         run: pip install mini-swe-agent
 
-      - name: Setup global config (skip interactive setup)
-        env:
-          OPENAI_API_KEY: ${{ secrets.LLM_PROXY_KEY }}
-          OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
-        run: |
-          mini-extra config set MSWEA_MODEL_NAME "openai/gpt-5.3-codex"
-          mini-extra config set OPENAI_API_KEY "${OPENAI_API_KEY}"
-          mini-extra config set OPENAI_API_BASE "${OPENAI_API_BASE}"
-          mini-extra config set MSWEA_COST_TRACKING "ignore_errors"
-          echo "Global config set."
-
       - name: Create agent config
         env:
           LLM_PROXY_URL: ${{ secrets.LLM_PROXY_URL }}
@@ -240,11 +229,34 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.LLM_PROXY_KEY }}
           OPENAI_API_BASE: ${{ secrets.LLM_PROXY_URL }}
+          MSWEA_MODEL_NAME: openai/gpt-5.3-codex
+          MSWEA_COST_TRACKING: ignore_errors
         run: |
-          mini --config swe-config.yaml \
-               --task "Fix GitHub issue: ${{ github.event.issue.title }}. Issue URL: ${{ github.event.issue.html_url }}. Issue body: $(echo '${{ github.event.issue.body }}' | head -c 2000)" \
-               --yolo \
-            || echo "::warning::mini-swe-agent exited with non-zero code"
+          python3 << 'PYEOF'
+          import os
+          from minisweagent.agents.default import DefaultAgent
+          from minisweagent.models.litellm_model import LitellmModel
+          from minisweagent.environments.local import LocalEnvironment
+
+          task = os.environ.get("ISSUE_TASK", "No task provided")
+
+          model = LitellmModel(
+              model_name="openai/gpt-5.3-codex",
+              cost_limit=0,
+              call_limit=80,
+          )
+          env = LocalEnvironment()
+          agent = DefaultAgent(model=model, environment=env)
+          agent.run(task)
+          PYEOF
+        env:
+          ISSUE_TASK: |
+            Fix GitHub issue: ${{ github.event.issue.title }}
+
+            Issue URL: ${{ github.event.issue.html_url }}
+
+            Issue body:
+            ${{ github.event.issue.body }}
 
       - name: Check for changes
         id: changes
