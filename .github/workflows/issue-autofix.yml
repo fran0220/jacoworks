@@ -182,48 +182,6 @@ jobs:
       - name: Install mini-swe-agent
         run: pip install mini-swe-agent
 
-      - name: Create agent config
-        env:
-          LLM_PROXY_URL: ${{ secrets.LLM_PROXY_URL }}
-          LLM_PROXY_KEY: ${{ secrets.LLM_PROXY_KEY }}
-          TRIAGE_ANALYSIS: ${{ needs.triage.outputs.analysis }}
-        run: |
-          # 用 python 生成 YAML 避免 heredoc 缩进问题
-          python3 -c "
-          import yaml, os
-          config = {
-            'model': {
-              'model_name': 'openai/gpt-5.3-codex',
-              'api_base': os.environ['LLM_PROXY_URL'],
-              'api_key': os.environ['LLM_PROXY_KEY'],
-              'cost_limit': 0,
-              'call_limit': 80,
-              'input_tokens_limit': 0,
-            },
-            'agent': {
-              'system_template': '''你是 JAcoworks 项目的高级工程师。根据 GitHub Issue 从根源上修复问题。
-
-          项目结构:
-          - gateway/ — Go 管理网关 (HTTP API, 认证, WS 代理, PostgreSQL)
-          - desktop/ — Tauri v2 + React 18 桌面客户端 (CSS 变量, hooks)
-          - vm-agent/ — Node.js/Bun Agent sidecar (Pi SDK, RPC, 记忆系统)
-          - website/ — Rust 官网 (Axum + Askama 模板 + HTMX)
-
-          修复原则:
-          1. 根因分析: 不要治标不治本
-          2. 最小改动: 只改必要的代码
-          3. 遵循约定: Go/TS strict/React CSS变量/Rust Axum
-          4. 测试: 修改有测试的模块确保通过
-
-          AI 分诊结果: ''' + os.environ.get('TRIAGE_ANALYSIS', '无'),
-            }
-          }
-          with open('swe-config.yaml', 'w') as f:
-            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-          "
-          echo "Config created:"
-          cat swe-config.yaml | sed 's/api_key:.*/api_key: ***/'
-
       - name: Run mini-swe-agent
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -250,7 +208,7 @@ jobs:
               call_limit=80,
           )
           env = LocalEnvironment()
-          agent = DefaultAgent(model=model, env=env)
+          agent = DefaultAgent(model=model, env=env, config_path="mini.yaml")
           agent.run(task)
           PYEOF
 
