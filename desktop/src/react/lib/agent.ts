@@ -10,6 +10,7 @@ interface NativePromptPayload {
   restricted?: boolean;
   streaming_behavior?: "steer" | "followUp";
   thinking_level?: string;
+  anonymous?: boolean;
 }
 
 export interface AgentRpcEvent {
@@ -92,6 +93,12 @@ export async function startNativeStream(payload: NativePromptPayload): Promise<{
 
   const unlisten = await listen<AgentRpcEvent>("agent-rpc-event", (event) => {
     const packet = event.payload;
+    // Broadcast fatal errors (no id) like "Agent 进程已退出" must reach every active stream
+    if (!packet.id && packet.type === "error") {
+      queue.push(packet);
+      queue.close();
+      return;
+    }
     if (String(packet.id ?? "") !== requestId) return;
     queue.push(packet);
     if (packet.type === "done" || packet.type === "error") {

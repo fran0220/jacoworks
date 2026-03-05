@@ -6,6 +6,7 @@ import {
   destroyAllSessions,
   cleanupStaleSessions,
   listAvailableSkills,
+  agentEvents,
 } from "./agent.js";
 import { handleCommand, type RawCommand } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
@@ -13,15 +14,16 @@ import type { TransportSender } from "./transport/types.js";
 const config = loadConfig();
 initAgent(config);
 
-startBackgroundServices().catch((err) => {
-  console.error("❌ Background services error:", err);
-});
-
 const sender: TransportSender = {
   send(payload: unknown) {
     process.stdout.write(`${JSON.stringify(payload)}\n`);
   },
 };
+
+// Forward cron result events to desktop via stdout transport
+agentEvents.on("cron_result", (event) => {
+  sender.send({ type: "cron_result", ...event });
+});
 
 const rl = createInterface({
   input: process.stdin,
@@ -80,4 +82,12 @@ process.on("unhandledRejection", (reason) => {
   console.error("unhandled rejection:", reason);
 });
 
-sender.send({ type: "ready", service: "vm-agent", version: "0.2.0-rpc", skills: listAvailableSkills() });
+// 等待后台服务 (cron, heartbeat) 初始化完成后再发 ready，
+// 确保首个 prompt 到达时 cronService 等已注册为 extension。
+startBackgroundServices()
+  .catch((err) => {
+    console.error("❌ Background services error:", err);
+  })
+  .finally(() => {
+    sender.send({ type: "ready", service: "vm-agent", version: "0.2.0-rpc", skills: listAvailableSkills() });
+  });

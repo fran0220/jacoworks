@@ -70,6 +70,32 @@ describe("sessions", () => {
     expect(request.headers.Authorization).toBe("Bearer session-token");
   });
 
+  test("createSession omits empty model field", async () => {
+    httpFetchMock.mockResolvedValue({
+      status: 201,
+      headers: {},
+      body: JSON.stringify({
+        id: "s-no-model",
+        title: "New Session",
+        messages: "[]",
+        created_at: "2026-03-04T10:00:00.000Z",
+        updated_at: "2026-03-04T10:00:00.000Z",
+        type: "chat",
+        workspace_path: "/workspace/project",
+        model: "claude-sonnet-4-6",
+      }),
+    });
+
+    const sessions = await loadSessions();
+    await sessions.createSession({ workspacePath: "/workspace/project", model: "   " });
+
+    const request = httpFetchMock.mock.calls[0]?.[1] as { body: string };
+    expect(JSON.parse(request.body)).toEqual({
+      type: "chat",
+      workspace_path: "/workspace/project",
+    });
+  });
+
   test("updateSession sends PUT", async () => {
     httpFetchMock.mockResolvedValue({
       status: 200,
@@ -144,13 +170,18 @@ describe("sessions", () => {
     const sessions = await loadSessions();
     const list = await sessions.listSessions();
 
-    expect(list).toHaveLength(1);
+    expect(list).toHaveLength(2);
     expect(list[0]).toMatchObject({
       id: "chat-1",
       title: "Chat One",
       type: "chat",
       model: "proxy-claude/claude-opus-4-6",
       workspacePath: "/workspace/a",
+    });
+    expect(list[1]).toMatchObject({
+      id: "cowork-1",
+      title: "Cowork",
+      type: "cowork",
     });
   });
 

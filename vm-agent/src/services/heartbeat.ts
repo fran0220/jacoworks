@@ -4,7 +4,7 @@ import { join } from "node:path";
 export interface HeartbeatConfig {
   enabled: boolean;
   intervalMs: number;
-  workspaceDir: string;
+  agentHomeDir: string;
   activeHours?: { start: string; end: string };
   prompt?: string;
 }
@@ -39,11 +39,11 @@ function isWithinActiveHours(activeHours?: { start: string; end: string }): bool
   return currentMinutes >= startMinutes || currentMinutes < endMinutes;
 }
 
-async function loadHeartbeatPrompt(workspaceDir: string, customPrompt?: string): Promise<string | null> {
+async function loadHeartbeatPrompt(agentHomeDir: string, customPrompt?: string): Promise<string | null> {
   if (customPrompt) return customPrompt;
 
   try {
-    const content = await readFile(join(workspaceDir, "HEARTBEAT.md"), "utf-8");
+    const content = await readFile(join(agentHomeDir, "HEARTBEAT.md"), "utf-8");
     return content.trim() || null;
   } catch {
     return null;
@@ -64,7 +64,7 @@ export function createHeartbeatService(
     if (!isWithinActiveHours(config.activeHours)) return;
     ticking = true;
 
-    const prompt = await loadHeartbeatPrompt(config.workspaceDir, config.prompt);
+    const prompt = await loadHeartbeatPrompt(config.agentHomeDir, config.prompt);
     if (!prompt) { ticking = false; return; }
 
     lastRun = Date.now();

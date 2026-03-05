@@ -80,12 +80,6 @@ impl MemoryFileEntry {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RemoteSkillFile {
-    pub file_path: String,
-    pub content: String,
-}
-
 /// List all memory files with their content (MEMORY.md + daily/*.md).
 #[tauri::command]
 pub fn list_memory_files(app: AppHandle) -> Result<Vec<MemoryFileEntry>, String> {
@@ -172,33 +166,6 @@ pub fn write_memory_files(app: AppHandle, files: Vec<MemoryFileEntry>) -> Result
 #[tauri::command]
 pub fn get_memory_root(app: AppHandle) -> Result<String, String> {
     memory_root_dir(&app).map(|p| p.display().to_string())
-}
-
-/// Write remote skills pulled from gateway to app_data/remote-skills/
-/// Returns the directory path where files were written.
-#[tauri::command]
-pub fn write_remote_skills(
-    app: AppHandle,
-    files: Vec<RemoteSkillFile>,
-) -> Result<String, String> {
-    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let remote_dir = app_data.join("remote-skills");
-
-    // Clean and recreate directory
-    if remote_dir.exists() {
-        let _ = std::fs::remove_dir_all(&remote_dir);
-    }
-
-    for file in &files {
-        let file_path = remote_dir.join(&file.file_path);
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {}", e))?;
-        }
-        std::fs::write(&file_path, &file.content)
-            .map_err(|e| format!("write failed: {}", e))?;
-    }
-
-    Ok(remote_dir.to_string_lossy().to_string())
 }
 
 // ───── Skills sync helpers ────────────────────────────────────
@@ -434,11 +401,30 @@ pub async fn start_agent(
             (c, resolved_dir)
         };
 
-        // Remote skills pulled from gateway (highest priority)
-        if let Ok(app_data) = app.path().app_data_dir() {
-            let remote_skills = app_data.join("remote-skills");
-            if remote_skills.exists() {
-                cmd.env("REMOTE_SKILLS_DIR", remote_skills.to_string_lossy().as_ref());
+        // Built-in skills: explicitly pass SKILLS_PATHS so the compiled binary
+        // doesn't have to guess via import.meta.url (which breaks in bundled mode).
+        {
+            let mut skills_paths: Vec<String> = Vec::new();
+
+            // 1. Production: bundled in resources/skills/
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let bundled = resource_dir.join("resources").join("skills");
+                if bundled.exists() {
+                    skills_paths.push(bundled.to_string_lossy().to_string());
+                }
+            }
+
+            // 2. Dev fallback: monorepo vm-agent/skills/
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let dev_skills = manifest_dir.join("../../vm-agent/skills");
+            if let Ok(canonical) = std::fs::canonicalize(&dev_skills) {
+                if canonical.exists() && !skills_paths.iter().any(|p| PathBuf::from(p) == canonical) {
+                    skills_paths.push(canonical.to_string_lossy().to_string());
+                }
+            }
+
+            if !skills_paths.is_empty() {
+                cmd.env("SKILLS_PATHS", skills_paths.join(","));
             }
         }
 
@@ -474,10 +460,52 @@ pub async fn start_agent(
             }
         }
 
+        // Windows: prepend bundled bash + bun/node to PATH
+        #[cfg(windows)]
+        {
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let win_bin = resource_dir.join("resources").join("win-bin");
+                let win_bash = resource_dir
+                    .join("resources")
+                    .join("win-bash")
+                    .join("usr")
+                    .join("bin");
+
+                let mut extra_paths: Vec<PathBuf> = Vec::new();
+                if win_bin.exists() {
+                    extra_paths.push(win_bin);
+                }
+                if win_bash.exists() {
+                    extra_paths.push(win_bash);
+                }
+
+                if !extra_paths.is_empty() {
+                    let current_path = std::env::var("PATH").unwrap_or_default();
+                    let existing: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
+                    let mut all_paths = extra_paths;
+                    all_paths.extend(existing);
+
+                    if let Ok(new_path) = std::env::join_paths(&all_paths) {
+                        cmd.env("PATH", &new_path);
+                    }
+
+                    cmd.env("CHERE_INVOKING", "1");
+                    cmd.env("MSYS2_PATH_TYPE", "inherit");
+                }
+            }
+        }
+
         cmd.env("MEMORY_ENABLED", "true")
             .env("HEARTBEAT_ENABLED", "false")
             .env("CRON_ENABLED", "false")
             .env("USER_SKILLS_DIR", user_skills_dir.to_string_lossy().as_ref())
+            .env(
+                "AGENT_HOME_DIR",
+                app.path()
+                    .app_data_dir()
+                    .map(|dir| dir.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

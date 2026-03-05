@@ -7,7 +7,7 @@ type Event struct {
 	Data  []byte // raw JSON
 }
 
-// ContainerBackend abstracts LXD/Docker operations for easy switching.
+// ContainerBackend abstracts Docker operations.
 type ContainerBackend interface {
 	Start(name string) error
 	Unfreeze(name string) error

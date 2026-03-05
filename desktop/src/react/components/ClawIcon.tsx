@@ -1,5 +1,5 @@
 /**
- * OpenClaw logo icon — stylized open pincer/claw.
+ * Cowork mode icon — stylized open pincer/claw.
  * Same API as lucide-react icons (size, className, etc.)
  */
 export default function ClawIcon({

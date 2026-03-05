@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { FormEventHandler } from "react";
 import { activateWithCode, login, loginWithFeishu } from "../lib/auth";
 
-export default function LoginPanel() {
+export default function LoginPanel({ authExpiredHint, onClearHint }: { authExpiredHint?: boolean; onClearHint?: () => void }) {
   const [mode, setMode] = useState<"login" | "activate">("login");
   const [username, setUsername] = useState("");
   const [secret, setSecret] = useState("");
@@ -17,6 +17,7 @@ export default function LoginPanel() {
     event.preventDefault();
     setLoading(true);
     setError("");
+    onClearHint?.();
     try {
       if (mode === "login") {
         await login(username, secret);
@@ -36,6 +37,7 @@ export default function LoginPanel() {
         <h1 className="logo">JAcoworks AI</h1>
         <p className="subtitle">企业 AI 协同办公平台</p>
 
+        {authExpiredHint && <div className="error-box">登录已过期，请重新登录</div>}
         {error && <div className="error-box">{error}</div>}
 
         <div className="tabs">

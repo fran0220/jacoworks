@@ -298,3 +298,8 @@
   color: var(--text-tertiary);
   white-space: nowrap;
 }
+
+/* Anonymous badge in composer */
+.composer-card.anonymous {
+  border-color: var(--accent-anonymous);
+}

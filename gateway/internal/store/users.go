@@ -34,6 +34,19 @@ func (s *Store) CreateUser(ctx context.Context, name, email, passwordHash, role 
 	return user, nil
 }
 
+func (s *Store) GetUserByID(ctx context.Context, id string) (*User, error) {
+	user := &User{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, name, email, password_hash, role, feishu_open_id, created_at, updated_at
+		 FROM users WHERE id = $1`,
+		id,
+	).Scan(&user.ID, &user.Name, &user.Email, &user.PasswordHash, &user.Role, &user.FeishuOpenID, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+	return user, nil
+}
+
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	user := &User{}
 	err := s.pool.QueryRow(ctx,

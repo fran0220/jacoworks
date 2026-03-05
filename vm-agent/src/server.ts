@@ -12,9 +12,8 @@ import type { TransportSender } from "./transport/types.js";
 const config = loadConfig();
 initAgent(config);
 
-startBackgroundServices().catch((err) => {
-  console.error("❌ Background services error:", err);
-});
+// Track background services readiness to avoid race with cronService
+let servicesReady = false;
 
 const server = Bun.serve({
   port: config.port,
@@ -24,7 +23,7 @@ const server = Bun.serve({
 
     // Health endpoint
     if (url.pathname === "/health" && req.method === "GET") {
-      return Response.json({ status: "ok", service: "vm-agent", version: "0.2.0-ws" });
+      return Response.json({ status: "ok", service: "vm-agent", version: "0.2.0-ws", ready: servicesReady });
     }
 
     // WebSocket upgrade
@@ -85,7 +84,18 @@ const server = Bun.serve({
 
 console.error(`🚀 vm-agent server listening on ws://0.0.0.0:${server.port}`);
 console.error(`   Health: http://0.0.0.0:${server.port}/health`);
-console.error(`   Skills: ${listAvailableSkills().length} loaded`);
+
+// Wait for background services (cron, heartbeat) to initialize before marking ready,
+// ensuring cronService is registered as extension before the first prompt arrives.
+startBackgroundServices()
+  .catch((err) => {
+    console.error("❌ Background services error:", err);
+  })
+  .finally(() => {
+    servicesReady = true;
+    console.error(`   Skills: ${listAvailableSkills().length} loaded`);
+    console.error(`   ✅ Background services ready`);
+  });
 
 // Stale session cleanup every 10 minutes (1 hour inactivity threshold)
 setInterval(() => {

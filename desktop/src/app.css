@@ -27,6 +27,8 @@
 	--bg-error: rgba(224, 80, 80, 0.15);
 	--bg-badge: rgba(196, 114, 74, 0.12);
 	--bg-backdrop: rgba(26, 26, 26, 0.28);
+	--bg-anonymous: color-mix(in srgb, var(--bg-primary) 92%, #4A3B5C);
+	--accent-anonymous: #7B6B8A;
         --bg-code: #0d1117;
 
 	/* 文字 */

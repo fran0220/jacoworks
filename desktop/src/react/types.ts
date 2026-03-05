@@ -13,7 +13,6 @@ export interface MessageContent {
 
 export interface FileRef {
   name: string;
-  type: "image" | "text" | "binary";
   size: number;
 }
 
@@ -26,8 +25,8 @@ export interface ChatMessage {
 
 export interface AttachedFile {
   name: string;
-  type: "image" | "text" | "binary";
-  data: string;
+  /** Workspace-relative path, e.g. "_attachments/report.pdf" */
+  path: string;
   size: number;
 }
 
@@ -40,6 +39,7 @@ export interface ChatSession {
   type: string;
   workspacePath: string;
   model: string;
+  anonymous?: boolean;
 }
 
 export type StreamBlock =

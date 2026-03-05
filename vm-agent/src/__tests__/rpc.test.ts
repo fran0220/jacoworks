@@ -221,7 +221,7 @@ beforeAll(async () => {
       MEMORY_ENABLED: "true",
       HEARTBEAT_ENABLED: "false",
       CRON_ENABLED: "false",
-      PRIMARY_MODEL: "claude-haiku-4-5-20251001",
+      PRIMARY_MODEL: "claude-sonnet-4-6",
       PRIMARY_PROVIDER: "proxy-claude",
     },
   });

@@ -1,7 +1,7 @@
 /**
  * SQLite + FTS5 Memory Store
  *
- * OpenClaw-style architecture:
+ * Cloud container architecture:
  * - BM25 via FTS5 (unicode61 + CJK character segmentation, <10ms)
  * - Optional vector reranking on BM25 candidate set
  * - Embedding cached in SQLite with LRU eviction

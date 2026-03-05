@@ -312,9 +312,9 @@ func TestCanonicalToContainerPath(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"MEMORY.md", "/home/agent/.openclaw/workspace/MEMORY.md"},
-		{"daily/2026-02-26.md", "/home/agent/.openclaw/workspace/memory/2026-02-26.md"},
-		{"notes.md", "/home/agent/.openclaw/workspace/notes.md"},
+		{"MEMORY.md", "/home/agent/.jacoworks/workspace/MEMORY.md"},
+		{"daily/2026-02-26.md", "/home/agent/.jacoworks/workspace/memory/2026-02-26.md"},
+		{"notes.md", "/home/agent/.jacoworks/workspace/notes.md"},
 	}
 	for _, tt := range tests {
 		got := canonicalToContainerPath(tt.input)
@@ -329,8 +329,8 @@ func TestContainerToCanonicalPath(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"/home/agent/.openclaw/workspace/MEMORY.md", "MEMORY.md"},
-		{"/home/agent/.openclaw/workspace/memory/2026-02-26.md", "daily/2026-02-26.md"},
+		{"/home/agent/.jacoworks/workspace/MEMORY.md", "MEMORY.md"},
+		{"/home/agent/.jacoworks/workspace/memory/2026-02-26.md", "daily/2026-02-26.md"},
 	}
 	for _, tt := range tests {
 		got := containerToCanonicalPath(tt.input)

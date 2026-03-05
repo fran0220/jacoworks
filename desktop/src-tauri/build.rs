@@ -22,6 +22,8 @@ fn main() {
 
     // Ensure resource files exist for Tauri validation
     std::fs::create_dir_all("resources/pi-meta").ok();
+    std::fs::create_dir_all("resources/win-bash/usr/bin").ok();
+    std::fs::create_dir_all("resources/win-bin").ok();
 
     tauri_build::build()
 }

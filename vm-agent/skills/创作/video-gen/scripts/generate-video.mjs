@@ -26,7 +26,7 @@ const MODELS = {
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const FAL_KEY = process.env.FAL_KEY || "";
+const FAL_KEY = process.env.FAL_API_KEY || "";
 const QUEUE_BASE = "https://queue.fal.run";
 const POLL_INTERVAL = 3_000;   // 3s
 const POLL_TIMEOUT  = 600_000; // 10min
@@ -230,7 +230,7 @@ async function main() {
   const opts = parseArgs();
 
   if (!FAL_KEY) {
-    console.error("Error: FAL_KEY not configured");
+    console.error("Error: FAL_API_KEY not configured");
     process.exit(1);
   }
 

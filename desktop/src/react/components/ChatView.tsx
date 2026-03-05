@@ -1,30 +1,23 @@
-import { AlertCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { AlertCircle, ChevronDown, RotateCcw } from "lucide-react";
 import { useChatStream } from "../hooks/use-chat-stream";
 import type { AttachedFile, ChatSession } from "../types";
+import { toolArgsSummary } from "../lib/tool-utils";
 import Composer from "./Composer";
 import MessageBubble from "./MessageBubble";
 import StreamingCursor from "./StreamingCursor";
 import StreamingMarkdown from "./StreamingMarkdown";
 import ToolStatus from "./ToolStatus";
 
-function shortName(filepath: string): string {
-  const parts = filepath.replace(/\\/g, "/").split("/").filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : filepath;
-}
-
-function toolArgsSummary(name: string, args?: string): string {
-  if (!args) return "";
-  try {
-    const parsed = JSON.parse(args);
-    if (name === "read" || name === "edit" || name === "write") return shortName(parsed.path || "");
-    if (name === "bash") return parsed.command ? `$ ${parsed.command}`.slice(0, 60) : "";
-    if (name === "web_search" || name === "memory_search") return parsed.query || "";
-    if (name === "web_fetch") return parsed.url ? new URL(parsed.url).hostname : "";
-    if (name === "grep") return parsed.pattern || "";
-    if (name === "find") return shortName(parsed.glob || parsed.pattern || "");
-    if (name === "ls") return shortName(parsed.path || "");
-    return "";
-  } catch { return ""; }
+function ToolElapsed() {
+  const [startedAt] = useState(Date.now);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  if (elapsed < 3) return null;
+  return <span className="process-strip-elapsed">{elapsed}s</span>;
 }
 
 export default function ChatView({
@@ -48,6 +41,8 @@ export default function ChatView({
     blocks,
     errorText,
     messagesRef,
+    isAtBottom,
+    scrollToBottom,
     sendMessage,
     stopStreaming,
     handleMessagesScroll,
@@ -61,8 +56,10 @@ export default function ChatView({
     onSessionUpdate,
   });
 
+  const lastUserMessage = visibleMessages.filter(m => m.role === "user").pop();
+
   return (
-    <div className="chat-view">
+    <div className={`chat-view${session.anonymous ? " anonymous" : ""}`}>
       <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {visibleMessages.length === 0 && !streaming && (
           <div className="empty-state">
@@ -117,6 +114,7 @@ export default function ChatView({
                         <div className="process-strip-row">
                           <ToolStatus toolName={block.name} status={block.status} />
                           {summary && <span className="process-strip-hint">{summary}</span>}
+                          {isRunning && <ToolElapsed />}
                         </div>
                       </div>
                     </div>
@@ -139,9 +137,29 @@ export default function ChatView({
           <div className="error-inline">
             <AlertCircle size={14} />
             <span>{errorText}</span>
+            {lastUserMessage && !streaming && (
+              <button
+                className="error-retry-btn"
+                onClick={() => {
+                  const text = typeof lastUserMessage.content === "string"
+                    ? lastUserMessage.content
+                    : lastUserMessage.content.filter(p => p.type === "text").map(p => p.text || "").join("\n");
+                  sendMessage(text, []);
+                }}
+              >
+                <RotateCcw size={12} />
+                重试
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {!isAtBottom && (
+        <button className="scroll-to-bottom" onClick={scrollToBottom} title="回到底部">
+          <ChevronDown size={16} />
+        </button>
+      )}
 
       <Composer
         isStreaming={streaming}

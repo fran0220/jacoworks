@@ -1,6 +1,6 @@
 # Godot 游戏开发集成方案 — 实施文档
 
-> JAcoworks 通过 OpenClaw 远程容器集成 Godot 引擎，让 Agent 能够创建/编辑场景、运行调试游戏、导出 Web 版本并发布到公开游戏广场。
+> JAcoworks 通过云端 Docker 容器集成 Godot 引擎，让 Agent 能够创建/编辑场景、运行调试游戏、导出 Web 版本并发布到公开游戏广场。
 > 桌面端零改动，全部能力通过容器预装 + Skill + Gateway API 实现。
 
 ## 1. 架构概览
@@ -9,9 +9,9 @@
 用户: "帮我做个 2D 平台跳跃游戏"
   │
   ├─ 桌面端 (Tauri, 零改动)
-  │   OpenClaw 模式 → WebSocket → 网关 WS 代理
+  │   协作模式 → WebSocket → 网关 WS 代理
   │
-  ├─ OpenClaw 容器 (ARM64 Linux)
+  ├─ Docker 容器 (ARM64 Linux)
   │   Agent (已有 bash/write 工具)
   │   ├─ Skill 层 (game-dev-ai)
   │   │   Agent 加载 SKILL.md → 了解 Godot 最佳实践 + CLI 用法
@@ -37,11 +37,11 @@
 |------|------|------|
 | 本地 Extension (vm-agent godot.ts) | 用户需自装 Godot，各平台差异大 | ❌ 放弃 (作为可选保留) |
 | GDAI MCP Plugin ($19) | 许可证禁止再分发 (non-transferable, no redistribution)，Pi SDK 不支持 MCP 协议，无 ARM64 Linux .so | ❌ 不可行 |
-| **OpenClaw 容器预装 Godot** | 复用现有基础设施，用户零安装，环境标准化，ARM64 原生支持 | ✅ 采用 |
+| **Docker 容器预装 Godot** | 复用现有基础设施，用户零安装，环境标准化，ARM64 原生支持 | ✅ 采用 |
 
 ### 关键约束
 
-- **桌面端零改动** — 全部通过 OpenClaw 模式 (已有 WebSocket 通道)
+- **桌面端零改动** — 全部通过协作模式 (已有 WebSocket 通道)
 - **vm-agent 零代码改动** — 容器内 Agent 已有 bash/write 工具，Godot 当普通 CLI 调用
 - **Godot 是免费开源 (MIT)** — 可自由预装到容器模板
 - **godot-mcp 的 godot_operations.gd (MIT)** — 可自由使用和分发
@@ -73,7 +73,7 @@ website/src/
 
 deploy/
 ├── sql/005_games.sql                         # games 表 DDL
-└── openclaw/setup-godot.sh                   # 容器模板 Godot 安装脚本
+└── docker/setup-godot.sh                     # 容器 Godot 安装脚本 (需适配 Docker)
 
 vm-agent/scripts/
 └── godot_operations.gd                       # Godot headless 操作脚本 (MIT, 来自 godot-mcp)
@@ -90,13 +90,13 @@ website/templates/base.html                   # 导航栏加 "游戏广场" 链�
 
 ## 3. 容器模板配置
 
-### 3.1 Godot 安装脚本 (`deploy/openclaw/setup-godot.sh`)
+### 3.1 Godot 安装脚本 (`deploy/docker/setup-godot.sh`)
 
-在 oracle (10.0.1.3) 上执行，更新 `tpl-openclaw` 容器模板：
+在 oracle (10.0.1.3) 上执行，更新 vm-agent Docker 镜像：
 
 ```bash
 #!/bin/bash
-# 在 tpl-openclaw 容器中安装 Godot 4.6.1 ARM64 + Web Export Template
+# 在 vm-agent Docker 容器中安装 Godot 4.6.1 ARM64 + Web Export Template
 set -euo pipefail
 
 GODOT_VERSION="4.6.1"
@@ -218,11 +218,11 @@ Skill 教会 Agent 以下能力：
 **Godot CLI 参考 (嵌入 Skill):**
 ```bash
 # 场景操作 (通过 godot_operations.gd)
-godot --headless --path <project> --script /opt/godot-tools/godot_operations.gd -- \
-  create_scene '{"path":"scenes/main.tscn","root_type":"Node2D"}'
+godot --headless --path <project> --script /opt/godot-tools/godot_operations.gd \
+  create_scene '{"scene_path":"scenes/main.tscn","root_node_type":"Node2D"}'
 
-godot --headless --path <project> --script /opt/godot-tools/godot_operations.gd -- \
-  add_node '{"scene":"scenes/main.tscn","parent":".","type":"CharacterBody2D","name":"Player"}'
+godot --headless --path <project> --script /opt/godot-tools/godot_operations.gd \
+  add_node '{"scene_path":"scenes/main.tscn","parent_path":".","node_type":"CharacterBody2D","node_name":"Player"}'
 
 # 运行和检查
 godot --headless --path <project>                    # 运行 (逻辑层)
@@ -433,7 +433,7 @@ iframe 嵌入方式:
 
 ## 8. 用户体验流程
 
-### 场景 A: OpenClaw 模式 (主要场景)
+### 场景 A: 协作模式 (主要场景)
 
 ```
 用户: 帮我做个 2D 平台跳跃游戏
@@ -469,7 +469,7 @@ Agent: 🎮 游戏已发布！你的朋友可以直接访问:
 Agent: [加载 game-dev-ai skill]
 Agent: 检测到你在本地模式。要使用 Godot 开发游戏，有两个选择:
 
-       1. 切换到 OpenClaw 模式 (推荐) — Godot 已预装，开发完还能直接发布到游戏广场
+       1. 切换到协作模式 (推荐) — Godot 已预装，开发完还能直接发布到游戏广场
        2. 本地安装 Godot: brew install --cask godot
 
        推荐选择 1，你要切换吗？
@@ -533,9 +533,9 @@ Agent: 检测到你在本地模式。要使用 Godot 开发游戏，有两个选
 ### Phase 2 — 容器模板 (1-2 小时，oracle 服务器操作)
 
 - [ ] 从 godot-mcp 获取 `godot_operations.gd` 放入 `vm-agent/scripts/`
-- [ ] 编写 `deploy/openclaw/setup-godot.sh`
-- [ ] SSH 到 oracle (10.0.1.3) 执行安装脚本更新 `tpl-openclaw`
-- [ ] 验证: `lxc exec tpl-openclaw -- godot --version` → 4.6.1.stable
+- [ ] 编写 `deploy/docker/setup-godot.sh`
+- [ ] SSH 到 oracle (10.0.1.3) 执行安装脚本更新 vm-agent Docker 镜像
+- [ ] 验证: `docker exec <container> godot --version` → 4.6.1.stable
 - [ ] 验证: Web Export Template 已安装
 - [ ] 验证: `Xvfb :99 &` 可正常启动
 
@@ -561,7 +561,7 @@ Agent: 检测到你在本地模式。要使用 Godot 开发游戏，有两个选
 
 ### Phase 5 — 端到端验证
 
-- [ ] OpenClaw 容器内: 创建 Godot 项目 → 编写脚本 → 运行 → 导出 Web → 部署
+- [ ] Docker 容器内: 创建 Godot 项目 → 编写脚本 → 运行 → 导出 Web → 部署
 - [ ] 浏览器: 访问游戏广场 → 看到新游戏 → 点击玩
 - [ ] 验证: COOP/COEP 头正确 (SharedArrayBuffer 可用)
 - [ ] 验证: 多用户各自发布互不干扰

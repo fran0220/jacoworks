@@ -4,7 +4,7 @@ display-name: 游戏开发助手
 display-description: 使用 Godot 引擎开发游戏，支持创建、调试、导出和发布
 description: >
   Game development with Godot Engine. Creates scenes, scripts, generates
-  assets (images via Nano Banana 2, SFX and music via Beatoven on fal.ai),
+  assets (images, SFX and music via built-in generation tools),
   runs and debugs games using Godot CLI. Exports to Web and deploys to
   game gallery. Triggers on: 做游戏, 开发游戏, game development, godot, 游戏开发.
 ---
@@ -24,8 +24,8 @@ which Xvfb               # 虚拟显示 (截图用)
 ```
 
 如果 `godot` 不可用：
-- **OpenClaw 容器**: 报告异常，Godot 应已预装
-- **本地模式**: 提示用户切换到 OpenClaw 模式 (推荐) 或自行安装 `brew install --cask godot`
+- **云端容器**: 报告异常，Godot 应已预装
+- **本地模式**: 提示用户切换到协作模式 (推荐) 或自行安装 `brew install --cask godot`
 
 ## 项目创建
 
@@ -64,16 +64,16 @@ cp /opt/godot-tools/templates/export_presets.cfg ~/game/
 
 ```bash
 # 创建场景
-godot --headless --path ~/game --script /opt/godot-tools/godot_operations.gd -- \
-  create_scene '{"path":"scenes/main.tscn","root_type":"Node2D"}'
+godot --headless --path ~/game --script /opt/godot-tools/godot_operations.gd \
+  create_scene '{"scene_path":"scenes/main.tscn","root_node_type":"Node2D"}'
 
 # 添加节点
-godot --headless --path ~/game --script /opt/godot-tools/godot_operations.gd -- \
-  add_node '{"scene":"scenes/main.tscn","parent":".","type":"CharacterBody2D","name":"Player"}'
+godot --headless --path ~/game --script /opt/godot-tools/godot_operations.gd \
+  add_node '{"scene_path":"scenes/main.tscn","parent_path":".","node_type":"CharacterBody2D","node_name":"Player"}'
 
 # 添加精灵
-godot --headless --path ~/game --script /opt/godot-tools/godot_operations.gd -- \
-  add_node '{"scene":"scenes/main.tscn","parent":"Player","type":"Sprite2D","name":"Sprite"}'
+godot --headless --path ~/game --script /opt/godot-tools/godot_operations.gd \
+  add_node '{"scene_path":"scenes/main.tscn","parent_path":"Player","node_type":"Sprite2D","node_name":"Sprite"}'
 ```
 
 ### 方式 2: 直接写 .tscn 文件 (简单场景或 godot_operations.gd 不支持时)
@@ -151,7 +151,7 @@ kill %1  # 杀掉 Xvfb
 
 ## 资产生成 (AI)
 
-容器环境变量 `FAL_API_KEY` 由网关自动注入。通过 fal.ai REST API 生成图像、音效、音乐。
+容器环境变量由网关自动注入。通过内置 API 生成图像、音效、音乐。
 
 ### 图像 — Nano Banana 2 (sprite / 贴图 / 背景 / UI)
 
@@ -290,7 +290,7 @@ tar czf /tmp/game-deploy.tar.gz .
 
 # 3. 上传到游戏广场 (用容器 token 认证，无需用户 token)
 curl -s -X POST "http://10.0.1.1:8847/api/games/deploy" \
-  -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $GATEWAY_TOKEN" \
   -F "file=@/tmp/game-deploy.tar.gz" \
   -F "title=游戏标题" \
   -F "description=游戏描述" \
@@ -304,7 +304,7 @@ curl -s -X POST "http://10.0.1.1:8847/api/games/deploy" \
 - 链接: `https://jaco.jingao.club/games/<id>`
 - 任何人可直接在浏览器试玩
 
-**注意**: `$OPENCLAW_GATEWAY_TOKEN` 环境变量由容器自动提供，无需额外配置。
+**注意**: `$GATEWAY_TOKEN` 环境变量由容器自动提供，无需额外配置。
 
 ## 工作流总结
 
@@ -313,7 +313,7 @@ curl -s -X POST "http://10.0.1.1:8847/api/games/deploy" \
 2. 创建项目 → mkdir + project.godot + export_presets.cfg
 3. 创建场景 → godot_operations.gd 或直接写 .tscn
 4. 编写脚本 → write 工具创建 .gd 文件
-5. 生成资产 → fal.ai API (图像/音效/音乐) → assets/ 目录
+5. 生成资产 → 内置 API (图像/音效/音乐) → assets/ 目录
 6. 测试验证 → godot --headless --check-only → godot --headless 运行
 7. 迭代修复 → 解析错误 → 修改 → 重新测试
 8. 导出 Web  → godot --export-release "Web"

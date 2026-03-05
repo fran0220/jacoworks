@@ -83,6 +83,10 @@ async function authFetch(
 
   if (response.status === 401 && token && path !== "/api/auth/login" && path !== "/api/auth/activate") {
     clearSession();
+    // Notify listeners that session expired so UI can show a message
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent("auth-expired", { detail: { path } }));
+    }
   }
 
   return response;
@@ -121,8 +125,12 @@ export async function loginWithFeishu() {
 
 export async function handleOAuthCallback(): Promise<boolean> {
   const params = new URLSearchParams(window.location.search);
-  const callbackToken = params.get("token");
-  const callbackError = params.get("error");
+  const hash = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+  const callbackToken = hashParams.get("token") || params.get("token");
+  const callbackError = hashParams.get("error") || params.get("error");
 
   if (callbackError) {
     window.history.replaceState({}, "", window.location.pathname);

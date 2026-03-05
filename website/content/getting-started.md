@@ -10,7 +10,7 @@
 | Windows | 10 (1809) 及以上 | 64 位, 8GB 内存 |
 | Linux | Ubuntu 22.04 / Fedora 38 及以上 | x86_64 或 aarch64, 8GB 内存 |
 
-> **注意**: JAcoworks 的 AI 推理在云端完成，本地不需要 GPU。网络连接是必须的。
+> **注意**: JAcoworks 的 AI 运算在云端完成，本地不需要 GPU。网络连接是必须的。
 
 ## 下载安装
 
@@ -18,10 +18,7 @@
 
 1. 前往 [下载页面](https://jaco.jingao.club/download) 下载 `.dmg` 安装包
 2. 打开 `.dmg` 文件，将 JAcoworks 拖入「应用程序」文件夹
-3. 首次打开可能提示「已损坏，无法打开」，在终端执行：
-   ```bash
-   sudo xattr -cr /Applications/JAcoworks.app
-   ```
+3. 首次打开如遇提示，请参考 [下载页面](https://jaco.jingao.club/download) 的安装说明
 
 ### Windows
 
@@ -71,7 +68,7 @@ JAcoworks 目前支持两类账号：
 1. 登录后进入主界面，左侧为会话列表，右侧为对话区域
 2. 点击左侧边栏顶部的 **「+ 新对话」** 按钮
 3. 在底部输入框中输入你的问题，按 `Enter` 发送
-4. AI Agent 将实时流式返回回答
+4. AI 会实时显示回答
 
 **示例问题**:
 
@@ -95,11 +92,11 @@ JAcoworks 支持多种主流大语言模型，你可以根据任务需要切换�
 
 ## 设置工作空间
 
-工作空间让 AI Agent 能够直接访问你的项目文件：
+工作空间让 AI 助手能够直接访问你的项目文件：
 
 1. 点击顶部工具栏的 **文件夹图标**
 2. 在系统文件选择器中选择你的项目目录
-3. 确认后，Agent 即可读写该目录下的文件
+3. 确认后，AI 助手即可读写该目录下的文件
 
 **示例**: 设置好工作空间后，你可以这样提问：
 
@@ -111,7 +108,7 @@ JAcoworks 支持多种主流大语言模型，你可以根据任务需要切换�
 
 ## 下一步
 
-- 了解 [本地模式与 OpenClaw 模式的区别](guide/overview)
+- 了解 [本地模式与协作模式的区别](guide/overview)
 - 探索 [AI 模型的详细特性](guide/models)
-- 学习 [记忆系统](guide/memory) 如何让 Agent 更了解你
-- 查看 [技能系统](guide/skills) 扩展 Agent 能力
+- 学习 [记忆系统](guide/memory) 如何让 AI 助手更了解你
+- 查看 [技能系统](guide/skills) 扩展 AI 助手能力

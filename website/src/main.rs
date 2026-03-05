@@ -120,6 +120,7 @@ async fn admin_login_page(
 async fn admin_login_action(
     axum::extract::State(state): axum::extract::State<AppState>,
     cookies: tower_cookies::Cookies,
+    headers: axum::http::HeaderMap,
     axum::extract::Form(form): axum::extract::Form<LoginForm>,
 ) -> Result<axum::response::Response, error::AppError> {
     let user = match auth::admin_login(&state.db, &form.email, &form.password).await {
@@ -139,7 +140,11 @@ async fn admin_login_action(
     models::auth_session::create_auth_session(&state.db, &user.id, &token, expires, None, None)
         .await?;
 
-    auth::set_session_cookie(&cookies, &token);
+    auth::set_session_cookie(
+        &cookies,
+        &token,
+        should_set_secure_cookie(&state.config, &headers),
+    );
     Ok(axum::response::Redirect::to("/admin").into_response())
 }
 
@@ -180,6 +185,7 @@ struct FeishuCallbackParams {
 async fn admin_feishu_callback(
     axum::extract::State(state): axum::extract::State<AppState>,
     cookies: tower_cookies::Cookies,
+    headers: axum::http::HeaderMap,
     axum::extract::Query(params): axum::extract::Query<FeishuCallbackParams>,
 ) -> Result<axum::response::Response, error::AppError> {
     if let Some(err) = &params.error {
@@ -222,8 +228,44 @@ async fn admin_feishu_callback(
     }
 
     tracing::info!(user_id, "admin logged in via Feishu SSO");
-    auth::set_session_cookie(&cookies, token);
+    auth::set_session_cookie(
+        &cookies,
+        token,
+        should_set_secure_cookie(&state.config, &headers),
+    );
     Ok(axum::response::Redirect::to("/admin").into_response())
+}
+
+fn should_set_secure_cookie(config: &config::Config, headers: &axum::http::HeaderMap) -> bool {
+    if let Some(proto) = headers
+        .get("x-forwarded-proto")
+        .and_then(|h| h.to_str().ok())
+    {
+        if proto
+            .split(',')
+            .any(|item| item.trim().eq_ignore_ascii_case("https"))
+        {
+            return true;
+        }
+        if proto
+            .split(',')
+            .any(|item| item.trim().eq_ignore_ascii_case("http"))
+        {
+            return false;
+        }
+    }
+
+    if let Some(host) = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+    {
+        let host_only = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+        if host_only == "localhost" || host_only == "127.0.0.1" || host_only == "::1" {
+            return false;
+        }
+    }
+
+    config.site.base_url.starts_with("https://")
 }
 
 async fn shutdown_signal() {

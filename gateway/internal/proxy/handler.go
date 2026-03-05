@@ -202,16 +202,16 @@ func (h *Handler) ensureRunning(ctx context.Context, containerName, userID strin
 		return fmt.Errorf("check status: %w", err)
 	}
 
-	switch strings.ToUpper(info.Status) {
-	case "RUNNING":
+	switch strings.ToLower(info.Status) {
+	case "running":
 		return nil
-	case "PAUSED":
+	case "paused":
 		log.Info().Str("container", containerName).Str("user_id", userID).Msg("unpausing container")
 		if err := h.dockerClient.Unfreeze(containerName); err != nil {
 			return err
 		}
 		return h.store.UpdateContainerStatusByName(ctx, containerName, "running")
-	case "EXITED":
+	case "exited":
 		log.Info().Str("container", containerName).Str("user_id", userID).Msg("starting stopped container")
 		if err := h.dockerClient.Start(containerName); err != nil {
 			return err

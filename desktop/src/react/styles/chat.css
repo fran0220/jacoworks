@@ -1,3 +1,7 @@
+.chat-view.anonymous {
+  background: var(--bg-anonymous);
+}
+
 /* ===== Chat View ===== */
 
 .chat-view {
@@ -5,6 +9,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
 }
 
 .messages {
@@ -205,6 +210,33 @@
   font-size: var(--text-sm);
 }
 
+.session-error-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-error, #fef2f2);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--danger);
+}
+
+.session-error-banner button {
+  margin-left: auto;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.session-error-banner button:hover {
+  background: var(--danger);
+  color: var(--text-on-accent);
+}
+
 /* ===== Tool Result Formatting ===== */
 
 .tool-result-header {
@@ -367,4 +399,68 @@
 
 .tool-show-more:hover {
   background: var(--bg-hover);
+}
+
+/* ===== Scroll to Bottom ===== */
+
+.scroll-to-bottom {
+  position: absolute;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: var(--size-btn-lg);
+  height: var(--size-btn-lg);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  z-index: 10;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+  animation: fade-in var(--duration-fast) var(--ease-standard);
+}
+
+.scroll-to-bottom:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ===== Error Retry ===== */
+
+.error-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+  flex-shrink: 0;
+}
+
+.error-retry-btn:hover {
+  background: var(--danger);
+  color: var(--text-on-accent);
+}
+
+/* ===== Tool Elapsed ===== */
+
+.process-strip-elapsed {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }

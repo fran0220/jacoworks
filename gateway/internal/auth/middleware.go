@@ -68,7 +68,7 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		// Validate session token via store
 		user, err := m.store.ValidateAuthSession(r.Context(), token)
 		if err != nil {
-			// Fallback: try container token (for OpenClaw agent API calls)
+			// Fallback: try container token (for container-initiated API calls)
 			cUser, cerr := m.store.GetUserByContainerToken(r.Context(), token)
 			if cerr != nil {
 				log.Debug().Err(err).Msg("session validation failed")
@@ -109,11 +109,25 @@ func extractBearerToken(r *http.Request) string {
 	if strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
 	}
-	// Fallback: query param for WebSocket connections (browsers can't set headers on WS)
-	if token := r.URL.Query().Get("token"); token != "" {
-		return token
+
+	// Fallback: query token only for WebSocket upgrade requests under /ws/*.
+	// This avoids leaking auth tokens through URLs on regular HTTP APIs.
+	if isWebSocketUpgradeRequest(r) {
+		if token := r.URL.Query().Get("token"); token != "" {
+			return token
+		}
 	}
 	return ""
+}
+
+func isWebSocketUpgradeRequest(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/ws/") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

@@ -9,6 +9,9 @@
 @import "./styles/markdown.css";
 @import "./styles/effects.css";
 @import "./styles/user-menu.css";
+@import "./styles/custom-select.css";
+@import "./styles/confirm-dialog.css";
 @import "./styles/oc-connector.css";
 @import "./styles/settings.css";
-@import "./openclaw/styles.css";
+@import "./styles/task-panel.css";
+@import "./cowork/styles.css";

@@ -51,9 +51,16 @@ fn mask_value(value: &str) -> String {
 fn is_secret_key(key: &str) -> bool {
     matches!(
         key,
-        "llm_proxy_key" | "openai_api_key" | "exa_api_key" | "tavily_api_key"
-        | "embedding_api_key" | "fal_api_key" | "jimeng_api_key"
-        | "feishu_client_secret" | "admin_token" | "github_token"
+        "llm_proxy_key"
+            | "openai_api_key"
+            | "exa_api_key"
+            | "tavily_api_key"
+            | "embedding_api_key"
+            | "fal_api_key"
+            | "jimeng_api_key"
+            | "feishu_client_secret"
+            | "admin_token"
+            | "github_token"
     )
 }
 
@@ -183,10 +190,7 @@ async fn render_settings_page(
 
     let (raw_settings, gateway_fetch_error) = match client.get_settings().await {
         Ok(settings) => (settings, None),
-        Err(err) => (
-            Vec::new(),
-            Some(format!("网关设置读取失败: {err}")),
-        ),
+        Err(err) => (Vec::new(), Some(format!("网关设置读取失败: {err}"))),
     };
     let settings: Vec<SettingView> = raw_settings
         .into_iter()

@@ -12,4 +12,6 @@ memory/
 **/*.test.ts
 **/*.spec.ts
 scripts/
+!scripts/godot_operations.gd
+!scripts/godot-export-presets.cfg
 数据模板.xlsx

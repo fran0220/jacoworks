@@ -4,9 +4,9 @@ display-name: 网络搜索
 display-description: 多源智能搜索与内容提取
 description: >
   Multi-source search with intent-aware scoring.
-  Integrates Exa, Tavily, and Grok (via LLM proxy) to provide
-  high-coverage, high-quality results. Automatically classifies query intent
-  and adjusts search strategy, scoring weights, and result synthesis accordingly.
+  Provides high-coverage, high-quality results from multiple search engines.
+  Automatically classifies query intent and adjusts search strategy, scoring
+  weights, and result synthesis accordingly.
   Use when the user asks to search the web, look up information, research a topic,
   find documentation, or needs up-to-date facts.
 ---
@@ -110,19 +110,14 @@ node {baseDir}/scripts/search.mjs \
 | `--source` | 指定使用的源 (exa,tavily,grok)，默认全部可用源 |
 
 **Grok 源说明**：
-- 通过 LLM 中转站 (`LLM_PROXY_URL`) 调用 Grok 模型，利用其实时知识返回结构化搜索结果
+- 利用 Grok 模型的实时知识返回结构化搜索结果
 - 自动检测时间敏感查询并注入当前时间上下文
 - 在 deep 模式下与 Exa、Tavily 并行执行
 - 如果 Grok 配置缺失，自动降级为 Exa + Tavily 双源
 
-**环境变量**（由 Tauri 启动时注入或 .env 配置）：
-| 变量 | 说明 |
-|------|------|
-| `EXA_API_KEY` | Exa 搜索 API 密钥 |
-| `TAVILY_API_KEY` | Tavily 搜索 API 密钥 |
-| `LLM_PROXY_URL` | LLM 中转站地址（Grok 源使用，默认 `http://67.230.182.59:8317`） |
-| `LLM_PROXY_KEY` | LLM 中转站密钥（Grok 源使用） |
-| `GROK_MODEL` | Grok 模型名（默认 `grok-4.1-fast`） |
+**环境变量**：
+所有 API 密钥由系统自动注入（网关 `/api/agent/config` 下发），无需用户手动配置。
+脚本所需的搜索服务密钥和模型配置均在启动时自动加载。
 
 ---
 

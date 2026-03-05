@@ -1,7 +1,8 @@
 import { AlertCircle, Bug, CheckCircle, ChevronDown, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
 import ClawIcon from "./ClawIcon";
 import { useEffect, useRef, useState } from "react";
-import type { OcConnectionPhase } from "../hooks/use-openclaw-connection";
+import type { OcConnectionPhase } from "../hooks/use-cowork-connection";
+import { useClickOutside } from "../hooks/use-click-outside";
 import { getUser, logout } from "../lib/auth";
 
 export default function TopBar({
@@ -12,9 +13,9 @@ export default function TopBar({
   ocPhase,
   ocStatusText,
   ocUnreadCount,
-  openclawOpen,
-  onOpenClawChat,
-  onCloseOpenClaw,
+  coworkOpen,
+  onCoworkChat,
+  onCloseCowork,
   debugEnabled,
   showRpcLog,
   onToggleRpcLog,
@@ -26,9 +27,9 @@ export default function TopBar({
   ocPhase: OcConnectionPhase;
   ocStatusText: string;
   ocUnreadCount: number;
-  openclawOpen: boolean;
-  onOpenClawChat: () => void;
-  onCloseOpenClaw: () => void;
+  coworkOpen: boolean;
+  onCoworkChat: () => void;
+  onCloseCowork: () => void;
   debugEnabled: boolean;
   showRpcLog: boolean;
   onToggleRpcLog: () => void;
@@ -61,17 +62,7 @@ export default function TopBar({
   else if (isError) displayText = "连接失败";
   else if (isBusy) displayText = ocStatusText;
 
-  // Menu click-outside
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener("click", handleClickOutside);
-    return () => document.removeEventListener("click", handleClickOutside);
-  }, [menuOpen]);
+  useClickOutside(menuRef, () => setMenuOpen(false), menuOpen);
 
   // Button icon based on phase
   let icon: React.ReactNode;
@@ -81,8 +72,8 @@ export default function TopBar({
   else icon = <ClawIcon size={14} />;
 
   const btnClass = [
-    "btn-openclaw",
-    openclawOpen && "active",
+    "btn-cowork",
+    coworkOpen && "active",
     showExpandedText && "expanded",
     isReady && !showReadyFlash && "has-dot",
     showReadyFlash && "ready-flash",
@@ -118,18 +109,18 @@ export default function TopBar({
         <button
           type="button"
           className={btnClass}
-          title="OpenClaw"
+          title="协作"
           onClick={() => {
-            if (openclawOpen) {
-              onCloseOpenClaw();
+            if (coworkOpen) {
+              onCloseCowork();
             } else {
-              onOpenClawChat();
+              onCoworkChat();
             }
           }}
         >
           {icon}
           {showExpandedText && <span className="oc-status-text">{displayText}</span>}
-          {isReady && !showReadyFlash && !openclawOpen && ocUnreadCount > 0 ? (
+          {isReady && !showReadyFlash && !coworkOpen && ocUnreadCount > 0 ? (
             <span className="oc-badge">{ocUnreadCount > 99 ? "99+" : ocUnreadCount}</span>
           ) : (
             isReady && !showReadyFlash && <span className="oc-dot" />

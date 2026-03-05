@@ -53,4 +53,3 @@ pub async fn revoke_invite_code(pool: &sqlx::PgPool, code: &str) -> Result<(), A
         .await?;
     Ok(())
 }
-

@@ -28,13 +28,15 @@
   │                    ├─ chat_sessions CRUD (PostgreSQL jingao 本地)
   │                    ├─ GET /api/agent/config → 下发 LLM 密钥
   │                    ├─ POST /v1/chat/completions → ChatAgent 代理
+  │                    ├─ CRUD /api/cron/jobs → 云端定时任务管理
   │                    └─ GET /ws/agent → WS 代理 → SSH → 容器端口
   │
   ├─ 本地模式: sidecar RPC (stdin/stdout)
   │    vm-agent → Pi SDK session → LLM 中转站
   │    可选 workspace → Agent 直接读写本地文件
+  │    cron_manage 工具自动代理到 Gateway (云端执行)
   │
-  └─ 协作模式: WebSocket → 网关 WS 代理 → SSH → Docker 容器
+  └─ 协作模式: 任务面板入口 → WebSocket → 网关 WS 代理 → SSH → Docker 容器
        Ed25519 设备认证, JSON framing 协议
 
 jingao (82.156.239.212) ──── SSH ────→ oracle (161.33.28.249)
@@ -48,7 +50,7 @@ jingao (82.156.239.212) ──── SSH ────→ oracle (161.33.28.249)
 
 ## 数据库
 
-PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~005*.sql`
+PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~008*.sql`
 
 | 表 | 关键字段 |
 |-----|------|
@@ -65,6 +67,7 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~
 | `releases` | id TEXT PK, version UNIQUE, notes, pub_date, is_latest BOOL |
 | `release_assets` | release_id → releases, platform, download_url, signature |
 | `feedback` | id TEXT PK, name, email, category, message, status, admin_reply |
+| `cron_jobs` | id TEXT PK, user_id → users, schedule_kind, schedule_expr, prompt, enabled |
 
 `user_id` 为 TEXT (gen_random_uuid()::text)。`updated_at` 触发器自动更新。
 
@@ -148,10 +151,12 @@ make deploy-agent      # 构建 ARM64 镜像 → 部署到 oracle
 
 **关键约束**:
 - **本地 Agent 优先**: 对话走 sidecar RPC，不经网关
-- **网关仅管控面**: 认证、会话 CRUD、LLM 配置下发、WS 代理
+- **云端能力透明代理**: 本地 sidecar 的 cron_manage 自动代理到 Gateway API，用户无需切换模式
+- **网关仅管控面**: 认证、会话 CRUD、LLM 配置下发、WS 代理、云端定时任务调度
 - **技能本地内置**: `vm-agent/skills/` 跟随代码版本, sidecar 通过 `SKILLS_PATHS` 传入, 不从网关拉取
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session 和记忆
-- **协作前端解耦**: `cowork/` 不复用本地组件，仅共享 auth/config/transport
+- **协作前端解耦**: `cowork/` 不复用本地组件，仅共享 auth/config/transport；入口在任务面板
+- **记忆同步可选**: 本地↔云端记忆同步默认关闭，用户在设置中开启
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，网关启动加载 + 热重载，无本地 fallback
 
 ## 待完成

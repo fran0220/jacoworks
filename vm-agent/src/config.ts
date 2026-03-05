@@ -23,6 +23,7 @@ export interface Config {
   /** Hybrid search Vector 权重 */
   hybridWVec: number;
   workspaceDir: string;
+  agentHomeDir: string;
   memoryRootDir: string;
   primaryModel: string;
   primaryProvider: string;
@@ -166,6 +167,7 @@ export function loadConfig(): Config {
     hybridWBm25: parseFloat(process.env.MEMORY_HYBRID_W_BM25 || "0.3"),
     hybridWVec: parseFloat(process.env.MEMORY_HYBRID_W_VEC || "0.7"),
     workspaceDir: process.env.WORKSPACE_DIR || process.cwd(),
+    agentHomeDir: process.env.AGENT_HOME_DIR || defaultAppDataDir(),
     memoryRootDir: process.env.MEMORY_ROOT_DIR || defaultMemoryRootDir(),
     primaryModel: process.env.PRIMARY_MODEL || "claude-opus-4-6",
     primaryProvider: process.env.PRIMARY_PROVIDER || "proxy-claude",

@@ -27,6 +27,7 @@ interface PromptCommand extends RpcCommandBase {
   restricted?: boolean;
   streaming_behavior?: "steer" | "followUp";
   thinking_level?: string;
+  anonymous?: boolean;
 }
 
 type RawCommand = RpcCommandBase & Record<string, unknown>;
@@ -82,6 +83,7 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
       workspace: command.workspace,
       restricted: command.restricted,
       model: requestedModel,
+      anonymous: command.anonymous,
     });
 
     if (requestedModel) {

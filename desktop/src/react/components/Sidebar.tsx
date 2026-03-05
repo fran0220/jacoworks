@@ -1,5 +1,7 @@
-import { Plus, Trash2, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Cloud, EyeOff, Monitor, Plus, Trash2, X } from "lucide-react";
 import type { ChatSession } from "../types";
+import ConfirmDialog from "./ConfirmDialog";
 
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp);
@@ -14,11 +16,59 @@ function stripMarkdown(text: string): string {
   return text.replace(/[*_~`#]/g, "").trim();
 }
 
+interface SessionGroup {
+  label: string;
+  sessions: ChatSession[];
+}
+
+function groupSessions(sessions: ChatSession[]): SessionGroup[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86_400_000;
+  const startOf7Days = startOfToday - 7 * 86_400_000;
+  const startOf30Days = startOfToday - 30 * 86_400_000;
+
+  const groups: Record<string, ChatSession[]> = {};
+  const monthGroups: Map<string, ChatSession[]> = new Map();
+
+  for (const s of sessions) {
+    const t = s.updatedAt;
+    let key: string;
+    if (t >= startOfToday) {
+      key = "今天";
+    } else if (t >= startOfYesterday) {
+      key = "昨天";
+    } else if (t >= startOf7Days) {
+      key = "过去 7 天";
+    } else if (t >= startOf30Days) {
+      key = "过去 30 天";
+    } else {
+      const d = new Date(t);
+      key = `${d.getFullYear()}年${d.getMonth() + 1}月`;
+      if (!monthGroups.has(key)) monthGroups.set(key, []);
+      monthGroups.get(key)!.push(s);
+      continue;
+    }
+    (groups[key] ??= []).push(s);
+  }
+
+  const result: SessionGroup[] = [];
+  for (const label of ["今天", "昨天", "过去 7 天", "过去 30 天"]) {
+    if (groups[label]?.length) result.push({ label, sessions: groups[label] });
+  }
+  for (const [label, items] of monthGroups) {
+    result.push({ label, sessions: items });
+  }
+  return result;
+}
+
 export default function Sidebar({
   open,
   mobileLike,
   sessions,
   currentSessionId,
+  streamingSessions,
+  unreadSessions,
   onSelect,
   onNew,
   onClose,
@@ -28,11 +78,16 @@ export default function Sidebar({
   mobileLike: boolean;
   sessions: ChatSession[];
   currentSessionId: string | null;
+  streamingSessions: Set<string>;
+  unreadSessions: Set<string>;
   onSelect: (sessionId: string) => void;
   onNew: () => void;
   onClose: () => void;
   onDelete: (sessionId: string) => void;
 }) {
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const grouped = useMemo(() => groupSessions(sessions), [sessions]);
+
   return (
     <aside
       id="chat-sidebar"
@@ -59,34 +114,59 @@ export default function Sidebar({
         </button>
 
         <div className="session-list">
-          {sessions.map((session) => (
-            <div
-              key={session.id}
-              className={`session-item ${session.id === currentSessionId ? "active" : ""}`}
-              onClick={() => onSelect(session.id)}
-            >
-              <span className="session-title">{stripMarkdown(session.title)}</span>
-              <span className="session-meta">
-                <span className="session-date">{formatDate(session.updatedAt)}</span>
-                <button
-                  className="btn-delete"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (window.confirm("确认删除该会话？")) {
-                      onDelete(session.id);
-                    }
-                  }}
+          {grouped.map((group) => (
+            <div key={group.label} className="session-group">
+              <div className="session-group-label">{group.label}</div>
+              {group.sessions.map((session) => {
+                const isStreaming = streamingSessions.has(session.id);
+                const isUnread = !isStreaming && unreadSessions.has(session.id);
+                return (
+                <div
+                  key={session.id}
+                  className={`session-item ${session.id === currentSessionId ? "active" : ""}${session.type === "cowork" ? " cowork" : ""}${session.anonymous ? " anonymous" : ""}`}
+                  onClick={() => onSelect(session.id)}
                 >
-                  <Trash2 size={12} />
-                </button>
-              </span>
+                  {isStreaming && <span className="session-status session-status--streaming" title="生成中" />}
+                  {isUnread && <span className="session-status session-status--unread" title="有新回复" />}
+                  <span className="session-type-icon" title={session.anonymous ? "匿名" : session.type === "cowork" ? "云端" : "本地"}>
+                    {session.anonymous ? <EyeOff size={12} /> : session.type === "cowork" ? <Cloud size={12} /> : <Monitor size={12} />}
+                  </span>
+                  <span className="session-title">{stripMarkdown(session.title)}</span>
+                  <span className="session-meta">
+                    <span className="session-date">{formatDate(session.updatedAt)}</span>
+                    <button
+                      className="btn-delete"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setDeleteTarget(session.id);
+                      }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </span>
+                </div>
+                );
+              })}
             </div>
           ))}
 
           {sessions.length === 0 && <div className="empty-hint">暂无会话</div>}
         </div>
       </div>
+      {deleteTarget && (
+        <ConfirmDialog
+          title="删除会话"
+          message="确认删除该会话？此操作不可恢复。"
+          confirmLabel="删除"
+          danger
+          onConfirm={() => {
+            onDelete(deleteTarget);
+            setDeleteTarget(null);
+          }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </aside>
   );
 }

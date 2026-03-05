@@ -52,5 +52,8 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/skills", get(skills::list))
         .route("/skills/edit", get(skills::edit_form))
         .route("/skills/save", post(skills::save))
-        .route("/skills/delete", delete(skills::delete).post(skills::delete))
+        .route(
+            "/skills/delete",
+            delete(skills::delete).post(skills::delete),
+        )
 }

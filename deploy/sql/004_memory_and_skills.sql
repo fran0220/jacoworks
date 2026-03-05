@@ -1,4 +1,4 @@
--- Memory sync: bidirectional between desktop and OpenClaw
+-- Memory sync: bidirectional between desktop and cloud containers
 CREATE TABLE IF NOT EXISTS user_memory (
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     file_path  TEXT NOT NULL,          -- "MEMORY.md" | "daily/2026-02-26.md"
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS user_memory (
 );
 CREATE INDEX IF NOT EXISTS idx_user_memory_updated ON user_memory(user_id, updated_at DESC);
 
--- Skills: one-way push from desktop to OpenClaw containers
+-- Skills: one-way push from desktop to cloud containers
 CREATE TABLE IF NOT EXISTS skill_files (
     owner      TEXT NOT NULL,          -- 'system' for builtin skills | user_id for custom
     file_path  TEXT NOT NULL,          -- relative path e.g. "创作/poster/SKILL.md"

@@ -1,13 +1,16 @@
 import { AlertTriangle, Bug, LoaderCircle } from "lucide-react";
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChatView from "./react/components/ChatView";
 import LoginPanel from "./react/components/LoginPanel";
 import NewSessionPanel from "./react/components/NewSessionPanel";
 import Sidebar from "./react/components/Sidebar";
 import TopBar from "./react/components/TopBar";
 import PreviewDrawer from "./react/components/PreviewDrawer";
+import TaskPanel from "./react/components/TaskPanel";
+import CoworkApp from "./react/cowork/CoworkApp";
 import { useAgentBootstrap } from "./react/hooks/use-agent-bootstrap";
-import { useOpenClawConnection } from "./react/hooks/use-openclaw-connection";
+import { useCoworkConnection } from "./react/hooks/use-cowork-connection";
+import { useCronResults } from "./react/hooks/use-cron-results";
 import { useUpdater } from "./react/hooks/use-updater";
 import { useResponsiveSidebar } from "./react/hooks/use-responsive-sidebar";
 import { useSessionState } from "./react/hooks/use-session-state";
@@ -18,10 +21,10 @@ import {
   subscribeAuth,
 } from "./react/lib/auth";
 import { getSettings } from "./react/lib/config";
+import { syncMemory } from "./react/lib/memory-sync";
 
 const RpcLogPanel = lazy(() => import("./react/components/RpcLogPanel"));
 const SettingsModal = lazy(() => import("./react/components/SettingsModal"));
-const OpenClawApp = lazy(() => import("./react/openclaw/OpenClawApp"));
 const AgentationDevTools = import.meta.env.DEV
   ? lazy(() => import("./react/components/AgentationDevTools"))
   : null;
@@ -29,19 +32,33 @@ const AgentationDevTools = import.meta.env.DEV
 export default function App() {
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [showSettings, setShowSettings] = useState(false);
-  const [openclawOpen, setOpenclawOpen] = useState(false);
+  const [coworkOpen, setCoworkOpen] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [debugEnabled, setDebugEnabled] = useState(() => getSettings().debugLogEnabled);
   const [showRpcLog, setShowRpcLog] = useState(false);
+  const [streamingSessions, setStreamingSessions] = useState<Set<string>>(() => new Set());
+  const [unreadSessions, setUnreadSessions] = useState<Set<string>>(() => new Set());
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
   const { agentStarting, agentError, retryAgent } = useAgentBootstrap(authenticated);
-  const ocConnection = useOpenClawConnection();
+
+  // One-time memory sync on app ready (after auth + agent bootstrap)
+  const memorySyncDoneRef = useRef(false);
+  useEffect(() => {
+    if (!authenticated || agentStarting || agentError || memorySyncDoneRef.current) return;
+    memorySyncDoneRef.current = true;
+    if (getSettings().memorySyncEnabled) {
+      syncMemory().catch(() => {});
+    }
+  }, [authenticated, agentStarting, agentError]);
+  const ocConnection = useCoworkConnection();
+  const cronResults = useCronResults();
   const updater = useUpdater();
   const {
     sessions,
     currentSessionId,
     currentSession,
+    sessionError,
     pendingMessage,
     setPendingMessage,
     pendingFiles,
@@ -53,22 +70,30 @@ export default function App() {
     deleteSessionById,
   } = useSessionState(authenticated);
 
+  const [authExpiredHint, setAuthExpiredHint] = useState(false);
+
   useEffect(
     () =>
       subscribeAuth(() => {
         const nextAuthenticated = isAuthenticated();
         setAuthenticated(nextAuthenticated);
         if (!nextAuthenticated) {
-          setOpenclawOpen(false);
+          setCoworkOpen(false);
         }
       }),
     [],
   );
 
+  useEffect(() => {
+    const handler = () => setAuthExpiredHint(true);
+    window.addEventListener("auth-expired", handler);
+    return () => window.removeEventListener("auth-expired", handler);
+  }, []);
+
   // Sync drawer open state with connection hook for unread tracking
   useEffect(() => {
-    ocConnection.setDrawerOpen(openclawOpen);
-  }, [openclawOpen, ocConnection.setDrawerOpen]);
+    ocConnection.setDrawerOpen(coworkOpen);
+  }, [coworkOpen, ocConnection.setDrawerOpen]);
 
   useEffect(() => {
     handleOAuthCallback().catch(() => {});
@@ -83,13 +108,46 @@ export default function App() {
     return () => window.removeEventListener("preview-file", handler);
   }, []);
 
+  const currentSessionIdRef = useRef(currentSessionId);
+  currentSessionIdRef.current = currentSessionId;
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { id, streaming: isStreaming } = (e as CustomEvent).detail;
+      if (isStreaming) {
+        setStreamingSessions((prev) => new Set(prev).add(id));
+      } else {
+        setStreamingSessions((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        if (id !== currentSessionIdRef.current) {
+          setUnreadSessions((prev) => new Set(prev).add(id));
+        }
+      }
+    };
+    window.addEventListener("session-streaming-change", handler);
+    return () => window.removeEventListener("session-streaming-change", handler);
+  }, []);
+
+  const handleSelectSession = useCallback((sessionId: string) => {
+    selectSession(sessionId);
+    setUnreadSessions((prev) => {
+      if (!prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  }, [selectSession]);
+
   const title = useMemo(() => {
     if (!currentSession) return "新会话";
     return currentSession.title.replace(/[*_~`#]/g, "").trim() || "新会话";
   }, [currentSession]);
 
   if (!authenticated) {
-    return <LoginPanel />;
+    return <LoginPanel authExpiredHint={authExpiredHint} onClearHint={() => setAuthExpiredHint(false)} />;
   }
 
   if (agentStarting) {
@@ -157,8 +215,10 @@ export default function App() {
         mobileLike={isMobileLike}
         sessions={sessions}
         currentSessionId={currentSessionId}
+        streamingSessions={streamingSessions}
+        unreadSessions={unreadSessions}
         onSelect={(sessionId) => {
-          selectSession(sessionId);
+          handleSelectSession(sessionId);
           if (isMobileLike) setIsSidebarOpen(false);
         }}
         onNew={() => {
@@ -178,19 +238,25 @@ export default function App() {
           ocPhase={ocConnection.phase}
           ocStatusText={ocConnection.statusText}
           ocUnreadCount={ocConnection.unreadCount}
-          openclawOpen={openclawOpen}
-          onOpenClawChat={() => {
-            setOpenclawOpen(true);
-            ocConnection.connect();
+          coworkOpen={coworkOpen}
+          onCoworkChat={() => {
+            setCoworkOpen(true);
           }}
-          onCloseOpenClaw={() => setOpenclawOpen(false)}
+          onCloseCowork={() => setCoworkOpen(false)}
           debugEnabled={debugEnabled}
           showRpcLog={showRpcLog}
           onToggleRpcLog={() => setShowRpcLog(v => !v)}
         />
 
-        <div className={`content-row${openclawOpen ? " oc-drawer-active" : ""}`}>
+        <div className={`content-row${coworkOpen ? " oc-drawer-active" : ""}`}>
           <div className="content-main">
+            {sessionError && (
+              <div className="session-error-banner">
+                <AlertTriangle size={14} />
+                <span>{sessionError}</span>
+                <button onClick={() => refreshSessions()}>重试</button>
+              </div>
+            )}
             {currentSession ? (
               <ChatView
                 session={currentSession}
@@ -214,29 +280,32 @@ export default function App() {
             onClose={() => setPreviewPath(null)}
           />
 
-          <div className={`oc-drawer${openclawOpen ? " open" : ""}`}>
+          <div className={`oc-drawer${coworkOpen ? " open" : ""}`}>
             <div className="oc-drawer-inner">
-              {openclawOpen && (
-                <Suspense
-                  fallback={
-                    <div className="oc-drawer-loading">
-                      <LoaderCircle size={20} className="spinning" />
-                      <span>正在加载 OpenClaw...</span>
-                    </div>
-                  }
-                >
-                  <OpenClawApp
+              {coworkOpen && (
+                ocConnection.phase !== "idle" ? (
+                  <CoworkApp
                     phase={ocConnection.phase}
                     statusText={ocConnection.statusText}
                     containerName={ocConnection.containerName}
                     errorText={ocConnection.errorText}
                     sseRef={ocConnection.sseRef}
-                    onRetry={ocConnection.retry}
+                    onRetry={ocConnection.connect}
                     setEventHandler={ocConnection.setEventHandler}
                     setResponseHandler={ocConnection.setResponseHandler}
-                    onClose={() => setOpenclawOpen(false)}
+                    onClose={() => setCoworkOpen(false)}
                   />
-                </Suspense>
+                ) : (
+                  <TaskPanel
+                    containerName={ocConnection.containerName}
+                    results={cronResults.results}
+                    onClearResults={cronResults.clearResults}
+                    onOpenCowork={() => {
+                      ocConnection.connect();
+                    }}
+                    onClose={() => setCoworkOpen(false)}
+                  />
+                )
               )}
             </div>
           </div>

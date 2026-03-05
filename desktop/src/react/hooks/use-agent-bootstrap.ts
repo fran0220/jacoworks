@@ -4,12 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
 import { ensureDefaultWorkspace, getSettings } from "../lib/config";
 import { setSkills } from "../lib/skills";
-import {
-  syncUserSkills,
-  pullSystemSkills,
-  startSkillPolling,
-  stopSkillPolling,
-} from "../lib/skill-sync";
+import { syncUserSkills } from "../lib/skill-sync";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -68,14 +63,9 @@ export function useAgentBootstrap(authenticated: boolean) {
 
         const config = await fetchAgentConfig();
 
-        // 1. Push user skills to gateway (for OpenClaw access)
+        // 1. Push user skills to gateway (for cloud container access)
         await syncUserSkills().catch((err) =>
           console.warn("[boot] user skill push failed:", err),
-        );
-
-        // 2. Pull system skills from gateway (source of truth) BEFORE starting agent
-        await pullSystemSkills().catch((err) =>
-          console.warn("[boot] skill pull failed:", err),
         );
 
         envVars.LLM_PROXY_URL = config.llm_proxy_url;
@@ -89,14 +79,12 @@ export function useAgentBootstrap(authenticated: boolean) {
         if (config.jimeng_api_url) envVars.JIMENG_API_URL = config.jimeng_api_url;
         if (config.jimeng_api_key) envVars.JIMENG_API_KEY = config.jimeng_api_key;
 
-        // 3. Start agent — loads skills from remote-skills/ (pulled) + user skills
+        // 3. Start agent — loads built-in skills + user skills
         await invoke("start_agent", {
           agentDir: import.meta.env.VITE_AGENT_DIR || "../vm-agent",
           envVars,
         });
 
-        // 4. Start periodic polling for skill updates (lazy: new sessions pick them up)
-        startSkillPolling();
       })(),
       20_000,
       "Agent 启动超时，请点击右下角 RPC 日志排查",
@@ -120,7 +108,6 @@ export function useAgentBootstrap(authenticated: boolean) {
     return () => {
       cancelled = true;
       unlistenSkills?.();
-      stopSkillPolling();
     };
   }, [authenticated, isTauriEnv, agentBootNonce]);
 

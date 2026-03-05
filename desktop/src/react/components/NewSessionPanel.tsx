@@ -2,6 +2,7 @@ import {
   AlertCircle,
   ArrowRight,
   ChevronDown,
+  EyeOff,
   FileText,
   FolderOpen,
   Loader2,
@@ -12,51 +13,15 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEventHandler } from "react";
+import { useClickOutside } from "../hooks/use-click-outside";
 import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
+import CustomSelect from "./CustomSelect";
 import { folderName, selectFolder } from "../lib/cowork";
+import { importFiles, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { createSession } from "../lib/sessions";
 import { useSkills } from "../lib/skills";
 import type { AttachedFile, ChatSession } from "../types";
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
-const imageExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
-const binaryDocExts = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
-
-function isImageFile(file: File): boolean {
-  if (file.type.startsWith("image/")) return true;
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  return imageExts.has(ext);
-}
-
-function isBinaryDocFile(file: File): boolean {
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  return binaryDocExts.has(ext);
-}
-
-function readAsDataURL(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-function readAsText(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsText(file);
-  });
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export default function NewSessionPanel({
   onSessionCreated,
@@ -73,6 +38,7 @@ export default function NewSessionPanel({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [model, setModel] = useState(() => getSettings().defaultModel || DEFAULT_MODEL);
   const [workspacePath, setWorkspacePath] = useState(() => getSettings().defaultWorkspace);
+  const [anonymous, setAnonymous] = useState(false);
   const [loading, setLoading] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const skills = useSkills();
@@ -110,27 +76,32 @@ export default function NewSessionPanel({
 
   const canSend = (task.trim().length > 0 || files.length > 0) && !loading;
 
-  // Close menus on outside click
-  useEffect(() => {
-    if (!plusMenuOpen && !folderMenuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (plusMenuOpen && plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
-        setPlusMenuOpen(false);
-      }
-      if (folderMenuOpen && folderMenuRef.current && !folderMenuRef.current.contains(e.target as Node)) {
-        setFolderMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [plusMenuOpen, folderMenuOpen]);
+  useClickOutside(plusMenuRef, () => setPlusMenuOpen(false), plusMenuOpen);
+  useClickOutside(folderMenuRef, () => setFolderMenuOpen(false), folderMenuOpen);
 
   const handleSend = async () => {
     if (!canSend) return;
     setLoading(true);
     try {
-      const session = await createSession({ model, workspacePath: workspacePath || undefined });
+      let session;
+      if (anonymous) {
+        session = {
+          id: `anon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          title: "匿名对话",
+          messages: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          type: "chat",
+          workspacePath: workspacePath || "",
+          model,
+          anonymous: true,
+        } satisfies import("../types").ChatSession;
+      } else {
+        session = await createSession({ model, workspacePath: workspacePath || undefined });
+      }
       onSessionCreated(session, task.trim() || "(附件)", files);
+    } catch (err) {
+      addWarning(err instanceof Error ? err.message : "创建会话失败");
     } finally {
       setLoading(false);
     }
@@ -162,55 +133,17 @@ export default function NewSessionPanel({
 
   const handleFileChange: ChangeEventHandler<HTMLInputElement> = async (event) => {
     const selected = event.target.files;
-    if (!selected) return;
-
-    const list = Array.from(selected);
-    const rejected = list.filter((f) => f.size > MAX_FILE_SIZE);
-    const accepted = list.filter((f) => f.size <= MAX_FILE_SIZE);
-
-    for (const f of rejected) {
-      addWarning(`${f.name} 超过 10 MB 限制`);
-    }
-
-    if (accepted.length === 0) {
+    if (!selected || selected.length === 0) {
       event.target.value = "";
       return;
     }
 
-    setReadingCount((c) => c + accepted.length);
+    setReadingCount(selected.length);
+    const { imported, warnings: newWarnings } = await importFiles(selected, workspacePath);
+    setReadingCount(0);
 
-    const incoming: AttachedFile[] = [];
-    for (const file of accepted) {
-      try {
-        if (isImageFile(file)) {
-          incoming.push({
-            name: file.name,
-            type: "image",
-            data: await readAsDataURL(file),
-            size: file.size,
-          });
-        } else if (isBinaryDocFile(file)) {
-          incoming.push({
-            name: file.name,
-            type: "binary",
-            data: "",
-            size: file.size,
-          });
-        } else {
-          incoming.push({
-            name: file.name,
-            type: "text",
-            data: await readAsText(file),
-            size: file.size,
-          });
-        }
-      } catch {
-        addWarning(`${file.name} 读取失败`);
-      }
-    }
-
-    setReadingCount((c) => c - accepted.length);
-    setFiles((prev) => [...prev, ...incoming]);
+    for (const msg of newWarnings) addWarning(msg);
+    setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
     event.target.value = "";
   };
 
@@ -253,34 +186,21 @@ export default function NewSessionPanel({
         {/* Attachment area */}
         {hasAttachments && (
           <div className="composer-attachments">
-            {files.map((file, index) =>
-              file.type === "image" ? (
-                <div className="attach-thumb" key={`${file.name}-${index}`}>
-                  <img src={file.data} alt={file.name} className="attach-thumb-img" />
-                  <button
-                    className="attach-thumb-remove"
-                    onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
-                  >
-                    <X size={12} />
-                  </button>
-                  <div className="attach-thumb-name" title={file.name}>{file.name}</div>
+            {files.map((file, index) => (
+              <div className="attach-file" key={`${file.name}-${index}`}>
+                <FileText size={16} className="attach-file-icon" />
+                <div className="attach-file-info">
+                  <span className="attach-file-name" title={file.name}>{file.name}</span>
+                  <span className="attach-file-size">{formatSize(file.size)}</span>
                 </div>
-              ) : (
-                <div className="attach-file" key={`${file.name}-${index}`}>
-                  <FileText size={16} className="attach-file-icon" />
-                  <div className="attach-file-info">
-                    <span className="attach-file-name" title={file.name}>{file.name}</span>
-                    <span className="attach-file-size">{formatSize(file.size)}</span>
-                  </div>
-                  <button
-                    className="attach-file-remove"
-                    onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ),
-            )}
+                <button
+                  className="attach-file-remove"
+                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
 
             {readingCount > 0 &&
               Array.from({ length: readingCount }).map((_, i) => (
@@ -357,12 +277,21 @@ export default function NewSessionPanel({
               )}
             </div>
 
+            <button
+              className={`ns-btn-anon${anonymous ? " active" : ""}`}
+              onClick={() => setAnonymous((v) => !v)}
+              disabled={loading}
+              title={anonymous ? "匿名模式 — 对话不保存记忆" : "开启匿名模式"}
+            >
+              <EyeOff size={14} />
+            </button>
+
             <div className="ns-plus-wrapper" ref={plusMenuRef}>
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept="image/*,.txt,.md,.py,.js,.ts,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css,.go,.rs,.sh,.pdf,.doc,.docx,.xls,.xlsx"
+                accept="*/*"
                 onChange={handleFileChange}
                 style={{ display: "none" }}
               />
@@ -433,20 +362,13 @@ export default function NewSessionPanel({
           </div>
 
           <div className="ns-toolbar-right">
-            <div className="ns-model-picker">
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                disabled={loading}
-                className="model-select ns-model-select"
-              >
-                {MODEL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <CustomSelect
+              options={MODEL_OPTIONS}
+              value={model}
+              onChange={setModel}
+              disabled={loading}
+              position="above"
+            />
             <button className="btn-go" disabled={!canSend} onClick={handleSend}>
               开始
               <ArrowRight size={14} />

@@ -1,10 +1,10 @@
 ---
 name: video-gen
 display-name: 视频生成
-display-description: 使用 Seedance 2.0、Kling 3.0 Pro 或 Veo 3.1 生成高质量视频 (文生视频 / 图生视频 / 首尾帧动画)
+display-description: 生成高质量视频 (文生视频 / 图生视频 / 首尾帧动画)
 description: >
-  Generate high-quality videos using Seedance 2.0, Kling 3.0 Pro or Google Veo 3.1.
-  Supports text-to-video, image-to-video, and first-last-frame animation.
+  Generate high-quality videos. Supports text-to-video, image-to-video,
+  and first-last-frame animation with multiple model options.
   Use when user asks to create, generate, or make a video, animation, or motion clip.
 ---
 
@@ -12,7 +12,7 @@ description: >
 
 调用 Seedance 2.0、Kling 3.0 Pro 和 Google Veo 3.1 生成高质量视频。
 
-> **面向用户隐藏内部细节** — 对话中只提模型品牌名 (Seedance / Kling / Veo)，不暴露 fal.ai、即梦网关、端点地址、API 细节。
+> **面向用户隐藏内部细节** — 对话中只提模型品牌名 (Seedance / Kling / Veo)，不暴露内部服务提供商、网关地址、端点地址、API 密钥名。
 
 ## 使用方法
 
@@ -28,7 +28,7 @@ node {baseDir}/scripts/generate-video-seedance.mjs --prompt "让@1中的主体�
 node {baseDir}/scripts/generate-video-seedance.mjs --prompt "让@1和@2互动" --filename "output.mp4" -i "a.png" -i "b.png" --duration 5 --aspect-ratio 16:9
 ```
 
-### Kling / Veo (fal.ai)
+### Kling / Veo
 
 **文生视频：**
 ```bash
@@ -153,13 +153,8 @@ node {baseDir}/scripts/generate-video.mjs --prompt "描述" --filename "output.m
 
 ## 环境变量
 
-| 变量 | 说明 |
-|------|------|
-| `FAL_KEY` | fal.ai 视频生成 API 密钥 (Kling / Veo **必须**) |
-| `JIMENG_API_URL` | 即梦网关地址 (默认 `http://185.200.65.233:5100`) |
-| `JIMENG_API_KEY` | 即梦网关 API 密钥 (Seedance **必须**) |
-
-由 Tauri 启动时注入（网关 `/api/agent/config` 下发）。
+所有 API 密钥由系统自动注入（网关 `/api/agent/config` 下发），无需用户手动配置。
+如提示密钥缺失，请联系管理员在后台「系统设置」中配置。
 
 ## 输出
 
@@ -172,9 +167,8 @@ node {baseDir}/scripts/generate-video.mjs --prompt "描述" --filename "output.m
 
 | 错误 | 原因 | 解决 |
 |------|------|------|
-| `JIMENG_API_KEY not configured` | 未配置即梦网关密钥 | 管理后台「系统设置」配置 |
+| `API key not configured` | 未配置视频 API 密钥 | 管理后台「系统设置」配置 |
 | `Seedance 2.0 需要至少一个文件` | 未提供 `--input-image` | 提供至少一张图片 |
-| `FAL_KEY not configured` | 未配置视频 API 密钥 | 管理后台「系统设置」配置 |
 | `HTTP 401` | API 密钥无效 | 联系管理员检查密钥配置 |
 | `HTTP 429` | API 限流 | 等待后重试 |
 | `Queue timeout` | 生成超时 (>10min) | 重试或换较短时长 |

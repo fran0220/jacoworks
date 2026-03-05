@@ -54,31 +54,19 @@ fn sha256_hex(input: &str) -> String {
 
 /// Generate a random session token.
 pub fn generate_token() -> String {
-    use sha2::Digest;
-    let random_bytes: [u8; 32] = rand_bytes();
-    hex::encode(sha2::Sha256::digest(random_bytes))
-}
-
-fn rand_bytes() -> [u8; 32] {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
     let mut buf = [0u8; 32];
-    // Simple pseudo-random; adequate for dev. In production use a proper CSPRNG.
-    for (i, b) in buf.iter_mut().enumerate() {
-        *b = ((nanos.wrapping_mul(i as u32 + 1)) & 0xFF) as u8;
-    }
-    buf
+    use rand::RngCore;
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    hex::encode(buf)
 }
 
 /// Set the admin session cookie after successful login.
-pub fn set_session_cookie(cookies: &Cookies, token: &str) {
+pub fn set_session_cookie(cookies: &Cookies, token: &str, secure: bool) {
     use tower_cookies::Cookie;
     let mut cookie = Cookie::new(SESSION_COOKIE, token.to_string());
     cookie.set_path("/");
     cookie.set_http_only(true);
+    cookie.set_secure(secure);
     cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
     cookies.add(cookie);
 }
@@ -145,4 +133,23 @@ struct UserWithHash {
     pub role: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_token;
+
+    #[test]
+    fn generated_token_is_hex_and_32_bytes() {
+        let token = generate_token();
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generated_tokens_are_not_reused() {
+        let a = generate_token();
+        let b = generate_token();
+        assert_ne!(a, b);
+    }
 }

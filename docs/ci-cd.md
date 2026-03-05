@@ -198,4 +198,4 @@ make deploy JINGAO_HOST=root@82.156.239.212
 
 - vm-agent 是 desktop 的 sidecar，通过 stdin/stdout RPC 通信
 - 它随 desktop 打包分发，不需要独立部署
-- OpenClaw 模式下的 agent 运行在 LXD 容器里（独立管理）
+- 协作模式下的 agent 运行在 Docker 容器里（独立管理）

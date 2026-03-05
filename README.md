@@ -9,13 +9,13 @@
 ```
 桌面端 (Tauri + React)
   ├─ 本地模式: sidecar RPC → vm-agent → Pi SDK → LLM 中转站
-  └─ 协作模式: WebSocket → Go 网关 → WireGuard VPN → LXD 容器 (OpenClaw)
+  └─ 协作模式: WebSocket → Go 网关 → WireGuard VPN → Docker 容器 (vm-agent)
 
 Go 网关 (jacoapi.jingao.club)
   ├─ 认证 (飞书 SSO / 密码 / 激活码)
   ├─ 会话 CRUD (PostgreSQL)
   ├─ LLM 配置下发 & Chat 代理
-  └─ OpenClaw WebSocket 代理
+  └─ Agent WebSocket 代理
 
 Rust 官网 (jaco.jingao.club)
   ├─ 公开页面 (首页/下载/文档/反馈)
@@ -31,12 +31,12 @@ Rust 官网 (jaco.jingao.club)
 | `vm-agent/` | Node.js + Pi SDK | AI Agent sidecar，本地读写文件 |
 | `gateway/` | Go + PostgreSQL | API 网关：认证、会话、代理 |
 | `website/` | Rust (Axum + Askama) | 官网、文档、管理后台 |
-| `deploy/` | SQL + Shell + OpenClaw config | 部署脚本、数据库迁移、容器模板 |
+| `deploy/` | SQL + Shell + 部署脚本 | 部署脚本、数据库迁移 |
 
 ## 双模式
 
 - **本地模式** (`type="chat"`) — Agent 通过 sidecar RPC 直接读写本地文件，对话不经网关
-- **协作模式** (`type="cowork"`) — 每用户独立 LXD 容器，WebSocket 经网关代理到 OpenClaw
+- **协作模式** (`type="cowork"`) — 每用户独立 Docker 容器，WebSocket 经网关代理到 vm-agent
 
 ## 支持模型
 

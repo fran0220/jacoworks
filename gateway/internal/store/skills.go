@@ -72,7 +72,7 @@ func (s *Store) ReplaceSkillFiles(ctx context.Context, owner string, files []Ski
 	return tx.Commit(ctx)
 }
 
-// GetSkillFiles returns all skill files for an owner (for LXD push).
+// GetSkillFiles returns all skill files for an owner (for container push).
 func (s *Store) GetSkillFiles(ctx context.Context, owner string) ([]SkillFile, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT file_path, content, checksum, updated_at FROM skill_files

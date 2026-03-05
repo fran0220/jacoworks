@@ -84,7 +84,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer downstream.Close()
 
 	upstreamURL := p.upstreamURL(info)
-	upstream, _, err := websocket.DefaultDialer.Dial(upstreamURL, nil)
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	upstream, _, err := dialer.Dial(upstreamURL, nil)
 	if err != nil {
 		log.Error().Err(err).Str("url", upstreamURL).Str("user_id", user.ID).Msg("agent ws: upstream dial failed")
 		writeWSError(downstream, "upstream connection failed")
@@ -219,6 +220,7 @@ func (p *Proxy) forward(downstream, upstream *websocket.Conn, userID, containerN
 
 	// Server-side heartbeat: WS-level ping to detect dead connections.
 	go func() {
+		defer closeAll()
 		ticker := time.NewTicker(pingPeriod)
 		defer ticker.Stop()
 
@@ -255,26 +257,26 @@ func (p *Proxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, us
 		return fmt.Errorf("check status: %w", err)
 	}
 
-	switch strings.ToUpper(status) {
-	case "RUNNING":
+	switch strings.ToLower(status) {
+	case "running":
 		if err := p.backend.WaitForHealth(info.ContainerName, info.ContainerIP); err == nil {
 			return nil
 		}
 		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("container running but service not healthy")
 		return fmt.Errorf("container running but not healthy")
-	case "FROZEN", "PAUSED":
-		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("unfreezing for ws")
+	case "paused":
+		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("unpausing container for ws")
 		if err := p.backend.Unfreeze(info.ContainerName); err != nil {
 			return err
 		}
 		if err := p.store.UpdateContainerStatusByName(ctx, info.ContainerName, "running"); err != nil {
-			return fmt.Errorf("update container status after unfreeze: %w", err)
+			return fmt.Errorf("update container status after unpause: %w", err)
 		}
 		if p.onContainerReady != nil {
 			go p.onContainerReady(userID, info.ContainerName)
 		}
-		return nil
-	case "STOPPED", "EXITED":
+		return p.backend.WaitForHealth(info.ContainerName, info.ContainerIP)
+	case "stopped", "exited":
 		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("starting stopped container for ws")
 		if err := p.backend.Start(info.ContainerName); err != nil {
 			return err

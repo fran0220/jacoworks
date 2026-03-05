@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import hljs from "highlight.js/lib/core";
+import hljs from "../lib/hljs-setup";
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,7 +20,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { FilePreview } from "../types";
+import { formatSize } from "../lib/file-utils";
+import DOMPurify from "dompurify";
 
 type PreviewMetadata = Record<string, string | number | boolean | null>;
 
@@ -51,12 +54,6 @@ async function renderXlsx(base64: string): Promise<XlsxResult> {
     htmlMap[name] = XLSX.utils.sheet_to_html(workbook.Sheets[name]);
   }
   return { sheetNames: workbook.SheetNames, htmlMap };
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatDuration(seconds: number): string {
@@ -569,7 +566,7 @@ export default function PreviewDrawer({
 
       case "docx":
         return docHtml ? (
-          <div className="preview-doc" dangerouslySetInnerHTML={{ __html: docHtml }} />
+          <div className="preview-doc" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(docHtml) }} />
         ) : loading ? null : (
           <BinaryInfo preview={preview} />
         );
@@ -650,7 +647,7 @@ export default function PreviewDrawer({
 /* ===== PDF Preview ===== */
 
 function PdfPreviewContent({ fileUrl }: { fileUrl: string }) {
-  const [pdfDoc, setPdfDoc] = useState<any>(null);
+  const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [pdfZoom, setPdfZoom] = useState(1.0);
@@ -658,7 +655,7 @@ function PdfPreviewContent({ fileUrl }: { fileUrl: string }) {
   const [renderError, setRenderError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const docRef = useRef<any>(null);
+  const docRef = useRef<PDFDocumentProxy | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -670,8 +667,8 @@ function PdfPreviewContent({ fileUrl }: { fileUrl: string }) {
     void import("pdfjs-dist")
       .then(async (pdfjs) => {
         if (disposed) return;
-        (pdfjs as any).GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-        const loadingTask = (pdfjs as any).getDocument(fileUrl);
+        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+        const loadingTask = pdfjs.getDocument(fileUrl);
         const doc = await loadingTask.promise;
         if (disposed) { await doc.destroy(); return; }
         docRef.current = doc;
@@ -692,7 +689,7 @@ function PdfPreviewContent({ fileUrl }: { fileUrl: string }) {
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
     let cancelled = false;
-    let renderTask: any = null;
+    let renderTask: RenderTask | null = null;
 
     const renderPage = async () => {
       try {
@@ -949,7 +946,7 @@ function XlsxPreviewContent({
           ))}
         </div>
       )}
-      <div className="preview-doc" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="preview-doc" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }} />
     </div>
   );
 }
@@ -971,7 +968,7 @@ function MarkdownPreviewContent({ content }: { content: string }) {
   const [html, setHtml] = useState("");
   useEffect(() => {
     import("marked").then(({ marked }) => {
-      setHtml(marked.parse(content) as string);
+      setHtml(DOMPurify.sanitize(marked.parse(content) as string));
     });
   }, [content]);
   if (!html) return null;

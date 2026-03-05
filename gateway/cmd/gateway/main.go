@@ -217,6 +217,16 @@ func main() {
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
 	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, dockerClient, auditLogger, cfg))))
 
+	// Authenticated: cron announce (vm-agent → feishu delivery)
+	mux.Handle("POST /api/cron/announce", authMiddleware.Authenticate(http.HandlerFunc(feishuBotHandler.HandleCronAnnounce)))
+
+	// Authenticated: cron job CRUD (sidecar proxy target)
+	mux.Handle("POST /api/cron/jobs", authMiddleware.Authenticate(http.HandlerFunc(createCronJobHandler(s))))
+	mux.Handle("GET /api/cron/jobs", authMiddleware.Authenticate(http.HandlerFunc(listCronJobsHandler(s))))
+	mux.Handle("DELETE /api/cron/jobs/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteCronJobHandler(s))))
+	mux.Handle("POST /api/cron/jobs/{id}/run", authMiddleware.Authenticate(http.HandlerFunc(runCronJobHandler())))
+	mux.Handle("GET /api/cron/jobs/{id}/history", authMiddleware.Authenticate(http.HandlerFunc(cronJobHistoryHandler())))
+
 	// Games (list is public, deploy/delete require auth)
 	mux.HandleFunc("GET /api/games", gamesHandler.List)
 	mux.Handle("POST /api/games/deploy", authMiddleware.Authenticate(http.HandlerFunc(gamesHandler.Deploy)))
@@ -227,8 +237,7 @@ func main() {
 	mux.Handle("POST /v1/chat/completions", authMiddleware.Authenticate(http.HandlerFunc(proxyHandler.ChatCompletions)))
 
 	// Authenticated: Agent WebSocket proxy (direct desktop ↔ container)
-	mux.Handle("GET /ws/openclaw", authMiddleware.Authenticate(agentProxy)) // legacy path
-	mux.Handle("GET /ws/agent", authMiddleware.Authenticate(agentProxy))    // new path
+	mux.Handle("GET /ws/agent", authMiddleware.Authenticate(agentProxy))
 
 	// Agent browser WebSocket bridge (ticket auth)
 	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(wsTicketStore.IssueTicket)))
@@ -420,16 +429,7 @@ func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, a
 			return
 		}
 
-		llm := cfg.GetLLM()
-		envVars := map[string]string{
-			"LLM_PROXY_URL":  llm.ProxyURL,
-			"LLM_PROXY_KEY":  llm.ProxyKey,
-			"OPENAI_API_KEY": llm.OpenAIAPIKey,
-			"FAL_API_KEY":    llm.FalAPIKey,
-		}
-		if cfg.Docker.GatewayToken != "" {
-			envVars["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken
-		}
+		envVars := containerEnvVars(cfg)
 
 		// Respond immediately — provisioning runs in background
 		al.Log(admin.ID, "provision_container", "container", containerName, r.RemoteAddr)
@@ -678,16 +678,7 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, al *au
 			return
 		}
 
-		llm := cfg.GetLLM()
-		envVars := map[string]string{
-			"LLM_PROXY_URL":  llm.ProxyURL,
-			"LLM_PROXY_KEY":  llm.ProxyKey,
-			"OPENAI_API_KEY": llm.OpenAIAPIKey,
-			"FAL_API_KEY":    llm.FalAPIKey,
-		}
-		if cfg.Docker.GatewayToken != "" {
-			envVars["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken
-		}
+		envVars := containerEnvVars(cfg)
 
 		// Respond immediately — provisioning runs in background
 		al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
@@ -1349,6 +1340,108 @@ func feedbackHandler(s *store.Store, gh *github.Client) http.HandlerFunc {
 	}
 }
 
+// --- Cron Job Handlers ---
+
+func createCronJobHandler(s *store.Store) http.HandlerFunc {
+	type createRequest struct {
+		ScheduleKind   string  `json:"schedule_kind"`
+		ScheduleExpr   string  `json:"schedule_expr"`
+		Prompt         string  `json:"prompt"`
+		Name           *string `json:"name"`
+		SessionTarget  string  `json:"session_target"`
+		DeleteAfterRun bool    `json:"delete_after_run"`
+		DeliveryMode   *string `json:"delivery_mode"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req createRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		if req.ScheduleKind == "" || req.ScheduleExpr == "" || req.Prompt == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "schedule_kind, schedule_expr, and prompt are required"})
+			return
+		}
+
+		job, err := s.CreateCronJob(r.Context(), user.ID, req.ScheduleKind, req.ScheduleExpr, req.Prompt, req.Name, req.SessionTarget, req.DeleteAfterRun, req.DeliveryMode)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create cron job"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, job)
+	}
+}
+
+func listCronJobsHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		jobs, err := s.ListCronJobs(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list cron jobs"})
+			return
+		}
+		if jobs == nil {
+			jobs = []store.CronJob{}
+		}
+		writeJSON(w, http.StatusOK, jobs)
+	}
+}
+
+func deleteCronJobHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if err := s.DeleteCronJob(r.Context(), user.ID, r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "cron job not found"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func runCronJobHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":  "pending",
+			"message": "Gateway-side cron execution not yet implemented. Job is stored and will be executed when the gateway scheduler is built.",
+		})
+	}
+}
+
+func cronJobHistoryHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":  "pending",
+			"message": "No run history available yet. Gateway-side cron execution is not yet implemented.",
+		})
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -1361,6 +1454,41 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// containerEnvVars builds the environment variables to inject into a new container.
+// Includes all LLM-related keys that vm-agent's config.ts reads from env.
+func containerEnvVars(cfg *config.Config) map[string]string {
+	llm := cfg.GetLLM()
+	env := map[string]string{
+		"LLM_PROXY_URL":  llm.ProxyURL,
+		"LLM_PROXY_KEY":  llm.ProxyKey,
+		"OPENAI_API_KEY": llm.OpenAIAPIKey,
+		"FAL_API_KEY":    llm.FalAPIKey,
+	}
+	// Optional keys — only inject if configured
+	if llm.EmbeddingAPIKey != "" {
+		env["EMBEDDING_API_KEY"] = llm.EmbeddingAPIKey
+	}
+	if llm.EmbeddingBaseURL != "" {
+		env["EMBEDDING_BASE_URL"] = llm.EmbeddingBaseURL
+	}
+	if llm.TavilyKey != "" {
+		env["TAVILY_API_KEY"] = llm.TavilyKey
+	}
+	if llm.ExaAPIKey != "" {
+		env["EXA_API_KEY"] = llm.ExaAPIKey
+	}
+	if llm.JimengAPIURL != "" {
+		env["JIMENG_API_URL"] = llm.JimengAPIURL
+	}
+	if llm.JimengAPIKey != "" {
+		env["JIMENG_API_KEY"] = llm.JimengAPIKey
+	}
+	if cfg.Docker.GatewayToken != "" {
+		env["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken
+	}
+	return env
 }
 
 func containerNameForUser(userID string) string {

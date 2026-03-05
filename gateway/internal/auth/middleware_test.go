@@ -271,13 +271,23 @@ func TestExtractBearerToken(t *testing.T) {
 	tests := []struct {
 		name          string
 		authorization string
+		headers       map[string]string
 		url           string
 		want          string
 	}{
-		{name: "bearer header", authorization: "Bearer abc", url: "http://example.com/ws", want: "abc"},
-		{name: "query fallback", url: "http://example.com/ws?token=q123", want: "q123"},
-		{name: "header has priority", authorization: "Bearer header-token", url: "http://example.com/ws?token=query-token", want: "header-token"},
-		{name: "missing token", url: "http://example.com/ws", want: ""},
+		{name: "bearer header", authorization: "Bearer abc", url: "http://example.com/ws/agent", want: "abc"},
+		{
+			name: "query fallback for websocket upgrade",
+			url:  "http://example.com/ws/agent?token=q123",
+			headers: map[string]string{
+				"Upgrade":    "websocket",
+				"Connection": "Upgrade",
+			},
+			want: "q123",
+		},
+		{name: "query token ignored for non websocket path", url: "http://example.com/api/users/me?token=q123", want: ""},
+		{name: "header has priority", authorization: "Bearer header-token", url: "http://example.com/ws/agent?token=query-token", want: "header-token"},
+		{name: "missing token", url: "http://example.com/ws/agent", want: ""},
 	}
 
 	for _, tt := range tests {
@@ -288,6 +298,9 @@ func TestExtractBearerToken(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			if tt.authorization != "" {
 				req.Header.Set("Authorization", tt.authorization)
+			}
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
 			}
 
 			if got := extractBearerToken(req); got != tt.want {

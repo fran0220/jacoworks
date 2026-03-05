@@ -10,30 +10,38 @@ func _init():
     # Check for debug flag
     debug_mode = "--debug-godot" in args
     
-    # Find the script argument and determine the positions of operation and params
-    var script_index = args.find("--script")
-    if script_index == -1:
-        log_error("Could not find --script argument")
-        quit(1)
+    # Collect positional (non-flag) arguments after the script path.
+    # Godot strips its own flags (--headless, --path, etc.) before passing
+    # to OS.get_cmdline_args(), so we see: ["--script", "<path>", ...user args].
+    # We skip "--script", the script path, and any "--*" flags to get
+    # the operation name and JSON params.
+    var positional: Array[String] = []
+    var past_script = false
+    for i in range(args.size()):
+        var arg = args[i]
+        if not past_script:
+            if arg == "--script":
+                past_script = true  # next arg is the script path, skip both
+                continue
+            continue
+        # Skip the script path itself (first arg after --script)
+        if i > 0 and args[i - 1] == "--script":
+            continue
+        # Skip flags like --debug-godot
+        if arg.begins_with("--"):
+            continue
+        positional.append(arg)
     
-    # The operation should be 2 positions after the script path (script_index + 1 is the script path itself)
-    var operation_index = script_index + 2
-    # The params should be 3 positions after the script path
-    var params_index = script_index + 3
-    
-    if args.size() <= params_index:
-        log_error("Usage: godot --headless --script godot_operations.gd <operation> <json_params>")
-        log_error("Not enough command-line arguments provided.")
-        quit(1)
-    
-    # Log all arguments for debugging
     log_debug("All arguments: " + str(args))
-    log_debug("Script index: " + str(script_index))
-    log_debug("Operation index: " + str(operation_index))
-    log_debug("Params index: " + str(params_index))
+    log_debug("Positional arguments: " + str(positional))
     
-    var operation = args[operation_index]
-    var params_json = args[params_index]
+    if positional.size() < 2:
+        log_error("Usage: godot --headless --script godot_operations.gd <operation> <json_params>")
+        log_error("Got positional args: " + str(positional))
+        quit(1)
+    
+    var operation = positional[0]
+    var params_json = positional[1]
     
     log_info("Operation: " + operation)
     log_debug("Params JSON: " + params_json)

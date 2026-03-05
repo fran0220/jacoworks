@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
-	"github.com/fran0220/jacoworks/gateway/internal/lxd"
+	"github.com/fran0220/jacoworks/gateway/internal/docker"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -26,23 +26,16 @@ const (
 )
 
 type Handler struct {
-	store     *store.Store
-	lxdClient *lxd.SSHClient
+	store        *store.Store
+	dockerClient *docker.Client
 }
 
-func NewHandler(s *store.Store, lxdClient *lxd.SSHClient) *Handler {
-	return &Handler{store: s, lxdClient: lxdClient}
+func NewHandler(s *store.Store, dockerClient *docker.Client) *Handler {
+	return &Handler{store: s, dockerClient: dockerClient}
 }
 
 func hostPath(userID string, sessionID string) string {
 	return filepath.Join(CoworkBaseDir, userID, sessionID)
-}
-
-func deviceName(sessionID string) string {
-	if len(sessionID) > 12 {
-		return "cw-" + sessionID[:12]
-	}
-	return "cw-" + sessionID
 }
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
@@ -98,17 +91,12 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"no container provisioned"}`, http.StatusBadGateway)
 		return
 	}
-	if h.lxdClient == nil {
+	if h.dockerClient == nil {
 		http.Error(w, `{"error":"container service unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 
-	device := deviceName(sid)
-	if err := h.lxdClient.MountDisk(info.ContainerName, device, dir, ContainerMountPath); err != nil {
-		log.Error().Err(err).Str("container", info.ContainerName).Str("session_id", sid).Str("device", device).Msg("mount cowork workspace failed")
-		http.Error(w, `{"error":"failed to mount workspace into container"}`, http.StatusBadGateway)
-		return
-	}
+	// TODO: implement docker volume mount for project upload
 
 	if err := saveManifest(dir); err != nil {
 		log.Warn().Err(err).Msg("save manifest")

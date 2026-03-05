@@ -1,0 +1,344 @@
+/* ===== Task Panel — Timeline Design (方案 B) ===== */
+
+.task-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+/* ─── Header ─── */
+
+.tp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tp-title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+
+.tp-close {
+  width: var(--size-btn-sm);
+  height: var(--size-btn-sm);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-close:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+/* ─── Action pills ─── */
+
+.tp-actions {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tp-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-pill--cloud {
+  color: var(--text-on-accent);
+  background: var(--accent-thinking);
+}
+
+.tp-pill--cloud:hover {
+  background: color-mix(in srgb, var(--accent-thinking) 85%, #000);
+}
+
+.tp-pill--cron {
+  color: var(--accent);
+  background: var(--accent-light);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.tp-pill--cron:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* ─── Timeline scroll area ─── */
+
+.tp-timeline-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-4) var(--space-4);
+}
+
+/* ─── Empty state ─── */
+
+.tp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-14) var(--space-6);
+  color: var(--text-muted);
+}
+
+.tp-empty-icon {
+  font-size: var(--text-2xl);
+  opacity: 0.5;
+}
+
+.tp-empty-text {
+  font-size: var(--text-sm);
+}
+
+/* ─── Timeline layout ─── */
+
+.tp-timeline {
+  position: relative;
+  padding-left: 84px; /* space for time labels + dot */
+}
+
+/* Vertical timeline line */
+.tp-timeline::before {
+  content: "";
+  position: absolute;
+  left: 76px;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+/* ─── Timeline node ─── */
+
+.tp-node {
+  position: relative;
+  padding-bottom: var(--space-6);
+}
+
+.tp-node:last-child {
+  padding-bottom: 0;
+}
+
+/* Time label - positioned to left of timeline */
+.tp-node-time {
+  position: absolute;
+  left: -84px;
+  top: 4px;
+  width: 68px;
+  text-align: right;
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+  white-space: nowrap;
+}
+
+/* Dot on the timeline */
+.tp-node-dot {
+  position: absolute;
+  left: -12px;
+  top: 7px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  border: 2px solid var(--bg-primary);
+  z-index: 1;
+}
+
+.tp-node-dot.error {
+  background: var(--danger);
+}
+
+/* ─── Card ─── */
+
+.tp-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: var(--space-4) var(--space-5);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-card:hover {
+  background: var(--bg-hover);
+}
+
+.tp-card.error {
+  border-left-color: var(--danger);
+}
+
+.tp-card.expanded {
+  box-shadow: var(--shadow-md);
+  border-left-width: 4px;
+}
+
+/* Card header */
+.tp-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.tp-card-name {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.tp-card-meta {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tp-card-meta.error {
+  color: var(--danger);
+  font-weight: var(--font-medium);
+}
+
+/* Error hint on collapsed card */
+.tp-card-error-hint {
+  margin-top: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--danger);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Expanded detail ─── */
+
+.tp-card-detail {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border-light);
+  padding-top: var(--space-4);
+}
+
+.tp-card-preview {
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tp-card-error {
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--text-xs);
+  color: var(--danger);
+  line-height: var(--leading-relaxed);
+}
+
+/* Action buttons */
+.tp-card-actions {
+  display: flex;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+  justify-content: flex-end;
+}
+
+.tp-action-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-action-btn.rerun {
+  color: var(--accent);
+}
+
+.tp-action-btn.rerun:hover {
+  background: var(--accent-light);
+}
+
+.tp-action-btn.delete {
+  color: var(--text-muted);
+}
+
+.tp-action-btn.delete:hover {
+  color: var(--danger);
+  background: var(--bg-error);
+}
+
+/* Collapse hint */
+.tp-collapse-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  width: 100%;
+  margin-top: var(--space-3);
+  padding: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-light);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-collapse-hint:hover {
+  color: var(--text-secondary);
+}
+
+/* ─── Clear all ─── */
+
+.tp-clear-all {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-6);
+  padding: var(--space-3);
+  text-align: center;
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-clear-all:hover {
+  color: var(--danger);
+}

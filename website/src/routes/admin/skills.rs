@@ -196,9 +196,7 @@ pub async fn save(
 
     skill::upsert_skill(&state.db, "system", &file_path, &content).await?;
 
-    let redirect = format!(
-        "/admin/skills?success=true"
-    );
+    let redirect = format!("/admin/skills?success=true");
     Ok(Redirect::to(&redirect).into_response())
 }
 

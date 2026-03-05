@@ -1,6 +1,7 @@
 import {
   Brain,
   Bug,
+  Cloud,
   Cpu,
   Download,
   FolderOpen,
@@ -29,6 +30,8 @@ import { getSettings, updateSettings, GATEWAY_URL, MODEL_OPTIONS, THINKING_LEVEL
 import { getToken } from "../lib/auth";
 import { httpFetch } from "../lib/transport";
 import { useSkills, setSkills, type SkillDefinition } from "../lib/skills";
+import ConfirmDialog from "./ConfirmDialog";
+import CustomSelect from "./CustomSelect";
 
 type Tab = "general" | "model" | "memory" | "skills" | "feedback";
 
@@ -215,17 +218,11 @@ function ModelTab() {
                 </div>
               </div>
             </div>
-            <select
-              className="settings-select"
+            <CustomSelect
+              options={MODEL_OPTIONS}
               value={settings.defaultModel}
-              onChange={(e) => handleChange({ defaultModel: e.target.value })}
-            >
-              {MODEL_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => handleChange({ defaultModel: v })}
+            />
           </div>
         </div>
 
@@ -240,17 +237,11 @@ function ModelTab() {
                 </div>
               </div>
             </div>
-            <select
-              className="settings-select"
+            <CustomSelect
+              options={THINKING_LEVELS}
               value={settings.thinkingLevel}
-              onChange={(e) => handleChange({ thinkingLevel: e.target.value })}
-            >
-              {THINKING_LEVELS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => handleChange({ thinkingLevel: v })}
+            />
           </div>
         </div>
 
@@ -293,6 +284,7 @@ function MemoryTab() {
   const [memoryStats, setMemoryStats] = useState<MemoryStats | null>(null);
   const [clearing, setClearing] = useState(false);
   const [restartHint, setRestartHint] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; action: () => void } | null>(null);
 
   useEffect(() => {
     if (isTauri()) {
@@ -310,18 +302,29 @@ function MemoryTab() {
     setRestartHint(true);
   };
 
+  const toggleMemorySync = () => {
+    const updated = { ...settings, memorySyncEnabled: !settings.memorySyncEnabled };
+    updateSettings(updated);
+    setSettings(updated);
+  };
+
   const handleClearMemory = async () => {
-    if (!window.confirm("确认清除所有记忆数据？此操作不可恢复。")) return;
-    setClearing(true);
-    try {
-      await invoke("clear_memory");
-      const stats = await invoke<MemoryStats>("get_memory_stats");
-      setMemoryStats(stats);
-    } catch {
-      // ignore
-    } finally {
-      setClearing(false);
-    }
+    setConfirmAction({
+      title: "清除记忆",
+      message: "确认清除所有记忆数据？此操作不可恢复。",
+      action: async () => {
+        setClearing(true);
+        try {
+          await invoke("clear_memory");
+          const stats = await invoke<MemoryStats>("get_memory_stats");
+          setMemoryStats(stats);
+        } catch {
+          // ignore
+        } finally {
+          setClearing(false);
+        }
+      },
+    });
   };
 
   return (
@@ -349,6 +352,26 @@ function MemoryTab() {
         {restartHint && (
           <div className="settings-hint">重启 Agent 后生效</div>
         )}
+      </div>
+
+      <div className="settings-item">
+        <div className="settings-item-main">
+          <div className="settings-item-info">
+            <Cloud size={16} />
+            <div>
+              <div className="settings-item-label">记忆云端同步</div>
+              <div className="settings-item-desc">
+                开启后本地记忆将与云端同步，多设备共享上下文
+              </div>
+            </div>
+          </div>
+          <button
+            className={`toggle ${settings.memorySyncEnabled ? "on" : ""}`}
+            onClick={toggleMemorySync}
+          >
+            <span className="toggle-thumb" />
+          </button>
+        </div>
       </div>
 
       {memoryStats && (
@@ -383,6 +406,20 @@ function MemoryTab() {
           {clearing ? "清除中..." : "清除所有记忆"}
         </button>
       </div>
+
+      {confirmAction && (
+        <ConfirmDialog
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmLabel="确认"
+          danger
+          onConfirm={() => {
+            confirmAction.action();
+            setConfirmAction(null);
+          }}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
     </div>
   );
 }
@@ -586,15 +623,11 @@ function FeedbackTab() {
       <div className="settings-section-title">提交反馈</div>
 
       <div className="settings-feedback-form">
-        <select
-          className="settings-select settings-feedback-select"
+        <CustomSelect
+          options={CATEGORIES}
           value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        >
-          {CATEGORIES.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
-          ))}
-        </select>
+          onChange={setCategory}
+        />
 
         <input
           type="text"
@@ -678,6 +711,7 @@ function SkillsTab({
   const skills = useSkills();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [githubUrl, setGithubUrl] = useState("");
+  const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; action: () => void } | null>(null);
 
   const { builtin, user } = useMemo(() => {
     const b: SkillDefinition[] = [];
@@ -692,18 +726,21 @@ function SkillsTab({
   const handleDelete = useCallback(async (id: string) => {
     const skill = skills.find((s) => s.id === id);
     if (!skill) return;
-    if (!window.confirm(`确认删除技能「${skill.name}」？此操作不可恢复。`)) return;
-
-    setDeleting(id);
-    try {
-      await invoke("delete_user_skill", { skillId: id });
-      // Remove from local cache immediately
-      setSkills(skills.filter((s) => s.id !== id));
-    } catch (err) {
-      console.error("Failed to delete skill:", err);
-    } finally {
-      setDeleting(null);
-    }
+    setConfirmAction({
+      title: "删除技能",
+      message: `确认删除技能「${skill.name}」？此操作不可恢复。`,
+      action: async () => {
+        setDeleting(id);
+        try {
+          await invoke("delete_user_skill", { skillId: id });
+          setSkills(skills.filter((s) => s.id !== id));
+        } catch (err) {
+          console.error("Failed to delete skill:", err);
+        } finally {
+          setDeleting(null);
+        }
+      },
+    });
   }, [skills]);
 
   const handleReveal = useCallback(async (id: string) => {
@@ -810,6 +847,20 @@ function SkillsTab({
       <div className="settings-skill-footer">
         修改技能后需新建会话以加载更新
       </div>
+
+      {confirmAction && (
+        <ConfirmDialog
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmLabel="确认"
+          danger
+          onConfirm={() => {
+            confirmAction.action();
+            setConfirmAction(null);
+          }}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
     </>
   );
 }

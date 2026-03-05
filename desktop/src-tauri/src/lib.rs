@@ -484,6 +484,69 @@ fn preview_file(path: String, workspace: Option<String>) -> Result<FilePreview, 
     })
 }
 
+#[derive(serde::Deserialize)]
+pub struct ImportFile {
+    name: String,
+    /// Base64-encoded file content (from browser FileReader.readAsArrayBuffer)
+    data: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct ImportedFile {
+    name: String,
+    /// Relative path from workspace, e.g. "_attachments/report.pdf"
+    path: String,
+}
+
+#[tauri::command]
+fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<ImportedFile>, String> {
+    let attachments_dir = PathBuf::from(&workspace).join("_attachments");
+    std::fs::create_dir_all(&attachments_dir)
+        .map_err(|e| format!("Failed to create _attachments directory: {}", e))?;
+
+    let mut results = Vec::with_capacity(files.len());
+
+    for file in &files {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&file.data)
+            .map_err(|e| format!("Base64 decode failed for {}: {}", file.name, e))?;
+
+        let stem = Path::new(&file.name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&file.name)
+            .to_string();
+        let ext = Path::new(&file.name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{}", e))
+            .unwrap_or_default();
+
+        let mut dest = attachments_dir.join(&file.name);
+        let mut counter = 1u32;
+        while dest.exists() {
+            dest = attachments_dir.join(format!("{}-{}{}", stem, counter, ext));
+            counter += 1;
+        }
+
+        std::fs::write(&dest, &bytes)
+            .map_err(|e| format!("Failed to write {}: {}", file.name, e))?;
+
+        let final_name = dest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&file.name)
+            .to_string();
+
+        results.push(ImportedFile {
+            name: final_name.clone(),
+            path: format!("_attachments/{}", final_name),
+        });
+    }
+
+    Ok(results)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -528,12 +591,12 @@ pub fn run() {
             sidecar::get_user_skills_dir,
             sidecar::delete_user_skill,
             sidecar::reveal_user_skill,
-            sidecar::write_remote_skills,
             ensure_default_workspace,
             reveal_in_finder,
             open_file_default,
             resolve_file_path,
             preview_file,
+            import_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

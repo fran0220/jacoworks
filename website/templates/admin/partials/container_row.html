@@ -11,9 +11,9 @@
     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600">
       <span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span> stopped
     </span>
-    {% else if container.status == "frozen" %}
+    {% else if container.status == "paused" %}
     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-700">
-      <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> frozen
+      <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> paused
     </span>
     {% else if container.status == "error" %}
     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-medium bg-red-50 text-red-700">
@@ -27,7 +27,7 @@
   </td>
   <td class="px-6 py-4">
     <div class="flex items-center gap-2">
-      {% if container.status == "stopped" || container.status == "frozen" %}
+      {% if container.status == "stopped" || container.status == "paused" %}
       <button hx-post="/admin/containers/{{ container.id }}/start"
               hx-target="#container-{{ container.id }}"
               hx-swap="outerHTML"

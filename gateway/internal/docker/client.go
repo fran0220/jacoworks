@@ -139,7 +139,7 @@ func (c *Client) Unpause(name string) error {
 	return nil
 }
 
-// Freeze is an alias for Pause (LXD-compatible interface).
+// Freeze pauses a container.
 func (c *Client) Freeze(name string) error {
 	return c.Pause(name)
 }
@@ -302,7 +302,7 @@ func (c *Client) List() ([]ContainerInfo, error) {
 func (c *Client) WaitForHealth(ip string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	healthURL := fmt.Sprintf("http://%s:%d/health", ip, c.agentPort)
-	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 %s", healthURL)
+	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 --max-time 5 %s", healthURL)
 
 	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
 
@@ -310,7 +310,7 @@ func (c *Client) WaitForHealth(ip string, timeout time.Duration) error {
 		out, err := c.ssh(curlCmd)
 		if err == nil {
 			code := strings.TrimSpace(strings.Trim(out, "'"))
-			if len(code) == 3 && code[0] >= '1' && code[0] <= '5' && code != "000" {
+			if code == "200" {
 				log.Info().Str("url", healthURL).Str("status", code).Msg("container healthy")
 				return nil
 			}
@@ -329,8 +329,8 @@ func (c *Client) Exec(container string, args ...string) (string, error) {
 // ─── Memory Sync ───────────────────────────────────
 
 const (
-	containerWorkspace = "/home/agent/.openclaw/workspace"
-	containerSkillsDir = "/home/agent/.openclaw/skills"
+	containerWorkspace = "/home/agent/.jacoworks/workspace"
+	containerSkillsDir = "/home/agent/.jacoworks/skills"
 )
 
 func canonicalToContainerPath(canonical string) string {
@@ -462,7 +462,7 @@ func (c *Client) PushSkillFiles(containerName string, files map[string]string) e
 func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	healthURL := fmt.Sprintf("http://%s:%d/health", c.hostIP, hostPort)
-	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 %s", healthURL)
+	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 --max-time 5 %s", healthURL)
 
 	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
 
@@ -470,7 +470,7 @@ func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
 		out, err := c.ssh(curlCmd)
 		if err == nil {
 			code := strings.TrimSpace(strings.Trim(out, "'"))
-			if len(code) == 3 && code[0] >= '1' && code[0] <= '5' && code != "000" {
+			if code == "200" {
 				log.Info().Str("url", healthURL).Str("status", code).Msg("container healthy")
 				return nil
 			}
@@ -489,7 +489,7 @@ func (c *Client) ProvisionContainer(name, containerToken string, envVars map[str
 	for k, v := range envVars {
 		allEnv[k] = v
 	}
-	allEnv["OPENCLAW_GATEWAY_TOKEN"] = containerToken
+	allEnv["GATEWAY_TOKEN"] = containerToken
 
 	if err := c.Create(name, allEnv, hostPort); err != nil {
 		return "", fmt.Errorf("create: %w", err)

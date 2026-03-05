@@ -28,5 +28,12 @@ func (a *BackendAdapter) Status(name string) (string, error) {
 }
 
 func (a *BackendAdapter) WaitForHealth(name, ip string) error {
+	if ip == "" {
+		var err error
+		ip, err = a.client.GetIP(name)
+		if err != nil {
+			return err
+		}
+	}
 	return a.client.WaitForHealth(ip, 30*time.Second)
 }

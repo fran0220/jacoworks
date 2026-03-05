@@ -91,13 +91,13 @@ func (s *Store) GetUserIDByContainerName(ctx context.Context, containerName stri
 }
 
 // GetUserByContainerToken looks up the user who owns a container by its token.
-// Used for container-initiated API calls (e.g. game deploy from OpenClaw agent).
+// Used for container-initiated API calls (e.g. game deploy from vm-agent container).
 func (s *Store) GetUserByContainerToken(ctx context.Context, token string) (*User, error) {
 	user := &User{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT u.id, u.name, u.email, u.role, u.feishu_open_id, u.created_at, u.updated_at
 		 FROM users u JOIN containers c ON u.id = c.user_id
-		 WHERE c.container_token = $1 AND c.status IN ('running', 'frozen')`,
+		 WHERE c.container_token = $1 AND c.status IN ('running', 'paused')`,
 		token,
 	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.FeishuOpenID, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {

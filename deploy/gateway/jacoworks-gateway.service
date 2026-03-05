@@ -1,7 +1,7 @@
 [Unit]
 Description=JAcoworks Management Gateway
-After=network.target postgresql.service lxd.service
-Wants=postgresql.service lxd.service
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple

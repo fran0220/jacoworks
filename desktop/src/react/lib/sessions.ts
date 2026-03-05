@@ -84,13 +84,18 @@ function toSession(session: ServerSession): ChatSession {
 }
 
 export async function createSession(options?: { workspacePath?: string; model?: string }) {
+  const payload: Record<string, string> = {
+    type: "chat",
+    workspace_path: options?.workspacePath || "",
+  };
+  const model = options?.model?.trim();
+  if (model) {
+    payload.model = model;
+  }
+
   const response = await apiFetch("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({
-      type: "chat",
-      workspace_path: options?.workspacePath || "",
-      model: options?.model || "",
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (response.status !== 201) {
@@ -117,25 +122,30 @@ export async function createSession(options?: { workspacePath?: string; model?: 
 
 export async function getSession(id: string): Promise<ChatSession | undefined> {
   const response = await apiFetch(`/api/sessions/${id}`);
-  if (response.status === 404 || response.status !== 200) return undefined;
+  if (response.status === 404) return undefined;
+  if (response.status !== 200) {
+    throw new Error(parseError(response.body, `获取会话失败 (${response.status})`));
+  }
   const session = toSession(JSON.parse(response.body));
-  return session.type === "chat" ? session : undefined;
+  return (session.type === "chat" || session.type === "cowork") ? session : undefined;
 }
 
 export async function listSessions(): Promise<ChatSession[]> {
   const response = await apiFetch("/api/sessions");
-  if (response.status !== 200) return [];
+  if (response.status !== 200) {
+    throw new Error(parseError(response.body, `获取会话列表失败 (${response.status})`));
+  }
 
   const summaries: SessionSummary[] = JSON.parse(response.body) ?? [];
   return summaries
-    .filter((summary) => !summary.type || summary.type === "chat")
+    .filter((summary) => !summary.type || summary.type === "chat" || summary.type === "cowork")
     .map((summary) => ({
       id: summary.id,
       title: summary.title,
       messages: [],
       createdAt: parseTime(summary.created_at),
       updatedAt: parseTime(summary.updated_at),
-      type: "chat",
+      type: (summary.type as ChatSession["type"]) || "chat",
       workspacePath: summary.workspace_path || "",
       model: summary.model || "",
     }));

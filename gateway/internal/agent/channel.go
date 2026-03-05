@@ -443,19 +443,16 @@ func (c *UserChannel) publish(eventType string, data []byte) {
 
 	event := c.eventBuffer.Push(Event{Event: eventType, Data: data})
 
+	// Send while holding RLock to prevent concurrent close() from unsubscribe.
+	// Sends are non-blocking so holding the lock briefly is safe.
 	c.mu.RLock()
-	subscribers := make([]chan Event, 0, len(c.subscribers))
 	for _, sub := range c.subscribers {
-		subscribers = append(subscribers, sub)
-	}
-	c.mu.RUnlock()
-
-	for _, sub := range subscribers {
 		select {
 		case sub <- event:
 		default:
 		}
 	}
+	c.mu.RUnlock()
 }
 
 func (c *UserChannel) publishProxyReady() {

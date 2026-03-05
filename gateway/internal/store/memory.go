@@ -74,7 +74,7 @@ func (s *Store) UpsertMemoryFile(ctx context.Context, userID, filePath, content,
 	return err
 }
 
-// GetAllMemoryFiles returns all memory files with content for a user (for LXD push).
+// GetAllMemoryFiles returns all memory files with content for a user (for container push).
 func (s *Store) GetAllMemoryFiles(ctx context.Context, userID string) ([]MemoryFile, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT file_path, content, checksum, updated_at FROM user_memory

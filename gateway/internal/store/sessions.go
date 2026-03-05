@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -71,12 +72,22 @@ func (s *Store) CreateSession(ctx context.Context, userID, sessionType, workspac
 	}
 
 	sess := &ChatSession{}
-	err := s.pool.QueryRow(ctx,
-		`INSERT INTO chat_sessions (user_id, type, workspace_path, model)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING id, user_id, title, type, model, workspace_path, messages, created_at, updated_at`,
-		userID, sessionType, workspacePath, model,
-	).Scan(&sess.ID, &sess.UserID, &sess.Title, &sess.Type, &sess.Model, &sess.WorkspacePath, &sess.Messages, &sess.CreatedAt, &sess.UpdatedAt)
+	var err error
+	if strings.TrimSpace(model) == "" {
+		err = s.pool.QueryRow(ctx,
+			`INSERT INTO chat_sessions (user_id, type, workspace_path)
+			 VALUES ($1, $2, $3)
+			 RETURNING id, user_id, title, type, model, workspace_path, messages, created_at, updated_at`,
+			userID, sessionType, workspacePath,
+		).Scan(&sess.ID, &sess.UserID, &sess.Title, &sess.Type, &sess.Model, &sess.WorkspacePath, &sess.Messages, &sess.CreatedAt, &sess.UpdatedAt)
+	} else {
+		err = s.pool.QueryRow(ctx,
+			`INSERT INTO chat_sessions (user_id, type, workspace_path, model)
+			 VALUES ($1, $2, $3, $4)
+			 RETURNING id, user_id, title, type, model, workspace_path, messages, created_at, updated_at`,
+			userID, sessionType, workspacePath, model,
+		).Scan(&sess.ID, &sess.UserID, &sess.Title, &sess.Type, &sess.Model, &sess.WorkspacePath, &sess.Messages, &sess.CreatedAt, &sess.UpdatedAt)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}

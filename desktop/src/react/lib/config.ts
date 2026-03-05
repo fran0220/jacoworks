@@ -1,8 +1,8 @@
 export const GATEWAY_URL =
   import.meta.env.VITE_GATEWAY_URL || "https://jacoapi.jingao.club";
 
-export const OPENCLAW_WS_URL =
-  import.meta.env.VITE_OPENCLAW_WS_URL || "wss://jacoapi.jingao.club";
+export const COWORK_WS_URL =
+  import.meta.env.VITE_COWORK_WS_URL || "wss://jacoapi.jingao.club";
 
 export const DEFAULT_MODEL = "proxy-claude/claude-opus-4-6";
 
@@ -13,7 +13,6 @@ export const MODEL_OPTIONS = [
   { value: "proxy-gpt/gpt-5.2", label: "GPT-5.2" },
   { value: "proxy-gemini/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
   { value: "proxy-gemini/gemini-3-flash-preview", label: "Gemini 3 Flash" },
-  { value: "proxy-grok/grok-4.20-beta", label: "Grok 4.20" },
   { value: "proxy-glm/glm-5", label: "GLM-5" },
 ] as const;
 
@@ -32,6 +31,7 @@ const SETTINGS_KEY = "jacoworks_settings";
 
 export interface AppSettings {
   memoryEnabled: boolean;
+  memorySyncEnabled: boolean;
   defaultWorkspace: string;
   defaultModel: string;
   thinkingLevel: string;
@@ -40,6 +40,7 @@ export interface AppSettings {
 
 const DEFAULT_SETTINGS: AppSettings = {
   memoryEnabled: true,
+  memorySyncEnabled: false,
   defaultWorkspace: "",
   defaultModel: DEFAULT_MODEL,
   thinkingLevel: "medium",

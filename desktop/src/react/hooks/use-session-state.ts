@@ -9,11 +9,18 @@ export function useSessionState(authenticated: boolean) {
   const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [pendingFiles, setPendingFiles] = useState<AttachedFile[]>([]);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   const refreshSessions = useCallback(async () => {
     if (!isAuthenticated()) return;
-    const list = await listSessions();
-    setSessions(list);
+    try {
+      const list = await listSessions();
+      setSessions(list);
+      setSessionError(null);
+    } catch (err) {
+      console.warn("[sessions] refresh failed:", err);
+      setSessionError("会话列表加载失败");
+    }
   }, []);
 
   useEffect(() => {
@@ -26,7 +33,7 @@ export function useSessionState(authenticated: boolean) {
   }, [authenticated]);
 
   useEffect(() => {
-    refreshSessions().catch(() => {});
+    refreshSessions();
   }, [authenticated, refreshSessions]);
 
   useEffect(() => {
@@ -38,19 +45,32 @@ export function useSessionState(authenticated: boolean) {
     // Skip fetch if we already have the correct session loaded.
     if (currentSession?.id === currentSessionId) return;
 
+    // Anonymous sessions are local-only, resolve from the sessions list
+    const anon = sessions.find((s) => s.id === currentSessionId && s.anonymous);
+    if (anon) {
+      setCurrentSession(anon);
+      return;
+    }
+
     let cancelled = false;
     getSession(currentSessionId)
       .then((session) => {
         if (!cancelled && session) {
           setCurrentSession(session);
+          setSessionError(null);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn("[sessions] load failed:", err);
+          setSessionError("会话加载失败");
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [currentSessionId, currentSession?.id]);
+  }, [currentSessionId, currentSession?.id, sessions]);
 
   const selectSession = useCallback((sessionId: string) => {
     setCurrentSessionId(sessionId);
@@ -70,19 +90,23 @@ export function useSessionState(authenticated: boolean) {
 
   const deleteSessionById = useCallback(
     async (sessionId: string) => {
-      await deleteSession(sessionId);
-      await refreshSessions();
-      if (currentSessionId === sessionId) {
-        setCurrentSessionId(null);
+      const isAnon = sessions.find((s) => s.id === sessionId)?.anonymous;
+      if (isAnon) {
+        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      } else {
+        await deleteSession(sessionId);
+        await refreshSessions();
       }
+      setCurrentSessionId((prev) => (prev === sessionId ? null : prev));
     },
-    [currentSessionId, refreshSessions],
+    [refreshSessions, sessions],
   );
 
   return {
     sessions,
     currentSessionId,
     currentSession,
+    sessionError,
     pendingMessage,
     setPendingMessage,
     pendingFiles,

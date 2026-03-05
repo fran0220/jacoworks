@@ -11,6 +11,9 @@
 | `sql/003_system_settings.sql` | system_settings 表 (LLM 密钥管理) |
 | `sql/004_memory_and_skills.sql` | user_memory + skill_files 表 (记忆/技能同步) |
 | `sql/005_games.sql` | games 表 (游戏画廊) |
+| `sql/006_add_host_port.sql` | containers 表增加 host_port 字段 |
+| `sql/007_frozen_to_paused.sql` | containers status 值迁移 |
+| `sql/008_cron_jobs.sql` | cron_jobs 表 (云端定时任务调度) |
 | `sql/002_seed_test_data.sql` | 测试数据 (admin 用户 + 激活码) |
 
 ## 测试账号
@@ -26,7 +29,7 @@
 
 PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。
 
-关键表: `users` `auth_sessions` `chat_sessions` `containers` `invite_codes` `audit_logs` `system_settings` `user_memory` `skill_files` `games` `releases` `release_assets` `feedback`
+关键表: `users` `auth_sessions` `chat_sessions` `containers` `invite_codes` `audit_logs` `system_settings` `user_memory` `skill_files` `games` `releases` `release_assets` `feedback` `cron_jobs`
 
 `user_id` 为 TEXT (gen_random_uuid()::text)。`updated_at` 触发器自动更新。
 

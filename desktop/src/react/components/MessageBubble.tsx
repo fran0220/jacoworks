@@ -1,6 +1,8 @@
-import { File, FileImage, FileText } from "lucide-react";
-import hljs from "highlight.js/lib/core";
-import { Suspense, lazy, useState } from "react";
+import { FileText } from "lucide-react";
+import hljs from "../lib/hljs-setup";
+import { Suspense, lazy, memo, useState } from "react";
+import { formatSize } from "../lib/file-utils";
+import { toolArgsSummary } from "../lib/tool-utils";
 import type { ChatMessage, FileRef, MessageContent, StreamBlock } from "../types";
 import ToolStatus from "./ToolStatus";
 
@@ -21,15 +23,7 @@ function extractImages(content: string | MessageContent[]) {
     .map((part) => part.image_url!.url);
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function FileIcon({ type }: { type: FileRef["type"] }) {
-  if (type === "image") return <FileImage size={14} />;
-  if (type === "binary") return <File size={14} />;
+function FileIcon() {
   return <FileText size={14} />;
 }
 
@@ -39,28 +33,13 @@ function FileBadges({ files }: { files: FileRef[] }) {
     <div className="msg-files">
       {files.map((file, i) => (
         <div className="msg-file-badge" key={`${file.name}-${i}`}>
-          <FileIcon type={file.type} />
+          <FileIcon />
           <span className="msg-file-name" title={file.name}>{file.name}</span>
           <span className="msg-file-size">{formatSize(file.size)}</span>
         </div>
       ))}
     </div>
   );
-}
-
-function toolArgsSummary(name: string, args?: string): string {
-  if (!args) return "";
-  try {
-    const parsed = JSON.parse(args);
-    if (name === "read" || name === "edit" || name === "write") return parsed.path || "";
-    if (name === "bash") return parsed.command ? `$ ${parsed.command}`.slice(0, 80) : "";
-    if (name === "web_search" || name === "memory_search") return parsed.query || "";
-    if (name === "web_fetch") return parsed.url || "";
-    if (name === "grep") return parsed.pattern || "";
-    if (name === "find") return parsed.glob || parsed.pattern || "";
-    if (name === "ls") return parsed.path || "";
-    return "";
-  } catch { return ""; }
 }
 
 /* ---- Extension → highlight.js language map ---- */
@@ -262,7 +241,7 @@ function AssistantBlocks({ blocks }: { blocks: StreamBlock[] }) {
   );
 }
 
-export default function MessageBubble({
+const MessageBubble = memo(function MessageBubble({
   message,
   workspacePath,
 }: {
@@ -303,4 +282,6 @@ export default function MessageBubble({
       </div>
     </div>
   );
-}
+});
+
+export default MessageBubble;

@@ -1,12 +1,9 @@
 /**
  * Skills sync client:
- *   pull: gateway → desktop (system skills, source of truth)
- *   push: desktop → gateway (user skills only, for OpenClaw containers)
- *   poll: periodic checksum check for silent updates
+ *   push: desktop → gateway (user skills only, for cloud containers)
  *
- * System skills are managed exclusively on the gateway (admin hotfix).
- * Desktop only pulls system skills and caches them in app_data/remote-skills/.
- * User-created skills are pushed to gateway for OpenClaw container access.
+ * Built-in skills come from vm-agent directly.
+ * User-created skills are pushed to gateway for cloud container access.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -62,7 +59,7 @@ async function uploadSkills(
 }
 
 /**
- * Push user-created skills to gateway (for OpenClaw container access).
+ * Push user-created skills to gateway (for cloud container access).
  * Only uploads user skills; system skills are managed on the gateway.
  */
 export async function syncUserSkills(): Promise<void> {
@@ -98,97 +95,3 @@ export async function syncUserSkills(): Promise<void> {
   }
 }
 
-// ─── Pull: gateway → desktop (system skills, source of truth) ──
-
-/** Cached ETag from last pull, avoids re-downloading unchanged skills. */
-let lastPullEtag = "";
-
-interface PullSkillFile {
-  file_path: string;
-  content: string;
-  checksum: string;
-}
-
-interface PullResponse {
-  files: PullSkillFile[];
-  checksum: string;
-}
-
-/**
- * Pull system skills from gateway and write to app_data/remote-skills/.
- * Uses ETag to skip download when server skills haven't changed.
- * Should be called BEFORE starting the agent sidecar.
- */
-export async function pullSystemSkills(): Promise<void> {
-  try {
-    const token = getToken();
-    if (!token) return;
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-    };
-    if (lastPullEtag) {
-      headers["If-None-Match"] = lastPullEtag;
-    }
-
-    const res = await httpFetch(`${GATEWAY_URL}/api/skills/pull`, {
-      method: "GET",
-      headers,
-    });
-
-    if (res.status === 304) {
-      return;
-    }
-
-    if (res.status !== 200) {
-      console.warn("[skill-pull] server returned", res.status);
-      return;
-    }
-
-    const data: PullResponse = JSON.parse(res.body);
-    if (!data.files || data.files.length === 0) {
-      return;
-    }
-
-    await invoke("write_remote_skills", {
-      files: data.files.map((f) => ({
-        file_path: f.file_path,
-        content: f.content,
-      })),
-    });
-
-    lastPullEtag = data.checksum || "";
-    console.log(
-      `[skill-pull] pulled ${data.files.length} system skills from gateway`,
-    );
-  } catch (err) {
-    console.warn("[skill-pull] pull error:", err);
-  }
-}
-
-// ─── Periodic polling for skill updates ──────────────────────
-
-const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-/**
- * Start periodic skill polling. Checks gateway checksum every 30 min;
- * pulls new skills if changed. New agent sessions will pick them up lazily.
- */
-export function startSkillPolling(): void {
-  if (pollTimer) return;
-  pollTimer = setInterval(() => {
-    pullSystemSkills().catch((err) =>
-      console.warn("[skill-poll] poll error:", err),
-    );
-  }, POLL_INTERVAL_MS);
-  console.log("[skill-poll] started (interval: 30min)");
-}
-
-/** Stop periodic skill polling. */
-export function stopSkillPolling(): void {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}

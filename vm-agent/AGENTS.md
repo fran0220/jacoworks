@@ -9,7 +9,8 @@ src/
   index.ts                     RPC 主循环 (stdin/stdout JSON lines, ready 等待后台服务就绪)
   config.ts                    环境变量 (网关下发, 无本地 fallback)
   agent.ts                     Session 池 + 5 Provider + per-user 隔离 + title 生成 + isolated cron session
-  prompts/system.ts            系统提示词 (核心身份 + SOUL.md overlay + 动态能力)
+  prompts/system.ts            系统提示词 (3 层: runtime context + agentHomeDir bootstrap files + project SOUL.md)
+  prompts/seeds/               首次运行种子模板 (SOUL.md, AGENTS.md, USER.md, TOOLS.md)
   extensions/memory.ts         记忆系统 (context hook 纯本地读 + memory_search/save 工具)
   extensions/image-gen.ts      图片生成/编辑 (generate_image 工具, gemini-flash + fal.ai fallback)
   extensions/read-document.ts  文档读取 (read_document 工具, docx/xlsx/csv/pdf/pptx + OCR)
@@ -36,7 +37,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 | `generate_image` | `extensions/image-gen.ts` | `LLM_PROXY_KEY` 或 `FAL_API_KEY` | 文生图 + 图片编辑 |
 | `read_document` | `extensions/read-document.ts` | `LLM_PROXY_KEY` | 文档读取 + 扫描件 OCR |
 | `web_search` | `extensions/web-search.ts` | `LLM_PROXY_KEY` 或 `TAVILY_API_KEY` | 网络搜索 (Grok → Tavily fallback) |
-| `cron_manage` | `services/cron.ts` | `CRON_ENABLED=true` | 定时任务管理 |
+| `cron_manage` | `services/cron.ts` | 始终注册 | 定时任务管理 (sidecar→Gateway 代理, server→本地执行) |
 | `powershell` | `tools/powershell.ts` | Windows only | 环境自修复 |
 | (拦截器) | `agent.ts` 内联 | 始终 | read 二进制文档 → 提示用 read_document |
 | (拦截器) | `agent.ts` 内联 | `TOOL_DENY_LIST` | 屏蔽 Pi 内置 Web 工具 (默认 WebSearch/WebFetch/WebBrowse) |
@@ -68,7 +69,8 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 `.env` (Tauri 启动时注入, 网关下发):
 - `LLM_PROXY_URL` / `LLM_PROXY_KEY` — 中转站 (网关下发, 无本地 fallback)
 - `WORKSPACE_DIR` — 默认 cwd (可被请求级 workspace 覆盖)
-- `MEMORY_ROOT_DIR` — 记忆根目录 (默认 `~/Library/Application Support/JAcoworks/memory`)
+- `AGENT_HOME_DIR` — Agent 人格/配置主目录 (默认 `~/Library/Application Support/JAcoworks/`), 存放 SOUL.md, AGENTS.md, cron-jobs.json, memory/, skills/
+- `MEMORY_ROOT_DIR` — 记忆根目录 (默认 `agentHomeDir/memory`)
 - `PRIMARY_MODEL=claude-opus-4-6` / `PRIMARY_PROVIDER=proxy-claude`
 - `MEMORY_ENABLED=true` / `HEARTBEAT_ENABLED=false` / `CRON_ENABLED=false`
 - `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` — 向量 embedding (可选)
@@ -80,12 +82,17 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 
 ## Cron 定时任务
 
-**cron_manage 工具** (CRON_ENABLED=true 时注册为 Pi SDK extension):
+**cron_manage 工具** (始终注册为 Pi SDK extension，双模式运行):
+
+**Sidecar 模式** (本地): cron_manage 调用自动代理到 Gateway `/api/cron/jobs` API，任务在云端调度执行，用户关机不影响。
+**Server 模式** (容器): 本地 CronService 执行，tick 每 60s 检查，持久化到 `cron-jobs.json`。
+
 - **调度类型**: `cron` (标准表达式) / `at` (一次性, 支持 `+20m` 相对时间) / `every` (固定间隔 `5m`, `1h`)
 - **Session 模式**: `main` (复用主会话) / `isolated` (每次创建独立 session, 运行后销毁)
 - **操作**: create / list / delete / run (手动触发) / history (JSONL 运行记录)
-- **特性**: deleteAfterRun (at 默认 true) / 指数退避 (1→5→15→60 分钟) / 向后兼容迁移
-- **持久化**: `{workspaceDir}/cron-jobs.json` + `{workspaceDir}/cron/runs/{jobId}.jsonl`
+- **特性**: deleteAfterRun (at 默认 true) / 指数退避 (1→5→15→60 分钟) / 飞书 announce 推送
+- **持久化 (server)**: `{workspaceDir}/cron-jobs.json` + `{workspaceDir}/cron/runs/{jobId}.jsonl`
+- **持久化 (sidecar)**: Gateway PostgreSQL `cron_jobs` 表
 
 ## 测试 (5 层)
 

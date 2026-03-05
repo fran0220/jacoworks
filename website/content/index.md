@@ -1,18 +1,17 @@
 # JAcoworks 文档
 
-欢迎使用 JAcoworks — 企业 AI 协同办公平台。
+欢迎使用 JAcoworks — 你的 AI 办公助手。
 
-JAcoworks 帮你把 AI 助手真正用进日常工作：写文档、处理表格、分析数据、生成图片、整理想法。你不需要了解底层技术，只要描述需求，Agent 就会配合你完成任务。
-
-当前支持两类账号接入：
-
-- 激活码注册账号（用户名/密码登录）
-- 京奥内部账号（飞书登录）
+JAcoworks 把 AI 融入日常工作：写文档、做表格、分析数据、生成图片、搜索信息——告诉它你想要什么，它帮你完成。
 
 ## 快速导航
 
-- [快速开始](getting-started) — 安装和首次使用
-- [用户指南](guide/overview) — 核心功能与使用方式
-- [技能系统](guide/skills) — 内置技能使用说明
+- [快速开始](getting-started) — 下载安装，5 分钟上手
+- [功能概览](guide/overview) — 了解 JAcoworks 能做什么
+- [AI 模型](guide/models) — 不同模型怎么选
+- [工作空间](guide/workspace) — 让 AI 读写你的文件
+- [记忆系统](guide/memory) — AI 越用越懂你
+- [技能系统](guide/skills) — 专业场景一键切换
+- [协作模式](guide/cowork) — 云端协作
 - [常见问题](faq) — FAQ
-- [更新日志](changelog) — 版本记录
+- [更新日志](changelog) — 每个版本改了什么

@@ -20,11 +20,12 @@ import { createImageGenExtension } from "./extensions/image-gen.js";
 import { createReadDocumentExtension } from "./extensions/read-document.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
-import { buildSystemPrompt } from "./prompts/system.js";
+import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
-import { createCronService, type CronService } from "./services/cron.js";
+import { createCronService, type CronService, type CronResultEvent } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 import { createPowershellTool, isPowershellAvailable } from "./tools/powershell.js";
+import { EventEmitter } from "node:events";
 
 // ─── Session Metadata ───────────────────────────────
 
@@ -46,6 +47,7 @@ let config: Config;
 let heartbeatService: HeartbeatService | null = null;
 let cronService: CronService | null = null;
 let promptQueue: PromptQueue | null = null;
+export const agentEvents = new EventEmitter();
 
 // ─── Restricted mode: no coding tools, skills still available ──
 
@@ -302,6 +304,11 @@ export function initAgent(cfg: Config) {
   // 注册中转站所有模型
   registerProxyModels(modelRegistry, cfg.proxyUrl, cfg.proxyKey);
 
+  // Seed agent home directory with default bootstrap files (non-fatal)
+  seedAgentHome(cfg.agentHomeDir).catch((err) => {
+    console.warn(`⚠️ Failed to seed agent home: ${err instanceof Error ? err.message : err}`);
+  });
+
   // 初始化 Embedding API (向量记忆搜索)
   // 优先使用 EMBEDDING_API_KEY + EMBEDDING_BASE_URL, 回退到 OPENAI_API_KEY
   if (cfg.embeddingApiKey) {
@@ -336,6 +343,7 @@ export interface SessionOptions {
   restricted?: boolean;
   model?: { provider: string; id: string } | null;
   userId?: string;
+  anonymous?: boolean;
 }
 
 export async function getSession(sessionId: string, opts?: SessionOptions) {
@@ -379,7 +387,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     });
   }
 
-  if (config.memoryEnabled) {
+  if (config.memoryEnabled && !opts?.anonymous) {
     extensionFactories.push(
       createMemoryExtension(userMemoryRootDir(opts?.userId), {
         embedCacheMax: config.embedCacheMax,
@@ -389,7 +397,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     );
   }
 
-  if (config.cronEnabled && cronService) {
+  if (cronService) {
     extensionFactories.push(cronService.getExtensionFactory());
   }
 
@@ -442,8 +450,10 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   const settingsManager = getSettingsManager(workspace);
 
-  // Build system prompt: core identity + SOUL.md + active services
+  // Build system prompt: runtime context + bootstrap files from agentHomeDir + project SOUL.md
   const systemPrompt = await buildSystemPrompt({
+    mode: config.mode,
+    agentHomeDir: config.agentHomeDir,
     workspaceDir: workspace,
     memoryEnabled: config.memoryEnabled,
     cronEnabled: config.cronEnabled,
@@ -685,7 +695,7 @@ export async function startBackgroundServices() {
       {
         enabled: true,
         intervalMs: config.heartbeatIntervalMs,
-        workspaceDir: config.workspaceDir,
+        agentHomeDir: config.agentHomeDir,
         activeHours: config.heartbeatActiveHours,
       },
       (prompt) => promptQueue!.enqueue(prompt),
@@ -693,14 +703,25 @@ export async function startBackgroundServices() {
     heartbeatService.start();
   }
 
+  // Always create cron service for tool registration (proxy in sidecar, local in server)
+  cronService = createCronService(
+    {
+      agentHomeDir: config.agentHomeDir,
+      mode: config.mode,
+      gatewayUrl: process.env.GATEWAY_URL || undefined,
+      gatewayToken: config.gatewayToken || undefined,
+    },
+    (prompt) => promptQueue!.enqueue(prompt),
+    (prompt, sessionId) => executeIsolatedPrompt(prompt, sessionId),
+    (event) => agentEvents.emit("cron_result", event),
+  );
+
+  // Only start the local scheduler in server mode
   if (config.cronEnabled) {
-    cronService = createCronService(
-      { workspaceDir: config.workspaceDir },
-      (prompt) => promptQueue!.enqueue(prompt),
-      (prompt, sessionId) => executeIsolatedPrompt(prompt, sessionId),
-    );
     cronService.start();
-    console.log("⏰ Cron service started (cron_manage tool available via agent)");
+    console.log("⏰ Cron service started (local scheduler active)");
+  } else {
+    console.log("⏰ Cron service registered (sidecar proxy mode, no local scheduler)");
   }
 }
 

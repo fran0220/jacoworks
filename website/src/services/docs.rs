@@ -110,11 +110,11 @@ pub fn build_nav_tree(current_path: &str) -> Vec<NavItem> {
     if guide_dir.exists() {
         let guide_files: Vec<(&str, &str)> = vec![
             ("overview", "功能概览"),
-            ("models", "模型选择"),
+            ("models", "AI 模型"),
             ("workspace", "工作空间"),
             ("memory", "记忆系统"),
             ("skills", "技能系统"),
-            ("openclaw", "OpenClaw 协作"),
+            ("cowork", "协作模式"),
         ];
 
         let children: Vec<NavItem> = guide_files

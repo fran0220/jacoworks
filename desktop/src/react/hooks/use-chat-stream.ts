@@ -17,28 +17,35 @@ import type {
   ChatSession,
   StreamBlock,
 } from "../types";
+import { formatSize } from "../lib/file-utils";
+import { syncMemory } from "../lib/memory-sync";
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+// ─── Debounced memory sync ─────────────────────────────
+let lastSyncTime = 0;
+let syncInFlight = false;
+const SYNC_DEBOUNCE_MS = 30_000;
+
+async function debouncedSyncMemory() {
+  if (!getSettings().memorySyncEnabled) return;
+  if (syncInFlight) return;
+  if (Date.now() - lastSyncTime < SYNC_DEBOUNCE_MS) return;
+  syncInFlight = true;
+  try {
+    await syncMemory();
+    lastSyncTime = Date.now();
+  } finally {
+    syncInFlight = false;
+  }
 }
 
 function buildPrompt(text: string, files: AttachedFile[]): string {
   if (files.length === 0) return text;
 
-  const chunks: string[] = [];
-  for (const file of files) {
-    if (file.type === "image") {
-      chunks.push(`[图片附件] ${file.name}\n${file.data}`);
-    } else if (file.type === "binary") {
-      chunks.push(`[文档附件] ${file.name} (${formatFileSize(file.size)}) — 这是一个二进制文档文件，请使用 write_file + bash 工具写一个 .mjs 脚本来读取和处理它。文件位于当前工作目录中。`);
-    } else {
-      chunks.push(`[文本附件] ${file.name}\n${file.data}`);
-    }
-  }
-  chunks.push(text);
-  return chunks.join("\n\n");
+  const fileList = files
+    .map((f) => `- ${f.path} (${formatSize(f.size)})`)
+    .join("\n");
+
+  return `${text}\n\n[附加文件 — 已保存到工作目录，请用 read 或 read_document 工具查看]\n${fileList}`;
 }
 
 function isUntitledTitle(title: string): boolean {
@@ -85,10 +92,12 @@ export function useChatStream({
   const [streamingStartedAt, setStreamingStartedAt] = useState<number | null>(null);
   const [blocks, setBlocks] = useState<StreamBlock[]>([]);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   const localSessionRef = useRef(session);
   const abortedRef = useRef(false);
   const sendLockRef = useRef(false);
+  const stoppedByUserRef = useRef(false);
   const streamCancelRef = useRef<(() => void) | null>(null);
   const blocksRef = useRef<StreamBlock[]>([]);
   const streamBaseRef = useRef<ChatMessage[]>([]);
@@ -170,6 +179,7 @@ export function useChatStream({
     async (messages: ChatMessage[], title?: string) => {
       const sessionId = localSessionRef.current.id;
       setLocalSession((prev) => ({ ...prev, messages, ...(title ? { title } : {}) }));
+      if (localSessionRef.current.anonymous) return;
       await persistMessages(sessionId, messages, title);
       await onSessionUpdate();
     },
@@ -184,7 +194,13 @@ export function useChatStream({
 
     const metaBlocks = collectMetaBlocks(blocksRef.current);
 
-    if (!assistantText.trim() && metaBlocks.length === 0) return;
+    if (!assistantText.trim() && metaBlocks.length === 0) {
+      // Stream completed but produced no content — surface this to the user
+      setErrorText("模型未返回任何内容，请重试");
+      setBlocks([]);
+      setStreaming(false);
+      return;
+    }
 
     setBlocks([]);
     setStreaming(false);
@@ -206,7 +222,7 @@ export function useChatStream({
 
     await persistSession(finalMessages, fallbackTitle);
 
-    if (isUntitled && assistantCount === 1) {
+    if (isUntitled && assistantCount === 1 && !localSessionRef.current.anonymous) {
       const lastUserContent =
         streamBaseRef.current.filter((message) => message.role === "user").pop()?.content || "";
       const userMessage = typeof lastUserContent === "string" ? lastUserContent : "";
@@ -242,7 +258,7 @@ export function useChatStream({
 
       const sessionSnapshot = localSessionRef.current;
       const fileRefs = files.length > 0
-        ? files.map(f => ({ name: f.name, type: f.type, size: f.size }))
+        ? files.map(f => ({ name: f.name, size: f.size }))
         : undefined;
       const userMessage: ChatMessage = {
         role: "user",
@@ -254,13 +270,16 @@ export function useChatStream({
 
       setStreamingStartedAt(Date.now());
       setStreaming(true);
+      window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: sessionSnapshot.id, streaming: true } }));
       setBlocks([]);
       cancelRenderFrame();
       blocksRef.current = [];
       streamBaseRef.current = nextMessages;
       abortedRef.current = false;
+      stoppedByUserRef.current = false;
       stickToBottomRef.current = true;
 
+      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
       try {
         const currentUser = getUser();
         const appSettings = getSettings();
@@ -272,11 +291,32 @@ export function useChatStream({
           workspace: sessionSnapshot.workspacePath || undefined,
           restricted: false,
           thinking_level: appSettings.thinkingLevel || undefined,
+          anonymous: sessionSnapshot.anonymous || undefined,
         });
         streamCancelRef.current = response.cancel;
 
+        // Inactivity timeout: if no data arrives for 45s, abort
+        inactivityTimer = window.setTimeout(() => {
+          if (!abortedRef.current) {
+            abortedRef.current = true;
+            response.cancel();
+            setErrorText("响应超时，模型长时间未返回数据");
+          }
+        }, 45_000);
+        const resetInactivityTimer = () => {
+          if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
+          inactivityTimer = window.setTimeout(() => {
+            if (!abortedRef.current) {
+              abortedRef.current = true;
+              response.cancel();
+              setErrorText("响应超时，模型长时间未返回数据");
+            }
+          }, 45_000);
+        };
+
         for await (const packet of response.stream) {
           if (abortedRef.current) break;
+          resetInactivityTimer();
 
           if (packet.type === "response") {
             if (packet.success === false) {
@@ -402,9 +442,11 @@ export function useChatStream({
           }
         }
 
+        if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
+
         if (!abortedRef.current) {
           await finalizeStream();
-        } else {
+        } else if (!stoppedByUserRef.current) {
           const hasPartialText = blocksRef.current.some(
             (b) => b.type === "text" && b.content.trim(),
           );
@@ -414,22 +456,33 @@ export function useChatStream({
         }
       } catch (error) {
         if (!abortedRef.current) {
-          setErrorText(error instanceof Error ? error.message : "请求失败");
+          const msg = error instanceof Error ? error.message : "请求失败";
+          setErrorText(msg);
+          // Persist a visible error indicator in the conversation
+          const errorMessages = [...streamBaseRef.current, {
+            role: "assistant" as const,
+            content: `⚠️ ${msg}`,
+          }];
+          await persistSession(errorMessages).catch(() => {});
         }
       } finally {
+        if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
         streamCancelRef.current = null;
         sendLockRef.current = false;
         setStreaming(false);
         setStreamingStartedAt(null);
+        window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: localSessionRef.current.id, streaming: false } }));
         cancelRenderFrame();
         setBlocks([]);
         blocksRef.current = [];
+        debouncedSyncMemory().catch(() => {});
       }
     },
     [cancelRenderFrame, finalizeStream, persistSession, scheduleBlocksRender],
   );
 
   const stopStreaming = useCallback(async () => {
+    stoppedByUserRef.current = true;
     abortedRef.current = true;
     streamCancelRef.current?.();
     streamCancelRef.current = null;
@@ -469,7 +522,16 @@ export function useChatStream({
 
   const handleMessagesScroll = useCallback(() => {
     if (!messagesRef.current) return;
-    stickToBottomRef.current = isNearBottom(messagesRef.current);
+    const atBottom = isNearBottom(messagesRef.current);
+    stickToBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    if (!messagesRef.current) return;
+    messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    stickToBottomRef.current = true;
+    setIsAtBottom(true);
   }, []);
 
   const updateWorkspacePath = useCallback((workspacePath: string) => {
@@ -492,6 +554,8 @@ export function useChatStream({
     blocks,
     errorText,
     messagesRef,
+    isAtBottom,
+    scrollToBottom,
     sendMessage,
     stopStreaming,
     handleMessagesScroll,

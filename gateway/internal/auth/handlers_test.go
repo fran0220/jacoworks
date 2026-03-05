@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -202,7 +203,7 @@ func TestLogout(t *testing.T) {
 	}{
 		{name: "without token", authorization: "", url: "/api/auth/logout", wantDeleteCallCount: 0},
 		{name: "with bearer token", authorization: "Bearer session-token", url: "/api/auth/logout", wantDeleteCallCount: 1},
-		{name: "query token fallback", authorization: "", url: "/api/auth/logout?token=from-query", wantDeleteCallCount: 1},
+		{name: "query token is ignored on HTTP API", authorization: "", url: "/api/auth/logout?token=from-query", wantDeleteCallCount: 0},
 	}
 
 	for _, tt := range tests {
@@ -237,5 +238,68 @@ func TestNewHandlers_DefaultSessionTTL(t *testing.T) {
 	h := NewHandlersWithStore(&authStoreMock{}, 0)
 	if h.sessionTTL != 168*time.Hour {
 		t.Fatalf("session TTL = %v, want %v", h.sessionTTL, 168*time.Hour)
+	}
+}
+
+func TestResolveFeishuRedirect(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		raw       string
+		wantErr   bool
+		wantQuery bool
+	}{
+		{name: "default redirect", raw: "", wantErr: false, wantQuery: false},
+		{name: "desktop localhost", raw: "http://localhost:1420/callback", wantErr: false, wantQuery: false},
+		{name: "tauri localhost", raw: "https://tauri.localhost", wantErr: false, wantQuery: false},
+		{name: "admin callback uses query", raw: "https://jaco.jingao.club/admin/feishu/callback", wantErr: false, wantQuery: true},
+		{name: "reject javascript scheme", raw: "javascript:alert(1)", wantErr: true},
+		{name: "reject unknown host", raw: "https://evil.example.com/cb", wantErr: true},
+		{name: "reject relative url", raw: "/admin/feishu/callback", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			redirect, useQuery, err := resolveFeishuRedirect(tt.raw)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got redirect=%q", redirect)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if useQuery != tt.wantQuery {
+				t.Fatalf("useQuery = %v, want %v", useQuery, tt.wantQuery)
+			}
+			parsed, parseErr := url.Parse(redirect)
+			if parseErr != nil {
+				t.Fatalf("redirect parse failed: %v", parseErr)
+			}
+			if parsed.Fragment != "" {
+				t.Fatalf("redirect fragment should be empty, got %q", parsed.Fragment)
+			}
+			if strings.Contains(parsed.RawQuery, "token=") || strings.Contains(parsed.RawQuery, "error=") {
+				t.Fatalf("redirect query should not carry auth params, got %q", parsed.RawQuery)
+			}
+		})
+	}
+}
+
+func TestAppendAuthResult(t *testing.T) {
+	t.Parallel()
+
+	queryURL := appendAuthResult("https://jaco.jingao.club/admin/feishu/callback?foo=1", true, "token", "abc")
+	if !strings.Contains(queryURL, "token=abc") || strings.Contains(queryURL, "#") {
+		t.Fatalf("query mode redirect malformed: %q", queryURL)
+	}
+
+	hashURL := appendAuthResult("http://localhost:1420", false, "token", "abc")
+	if !strings.Contains(hashURL, "#token=abc") || strings.Contains(hashURL, "?token=") {
+		t.Fatalf("fragment mode redirect malformed: %q", hashURL)
 	}
 }

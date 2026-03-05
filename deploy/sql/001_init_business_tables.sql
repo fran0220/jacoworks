@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS containers (
     container_ip    INET,
     container_token TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'stopped'
-                    CHECK (status IN ('running','stopped','frozen','creating','error')),
+                    CHECK (status IN ('running','stopped','paused','creating','error')),
     cpu_limit       INT NOT NULL DEFAULT 1,
     memory_mb       INT NOT NULL DEFAULT 1024,
     disk_mb         INT NOT NULL DEFAULT 5120,

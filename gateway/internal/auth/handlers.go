@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -51,12 +53,20 @@ func NewHandlersWithStore(s authStore, sessionTTLHours int) *Handlers {
 // --- OAuth state management (server-side, no cookie dependency) ---
 
 type oauthStateData struct {
-	SessionData string
-	Redirect    string
-	ExpiresAt   time.Time
+	SessionData      string
+	Redirect         string
+	RedirectUseQuery bool
+	ExpiresAt        time.Time
 }
 
 var oauthStates sync.Map
+
+const defaultFeishuRedirect = "http://localhost:1420"
+
+var (
+	redirectAllowlistOnce sync.Once
+	redirectAllowlist     map[string]struct{}
+)
 
 func init() {
 	go func() {
@@ -219,9 +229,10 @@ func (h *Handlers) FeishuBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirect := r.URL.Query().Get("redirect")
-	if redirect == "" {
-		redirect = "http://localhost:1420"
+	redirect, useQuery, err := resolveFeishuRedirect(r.URL.Query().Get("redirect"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid redirect"})
+		return
 	}
 
 	state, err := generateToken(16)
@@ -243,9 +254,10 @@ func (h *Handlers) FeishuBegin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	oauthStates.Store(state, &oauthStateData{
-		SessionData: sess.Marshal(),
-		Redirect:    redirect,
-		ExpiresAt:   time.Now().Add(10 * time.Minute),
+		SessionData:      sess.Marshal(),
+		Redirect:         redirect,
+		RedirectUseQuery: useQuery,
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
 	})
 
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
@@ -263,61 +275,61 @@ func (h *Handlers) FeishuCallback(w http.ResponseWriter, r *http.Request) {
 
 	stateData := stored.(*oauthStateData)
 	if stateData.ExpiresAt.Before(time.Now()) {
-		redirectWithError(w, r, stateData.Redirect, "state_expired")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "state_expired")
 		return
 	}
 
 	provider, err := goth.GetProvider("feishu")
 	if err != nil {
-		redirectWithError(w, r, stateData.Redirect, "provider_not_found")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "provider_not_found")
 		return
 	}
 
 	sess, err := provider.UnmarshalSession(stateData.SessionData)
 	if err != nil {
-		redirectWithError(w, r, stateData.Redirect, "session_error")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "session_error")
 		return
 	}
 
 	_, err = sess.Authorize(provider, r.URL.Query())
 	if err != nil {
 		log.Error().Err(err).Msg("feishu authorize failed")
-		redirectWithError(w, r, stateData.Redirect, "authorize_failed")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "authorize_failed")
 		return
 	}
 
 	gothUser, err := provider.FetchUser(sess)
 	if err != nil {
 		log.Error().Err(err).Msg("feishu fetch user failed")
-		redirectWithError(w, r, stateData.Redirect, "fetch_user_failed")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "fetch_user_failed")
 		return
 	}
 	if h.store == nil {
-		redirectWithError(w, r, stateData.Redirect, "internal_error")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "internal_error")
 		return
 	}
 
 	user, err := h.store.FindOrCreateFeishuUser(r.Context(), gothUser.UserID, gothUser.Name, gothUser.Email)
 	if err != nil {
 		log.Error().Err(err).Msg("find or create feishu user failed")
-		redirectWithError(w, r, stateData.Redirect, "create_user_failed")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "create_user_failed")
 		return
 	}
 
 	token, err := generateToken(32)
 	if err != nil {
-		redirectWithError(w, r, stateData.Redirect, "internal_error")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "internal_error")
 		return
 	}
 
 	if err := h.store.CreateAuthSession(r.Context(), token, user.ID, h.sessionTTL, r.RemoteAddr, r.UserAgent()); err != nil {
-		redirectWithError(w, r, stateData.Redirect, "session_error")
+		redirectWithError(w, r, stateData.Redirect, stateData.RedirectUseQuery, "session_error")
 		return
 	}
 
 	log.Info().Str("user_id", user.ID).Str("feishu_id", gothUser.UserID).Msg("feishu user logged in")
 
-	redirectURL := stateData.Redirect + "?token=" + url.QueryEscape(token)
+	redirectURL := appendAuthResult(stateData.Redirect, stateData.RedirectUseQuery, "token", token)
 	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
 
@@ -332,8 +344,99 @@ func userResponse(u *store.User) map[string]string {
 	}
 }
 
-func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURL, errCode string) {
-	http.Redirect(w, r, redirectURL+"?error="+errCode, http.StatusTemporaryRedirect)
+func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURL string, useQuery bool, errCode string) {
+	http.Redirect(w, r, appendAuthResult(redirectURL, useQuery, "error", errCode), http.StatusTemporaryRedirect)
+}
+
+func resolveFeishuRedirect(raw string) (string, bool, error) {
+	redirect := strings.TrimSpace(raw)
+	if redirect == "" {
+		redirect = defaultFeishuRedirect
+	}
+
+	parsed, err := url.Parse(redirect)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return "", false, fmt.Errorf("invalid redirect URL")
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", false, fmt.Errorf("unsupported redirect scheme")
+	}
+
+	host := strings.ToLower(parsed.Hostname())
+	if !isAllowedRedirectHost(host) {
+		return "", false, fmt.Errorf("redirect host not allowed")
+	}
+
+	// Never keep stale auth params from a previous redirect.
+	query := parsed.Query()
+	query.Del("token")
+	query.Del("error")
+	parsed.RawQuery = query.Encode()
+	parsed.Fragment = ""
+
+	path := strings.TrimRight(strings.ToLower(parsed.Path), "/")
+	useQuery := path == "/admin/feishu/callback"
+	return parsed.String(), useQuery, nil
+}
+
+func appendAuthResult(redirectURL string, useQuery bool, key, value string) string {
+	parsed, err := url.Parse(redirectURL)
+	if err != nil {
+		if useQuery {
+			return redirectURL + "?" + url.Values{key: []string{value}}.Encode()
+		}
+		return redirectURL + "#" + url.Values{key: []string{value}}.Encode()
+	}
+
+	values := url.Values{}
+	values.Set(key, value)
+
+	if useQuery {
+		query := parsed.Query()
+		query.Del("token")
+		query.Del("error")
+		query.Set(key, value)
+		parsed.RawQuery = query.Encode()
+		parsed.Fragment = ""
+		return parsed.String()
+	}
+
+	parsed.Fragment = values.Encode()
+	return parsed.String()
+}
+
+func isAllowedRedirectHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	_, ok := loadRedirectAllowlist()[host]
+	return ok
+}
+
+func loadRedirectAllowlist() map[string]struct{} {
+	redirectAllowlistOnce.Do(func() {
+		redirectAllowlist = map[string]struct{}{
+			"localhost":        {},
+			"127.0.0.1":        {},
+			"::1":              {},
+			"tauri.localhost":  {},
+			"jaco.jingao.club": {},
+		}
+		extra := strings.TrimSpace(os.Getenv("GATEWAY_OAUTH_REDIRECT_ALLOWLIST"))
+		if extra == "" {
+			return
+		}
+		for _, host := range strings.Split(extra, ",") {
+			h := strings.ToLower(strings.TrimSpace(host))
+			if h == "" {
+				continue
+			}
+			redirectAllowlist[h] = struct{}{}
+		}
+	})
+	return redirectAllowlist
 }
 
 func generateToken(bytes int) (string, error) {

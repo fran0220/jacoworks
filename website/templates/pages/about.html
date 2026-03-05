@@ -30,28 +30,25 @@
 
     <!-- Architecture -->
     <div class="bg-white rounded-2xl shadow-sm p-8 sm:p-12 mb-8">
-      <h2 class="text-2xl font-bold text-gray-900 mb-4">技术架构</h2>
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">产品特色</h2>
       <div class="prose-custom text-gray-600 leading-relaxed space-y-4">
-        <p>JAcoworks 采用双模式架构设计：</p>
+        <p>JAcoworks 提供两种工作方式：</p>
         <ul class="space-y-3 ml-4">
           <li class="flex items-start gap-3">
             <span class="text-terra font-bold mt-0.5">•</span>
             <div>
-              <strong class="text-gray-800">本地模式</strong> — Tauri v2 桌面客户端内嵌 Pi SDK Agent sidecar，
-              通过 RPC (stdin/stdout) 通信，Agent 直接读写本地文件
+              <strong class="text-gray-800">本地模式</strong> — AI 助手在你的电脑上运行，直接读写本地文件，数据不出设备
             </div>
           </li>
           <li class="flex items-start gap-3">
             <span class="text-terra font-bold mt-0.5">•</span>
             <div>
-              <strong class="text-gray-800">OpenClaw 模式</strong> — 云端 LXD 容器，通过 WebSocket 代理通信，
-              支持团队协同和隔离运行环境
+              <strong class="text-gray-800">协作模式</strong> — 在云端独立工作区中运行，适合团队协作和多设备使用
             </div>
           </li>
         </ul>
         <p>
-          Go 网关提供认证、会话存储和管理 API。LLM 中转站统一接入 Claude、GPT、Gemini、Grok 四大 Provider，
-          9+ 模型可供选择。
+          内置 Claude、GPT、Gemini、Grok 等 10+ 款主流 AI 模型，根据任务灵活切换。
         </p>
       </div>
     </div>
