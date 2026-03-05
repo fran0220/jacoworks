@@ -50,16 +50,19 @@ jobs:
             label: macOS-arm64
             platform: darwin-aarch64
             sidecar: vm-agent-aarch64-apple-darwin
+            bundles: dmg,updater
           - os: macos-latest
             target: x86_64-apple-darwin
             label: macOS-x64
             platform: darwin-x86_64
             sidecar: vm-agent-x86_64-apple-darwin
+            bundles: dmg,updater
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
             platform: windows-x86_64
             sidecar: vm-agent-x86_64-pc-windows-msvc.exe
+            bundles: nsis
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
@@ -152,7 +155,7 @@ jobs:
           releaseBody: 'See [CHANGELOG](https://jaco.jingao.club/docs/changelog) for details.'
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # 收集构建产物用于后续上传到 jingao
       - name: Collect artifacts
