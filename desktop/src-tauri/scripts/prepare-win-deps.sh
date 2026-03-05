@@ -188,10 +188,10 @@ prepare_win_bash() {
   for dll in "${MSYS_DLLS[@]}"; do
     if [[ -f "$git_bin/$dll" ]]; then
       cp "$git_bin/$dll" "$WIN_BASH_DIR/usr/bin/"
-      ((dll_copied++))
+      dll_copied=$((dll_copied + 1))
     else
       echo "   ⚠️  DLL not found (may not be needed): $dll"
-      ((dll_missing++))
+      dll_missing=$((dll_missing + 1))
     fi
   done
   echo "   Copied $dll_copied DLLs ($dll_missing not found)"
@@ -203,10 +203,10 @@ prepare_win_bash() {
   for util in "${COREUTILS[@]}"; do
     if [[ -f "$git_bin/$util.exe" ]]; then
       cp "$git_bin/$util.exe" "$WIN_BASH_DIR/usr/bin/"
-      ((copied++))
+      copied=$((copied + 1))
     else
       echo "   ⚠️  Not found: $util.exe"
-      ((missing++))
+      missing=$((missing + 1))
     fi
   done
   echo "   Copied $copied utilities ($missing not found)"

@@ -74,7 +74,8 @@ bundle-doc-packages: ## 打包文档处理 npm 包 (mammoth, docx, exceljs, pdf-
 	@rm -rf /tmp/jacoworks-doc-packages
 	@mkdir -p /tmp/jacoworks-doc-packages
 	@echo '{"private":true,"dependencies":{"mammoth":"^1.11.0","docx":"^9.6.0","exceljs":"^4.4.0","pdf-lib":"^1.17.1","@pdf-lib/fontkit":"^1.1.1","pdf-parse":"^2.4.5","csv-parse":"^6.1.0"}}' > /tmp/jacoworks-doc-packages/package.json
-	@cd /tmp/jacoworks-doc-packages && npm install --production --no-audit --no-fund --silent 2>/dev/null
+	@cd /tmp/jacoworks-doc-packages && npm install --production --no-optional --ignore-scripts --no-audit --no-fund --silent 2>/dev/null
+	@find /tmp/jacoworks-doc-packages/node_modules -name "*.node" -delete 2>/dev/null || true
 	@mkdir -p desktop/src-tauri/resources
 	@tar -czf desktop/src-tauri/resources/doc-packages.tar.gz -C /tmp/jacoworks-doc-packages node_modules
 	@rm -rf /tmp/jacoworks-doc-packages

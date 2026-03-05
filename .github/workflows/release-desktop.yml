@@ -98,9 +98,12 @@ jobs:
           tar -czf desktop/src-tauri/resources/skills.tar.gz -C vm-agent/skills .
 
           # Bundle doc-packages (npm packages for document processing)
+          # Use --ignore-scripts --no-optional to avoid native binaries that break Apple notarization
           TMPD=$(mktemp -d)
           echo '{"private":true,"dependencies":{"mammoth":"^1.11.0","docx":"^9.6.0","exceljs":"^4.4.0","pdf-lib":"^1.17.1","@pdf-lib/fontkit":"^1.1.1","pdf-parse":"^2.4.5","csv-parse":"^6.1.0"}}' > "$TMPD/package.json"
-          (cd "$TMPD" && npm install --production --no-audit --no-fund --silent 2>/dev/null)
+          (cd "$TMPD" && npm install --production --no-optional --ignore-scripts --no-audit --no-fund --silent 2>/dev/null)
+          # Remove any .node native binaries that may have slipped through
+          find "$TMPD/node_modules" -name "*.node" -delete 2>/dev/null || true
           tar -czf desktop/src-tauri/resources/doc-packages.tar.gz -C "$TMPD" node_modules
           rm -rf "$TMPD"
 
