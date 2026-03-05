@@ -18,8 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini curl git ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Create non-root agent user
-RUN groupadd -g 1000 agent && useradd -u 1000 -g agent -m -d /home/agent agent
+# Use the existing 'bun' user (uid/gid 1000) from base image
+# Create agent home directory
+RUN mkdir -p /home/agent && chown bun:bun /home/agent
 
 WORKDIR /home/agent/app
 COPY --from=builder /app/node_modules ./node_modules
@@ -38,9 +39,9 @@ ENV MODE=server \
 
 # Create workspace and memory dirs
 RUN mkdir -p /home/agent/workspace /home/agent/memory && \
-    chown -R agent:agent /home/agent
+    chown -R bun:bun /home/agent
 
-USER agent
+USER bun
 EXPOSE 18789
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
