@@ -31,7 +31,7 @@ GIT_VERSION="2.47.1"
 GIT_RELEASE="v${GIT_VERSION}.windows.1"
 GIT_ARCHIVE="PortableGit-${GIT_VERSION}-64-bit.7z.exe"
 GIT_URL="https://github.com/git-for-windows/git/releases/download/${GIT_RELEASE}/${GIT_ARCHIVE}"
-GIT_SHA256="11cbbb3e831352a37f79105c8c9a84db57aab08a63b9f0e45ffe470bc434bf29"
+GIT_SHA256=""  # Not pinned: GitHub mirrors may rebuild the archive
 
 # Bun version & URL (standalone Windows x64 zip)
 BUN_VERSION="1.2.5"

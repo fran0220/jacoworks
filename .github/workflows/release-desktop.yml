@@ -85,7 +85,7 @@ jobs:
           name: vm-agent-sidecar
           path: sidecar-bin/
 
-      # 放置 sidecar 到 Tauri externalBin 位置 + 打包 skills
+      # 放置 sidecar 到 Tauri externalBin 位置 + 打包 skills + 构建资源
       - name: Prepare sidecar and resources
         shell: bash
         run: |
@@ -93,12 +93,21 @@ jobs:
           cp sidecar-bin/${{ matrix.sidecar }} desktop/src-tauri/binaries/${{ matrix.sidecar }}
           chmod +x desktop/src-tauri/binaries/${{ matrix.sidecar }} || true
 
+          # Pack skills archive
+          mkdir -p desktop/src-tauri/resources
           tar -czf desktop/src-tauri/resources/skills.tar.gz -C vm-agent/skills .
+
+          # Bundle doc-packages (npm packages for document processing)
+          TMPD=$(mktemp -d)
+          echo '{"private":true,"dependencies":{"mammoth":"^1.11.0","docx":"^9.6.0","exceljs":"^4.4.0","pdf-lib":"^1.17.1","@pdf-lib/fontkit":"^1.1.1","pdf-parse":"^2.4.5","csv-parse":"^6.1.0"}}' > "$TMPD/package.json"
+          (cd "$TMPD" && npm install --production --no-audit --no-fund --silent 2>/dev/null)
+          tar -czf desktop/src-tauri/resources/doc-packages.tar.gz -C "$TMPD" node_modules
+          rm -rf "$TMPD"
 
           echo "📦 Sidecar binary:"
           ls -lh desktop/src-tauri/binaries/
-          echo "📦 Skills archive:"
-          ls -lh desktop/src-tauri/resources/skills.tar.gz
+          echo "📦 Resources:"
+          ls -lh desktop/src-tauri/resources/
 
           # Verify sidecar is real (>= 1KB)
           SIDECAR_SIZE=$(stat -f%z "desktop/src-tauri/binaries/${{ matrix.sidecar }}" 2>/dev/null || stat -c%s "desktop/src-tauri/binaries/${{ matrix.sidecar }}" 2>/dev/null || echo 0)
