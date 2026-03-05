@@ -262,6 +262,12 @@ fn find_sidecar_binary() -> Option<PathBuf> {
     for name in candidates {
         let path = dir.join(&name);
         if path.exists() {
+            // Skip tiny dev placeholders; real bun-compiled binaries are much larger.
+            if let Ok(meta) = path.metadata() {
+                if meta.len() < 1024 {
+                    continue;
+                }
+            }
             return Some(path);
         }
     }
@@ -333,7 +339,7 @@ fn resolve_agent_paths(agent_dir: &str) -> Result<(PathBuf, PathBuf), String> {
 
     let mut tried_entries: Vec<String> = Vec::new();
     for candidate in candidates {
-        let resolved_dir = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        let resolved_dir = dunce::canonicalize(&candidate).unwrap_or(candidate);
         let entry = resolved_dir.join("dist").join("index.js");
         tried_entries.push(entry.display().to_string());
         if entry.exists() {
@@ -374,6 +380,11 @@ pub async fn start_agent(
             .path()
             .app_data_dir()
             .map(|dir| dir.join("skills"))
+            .unwrap_or_default();
+        let memory_root = app
+            .path()
+            .app_data_dir()
+            .map(|dir| dir.join("memory"))
             .unwrap_or_default();
 
         // Dual mode: production (compiled binary) vs dev (node + dist/index.js)
@@ -417,7 +428,7 @@ pub async fn start_agent(
             // 2. Dev fallback: monorepo vm-agent/skills/
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let dev_skills = manifest_dir.join("../../vm-agent/skills");
-            if let Ok(canonical) = std::fs::canonicalize(&dev_skills) {
+            if let Ok(canonical) = dunce::canonicalize(&dev_skills) {
                 if canonical.exists() && !skills_paths.iter().any(|p| PathBuf::from(p) == canonical) {
                     skills_paths.push(canonical.to_string_lossy().to_string());
                 }
@@ -488,11 +499,19 @@ pub async fn start_agent(
                     if let Ok(new_path) = std::env::join_paths(&all_paths) {
                         cmd.env("PATH", &new_path);
                     }
-
-                    cmd.env("CHERE_INVOKING", "1");
-                    cmd.env("MSYS2_PATH_TYPE", "inherit");
                 }
             }
+
+            cmd.env("CHERE_INVOKING", "1");
+            cmd.env("MSYS2_PATH_TYPE", "inherit");
+            cmd.env("MSYS2_ARG_CONV_EXCL", "*");
+            cmd.env("LANG", "C.UTF-8");
+            cmd.env("LC_ALL", "C.UTF-8");
+        }
+
+        if !memory_root.as_os_str().is_empty() {
+            std::fs::create_dir_all(&memory_root).ok();
+            cmd.env("MEMORY_ROOT_DIR", memory_root.to_string_lossy().as_ref());
         }
 
         cmd.env("MEMORY_ENABLED", "true")
@@ -510,6 +529,13 @@ pub async fn start_agent(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Make sidecar the leader of a new process group so killpg can reap descendants.
+            cmd.process_group(0);
+        }
+
         // Windows: hide the console window for the sidecar process
         #[cfg(windows)]
         {
@@ -518,8 +544,15 @@ pub async fn start_agent(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
+        // Apply caller-provided env vars, but protect enforced keys.
+        const PROTECTED_KEYS: &[&str] = &[
+            "MEMORY_ROOT_DIR", "USER_SKILLS_DIR", "AGENT_HOME_DIR",
+            "MEMORY_ENABLED", "HEARTBEAT_ENABLED", "CRON_ENABLED",
+        ];
         for (key, value) in &env_vars {
-            cmd.env(key, value);
+            if !PROTECTED_KEYS.contains(&key.as_str()) {
+                cmd.env(key, value);
+            }
         }
 
         let mut child = cmd
@@ -628,6 +661,9 @@ pub async fn start_agent(
         }
 
         if Instant::now() >= deadline {
+            if let Some(existing) = proc.as_mut() {
+                kill_process_tree(&mut existing.child);
+            }
             *proc = None;
             return Err("Agent ready handshake timed out".to_string());
         }
@@ -659,14 +695,44 @@ pub fn agent_rpc_send(command: serde_json::Value) -> Result<(), String> {
 pub fn stop_agent() -> Result<(), String> {
     let mut proc = AGENT_PROCESS.lock().unwrap();
     if let Some(process) = proc.as_mut() {
-        process
-            .child
-            .kill()
-            .map_err(|e| format!("Failed to kill agent: {}", e))?;
-        process.child.wait().ok();
+        kill_process_tree(&mut process.child);
     }
     *proc = None;
     Ok(())
+}
+
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        if pid > 0 {
+            // Try process-group termination first to clean up descendants.
+            unsafe {
+                libc::killpg(pid, libc::SIGTERM);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            unsafe {
+                libc::killpg(pid, libc::SIGKILL);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let pid = child.id();
+        if pid > 0 {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 // ───── User skills management ─────────────────────────────────
@@ -699,12 +765,10 @@ pub fn delete_user_skill(app: AppHandle, skill_id: String) -> Result<(), String>
         return Err(format!("Skill '{}' not found", skill_id));
     }
     // Ensure it's actually inside the user skills dir
-    let canonical_skill = skill_dir
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve skill path: {}", e))?;
-    let canonical_root = dir
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve skills root: {}", e))?;
+    let canonical_skill =
+        dunce::canonicalize(&skill_dir).map_err(|e| format!("Cannot resolve skill path: {}", e))?;
+    let canonical_root =
+        dunce::canonicalize(&dir).map_err(|e| format!("Cannot resolve skills root: {}", e))?;
     if !canonical_skill.starts_with(&canonical_root) {
         return Err("Skill path is outside user skills directory".to_string());
     }

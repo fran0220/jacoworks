@@ -4,12 +4,12 @@
 #
 # Defaults:
 #   skills_dir = vm-agent/skills
-#   db_url = postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks
+#   db_url = postgresql://postgres:$DB_PASSWORD@127.0.0.1:5432/jacoworks
 
 set -euo pipefail
 
 SKILLS_DIR="${1:-vm-agent/skills}"
-DB_URL="${2:-postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks}"
+DB_URL="${2:-postgresql://postgres:${DB_PASSWORD:-changeme}@127.0.0.1:5432/jacoworks}"
 
 if [[ ! -d "$SKILLS_DIR" ]]; then
   echo "❌ Skills directory not found: $SKILLS_DIR"

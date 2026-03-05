@@ -3,7 +3,7 @@ import hljs from "../lib/hljs-setup";
 import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
 import type { MouseEventHandler } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
 /* ---- File path detection ---- */
 
@@ -210,11 +210,10 @@ export default function Markdown({
       let assetUrl = thumbUrlCacheRef.current.get(filePath);
       if (!assetUrl) {
         try {
-          const resolved = await invoke<string>("resolve_file_path", {
+          assetUrl = await invoke<string>("read_file_base64", {
             path: filePath,
             workspace: workspacePath || null,
           });
-          assetUrl = convertFileSrc(resolved);
           thumbUrlCacheRef.current.set(filePath, assetUrl);
         } catch {
           node.classList.add("thumb-failed");
@@ -279,11 +278,10 @@ export default function Markdown({
       let assetUrl = thumbUrlCacheRef.current.get(localPath);
       if (!assetUrl) {
         try {
-          const resolved = await invoke<string>("resolve_file_path", {
+          assetUrl = await invoke<string>("read_file_base64", {
             path: localPath,
             workspace: workspacePath || null,
           });
-          assetUrl = convertFileSrc(resolved);
           thumbUrlCacheRef.current.set(localPath, assetUrl);
         } catch {
           node.alt = `[图片加载失败: ${localPath}]`;

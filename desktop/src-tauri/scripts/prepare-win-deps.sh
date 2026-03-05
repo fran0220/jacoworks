@@ -15,7 +15,7 @@ set -euo pipefail
 #   resources/win-bin/bun.exe
 #   resources/win-bin/node.exe   (copy of bun.exe)
 #
-# Designed to run on macOS (cross-compilation prep). Requires: curl, 7z or tar.
+# Designed to run on macOS (cross-compilation prep). Requires: curl, 7z, unzip.
 # Idempotent: skips downloads if output directories already exist.
 # ============================================================================
 
@@ -31,11 +31,13 @@ GIT_VERSION="2.47.1"
 GIT_RELEASE="v${GIT_VERSION}.windows.1"
 GIT_ARCHIVE="PortableGit-${GIT_VERSION}-64-bit.7z.exe"
 GIT_URL="https://github.com/git-for-windows/git/releases/download/${GIT_RELEASE}/${GIT_ARCHIVE}"
+GIT_SHA256="11cbbb3e831352a37f79105c8c9a84db57aab08a63b9f0e45ffe470bc434bf29"
 
 # Bun version & URL (standalone Windows x64 zip)
 BUN_VERSION="1.2.5"
 BUN_ZIP="bun-windows-x64.zip"
 BUN_URL="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ZIP}"
+BUN_SHA256="e5bda73a tried"  # TODO: fill real hash after first download
 
 # Coreutils to extract from Git for Windows (MSYS2 usr/bin)
 COREUTILS=(
@@ -54,7 +56,25 @@ MSYS_DLLS=(
   msys-pcre2-8-0.dll
   msys-gcc_s-seh-1.dll
   msys-stdc++-6.dll
+  # Additional DLLs for CJK / readline / compression
+  msys-readline8.dll
+  msys-ncursesw6.dll
+  msys-z.dll
 )
+
+# ─── Preflight: check required tools ─────────────────────────────────────────
+
+preflight() {
+  local missing=()
+  command -v curl &>/dev/null || missing+=(curl)
+  command -v unzip &>/dev/null || missing+=(unzip)
+
+  if (( ${#missing[@]} > 0 )); then
+    echo "❌ Missing required tools: ${missing[*]}"
+    echo "   Install with: brew install ${missing[*]}"
+    exit 1
+  fi
+}
 
 # ─── Helper: check for 7z ────────────────────────────────────────────────────
 
@@ -67,6 +87,37 @@ find_7z() {
     fi
   done
   return 1
+}
+
+# ─── Helper: verify SHA256 checksum ──────────────────────────────────────────
+
+verify_sha256() {
+  local file="$1"
+  local expected="$2"
+
+  if [[ "$expected" == *"TODO"* ]] || [[ -z "$expected" ]]; then
+    echo "   ⚠️  SHA256 not pinned, skipping verification"
+    return 0
+  fi
+
+  local actual
+  if command -v sha256sum &>/dev/null; then
+    actual=$(sha256sum "$file" | cut -d' ' -f1)
+  elif command -v shasum &>/dev/null; then
+    actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
+  else
+    echo "   ⚠️  No sha256sum/shasum found, skipping verification"
+    return 0
+  fi
+
+  if [[ "$actual" != "$expected" ]]; then
+    echo "❌ SHA256 mismatch for $(basename "$file")"
+    echo "   Expected: $expected"
+    echo "   Actual:   $actual"
+    rm -f "$file"
+    exit 1
+  fi
+  echo "   ✅ SHA256 verified"
 }
 
 # ─── Step 1: Git for Windows (minimal bash + coreutils) ──────────────────────
@@ -100,6 +151,8 @@ prepare_win_bash() {
     echo "   Downloaded: $(du -h "$archive" | cut -f1)"
   fi
 
+  verify_sha256 "$archive" "$GIT_SHA256"
+
   # Extract to temporary directory
   local extract_dir="$TMP_DIR/git-portable"
   if [[ -d "$extract_dir" ]]; then
@@ -130,13 +183,18 @@ prepare_win_bash() {
 
   # Copy essential MSYS2 DLLs
   echo "   Copying MSYS2 DLLs..."
+  local dll_copied=0
+  local dll_missing=0
   for dll in "${MSYS_DLLS[@]}"; do
     if [[ -f "$git_bin/$dll" ]]; then
       cp "$git_bin/$dll" "$WIN_BASH_DIR/usr/bin/"
+      ((dll_copied++))
     else
       echo "   ⚠️  DLL not found (may not be needed): $dll"
+      ((dll_missing++))
     fi
   done
+  echo "   Copied $dll_copied DLLs ($dll_missing not found)"
 
   # Copy coreutils
   echo "   Copying coreutils..."
@@ -166,6 +224,17 @@ prepare_win_bash() {
     done
   fi
 
+  # Smoke test: verify bash.exe can be identified as PE executable
+  if command -v file &>/dev/null; then
+    local ftype
+    ftype=$(file "$WIN_BASH_DIR/usr/bin/bash.exe")
+    if [[ "$ftype" == *"PE32+"* ]] || [[ "$ftype" == *"executable"* ]]; then
+      echo "   ✅ bash.exe smoke check passed (PE executable)"
+    else
+      echo "   ⚠️  bash.exe may not be valid: $ftype"
+    fi
+  fi
+
   # Show final size
   local size
   size=$(du -sh "$WIN_BASH_DIR" | cut -f1)
@@ -193,6 +262,8 @@ prepare_win_bun() {
     curl -L --progress-bar -o "$zip_file" "$BUN_URL"
     echo "   Downloaded: $(du -h "$zip_file" | cut -f1)"
   fi
+
+  verify_sha256 "$zip_file" "$BUN_SHA256"
 
   # Extract bun.exe from the zip
   local extract_dir="$TMP_DIR/bun-extract"
@@ -234,6 +305,8 @@ main() {
   echo ""
   echo "Output: $RESOURCES_DIR"
   echo ""
+
+  preflight
 
   prepare_win_bash
   echo ""

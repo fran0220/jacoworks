@@ -11,6 +11,11 @@ use serde_json::json;
 use tar::Archive as TarArchive;
 use zip::read::ZipArchive;
 
+/// Windows-safe canonicalize: strips problematic `\\?\` prefixes.
+fn safe_canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path)
+}
+
 fn allowed_roots(workspace: Option<&str>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(ws) = workspace {
@@ -28,13 +33,11 @@ fn allowed_roots(workspace: Option<&str>) -> Vec<PathBuf> {
 }
 
 fn validate_resolved_path(path: &Path, workspace: Option<&str>) -> Result<(), String> {
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot access path: {}", e))?;
+    let canonical_path = safe_canonicalize(path).map_err(|e| format!("Cannot access path: {}", e))?;
 
     let in_scope = allowed_roots(workspace)
         .into_iter()
-        .filter_map(|root| root.canonicalize().ok())
+        .filter_map(|root| safe_canonicalize(&root).ok())
         .any(|root| canonical_path.starts_with(root));
 
     if in_scope {
@@ -63,7 +66,7 @@ fn resolve_read_path(path: &str, workspace: Option<&str>) -> Result<PathBuf, Str
     let effective = expand_tilde(path).unwrap_or_else(|| PathBuf::from(path));
 
     if effective.is_absolute() {
-        if let Ok(canonical) = effective.canonicalize() {
+        if let Ok(canonical) = safe_canonicalize(&effective) {
             return Ok(canonical);
         }
         // Absolute path doesn't exist — try the filename in known workspaces
@@ -71,9 +74,7 @@ fn resolve_read_path(path: &str, workspace: Option<&str>) -> Result<PathBuf, Str
             let name_str = name.to_string_lossy();
             let fallback = resolve_path(&name_str, workspace);
             if fallback.exists() {
-                return fallback
-                    .canonicalize()
-                    .map_err(|e| format!("Cannot access path: {}", e));
+                return safe_canonicalize(&fallback).map_err(|e| format!("Cannot access path: {}", e));
             }
         }
         return Err(format!("Cannot access path: No such file or directory (os error 2)"));
@@ -184,6 +185,34 @@ fn resolve_file_path(path: String, workspace: Option<String>) -> Result<String, 
     Ok(full.display().to_string())
 }
 
+#[tauri::command]
+fn read_file_base64(
+    path: String,
+    workspace: Option<String>,
+    max_mb: Option<u32>,
+) -> Result<String, String> {
+    let full = resolve_read_path(&path, workspace.as_deref())?;
+    let limit = (max_mb.unwrap_or(20) as u64) * 1024 * 1024;
+    let meta = std::fs::metadata(&full).map_err(|e| format!("Cannot access file: {}", e))?;
+    if meta.len() > limit {
+        return Err(format!(
+            "File too large: {} bytes (limit {}MB)",
+            meta.len(),
+            limit / (1024 * 1024)
+        ));
+    }
+
+    let bytes = std::fs::read(&full).map_err(|e| format!("Read error: {}", e))?;
+    let ext = full
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let mime = ext_to_mime(&ext);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
 #[derive(serde::Serialize)]
 pub struct FilePreview {
     path: String,
@@ -261,6 +290,17 @@ fn ext_to_mime(ext: &str) -> &'static str {
         "svg" => "image/svg+xml",
         "webp" => "image/webp",
         "bmp" => "image/bmp",
+        "pdf" => "application/pdf",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "m4v" => "video/x-m4v",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
         _ => "application/octet-stream",
     }
 }
@@ -507,22 +547,52 @@ fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<Importe
     let mut results = Vec::with_capacity(files.len());
 
     for file in &files {
+        // Sanitize incoming names to prevent path traversal and Windows-illegal filenames.
+        let safe_name = file
+            .name
+            .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+            .trim_start_matches('.')
+            .trim_end_matches(['.', ' '])
+            .to_string();
+        let safe_name = if safe_name.is_empty() {
+            "unnamed".to_string()
+        } else {
+            // Reject Windows reserved device names
+            let stem_upper = Path::new(&safe_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_uppercase();
+            if matches!(
+                stem_upper.as_str(),
+                "CON" | "PRN" | "AUX" | "NUL"
+                    | "COM1" | "COM2" | "COM3" | "COM4" | "COM5"
+                    | "COM6" | "COM7" | "COM8" | "COM9"
+                    | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5"
+                    | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+            ) {
+                format!("_{}", safe_name)
+            } else {
+                safe_name
+            }
+        };
+
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&file.data)
             .map_err(|e| format!("Base64 decode failed for {}: {}", file.name, e))?;
 
-        let stem = Path::new(&file.name)
+        let stem = Path::new(&safe_name)
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or(&file.name)
+            .unwrap_or(&safe_name)
             .to_string();
-        let ext = Path::new(&file.name)
+        let ext = Path::new(&safe_name)
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| format!(".{}", e))
             .unwrap_or_default();
 
-        let mut dest = attachments_dir.join(&file.name);
+        let mut dest = attachments_dir.join(&safe_name);
         let mut counter = 1u32;
         while dest.exists() {
             dest = attachments_dir.join(format!("{}-{}{}", stem, counter, ext));
@@ -535,7 +605,7 @@ fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<Importe
         let final_name = dest
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(&file.name)
+            .unwrap_or(&safe_name)
             .to_string();
 
         results.push(ImportedFile {
@@ -549,7 +619,7 @@ fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<Importe
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -595,9 +665,19 @@ pub fn run() {
             reveal_in_finder,
             open_file_default,
             resolve_file_path,
+            read_file_base64,
             preview_file,
             import_files,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    app.run(|_app, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            let _ = sidecar::stop_agent();
+        }
+    });
 }

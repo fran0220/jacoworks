@@ -110,7 +110,7 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~
 ssh -L 5432:127.0.0.1:5432 jingao -N -f
 ```
 
-连接串: `postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks`
+连接串: `postgresql://postgres:$DB_PASSWORD@127.0.0.1:5432/jacoworks`（密码见 GitHub Secret `DB_PASSWORD`）
 
 ### 本地配置文件 (gitignore)
 

@@ -115,9 +115,11 @@ function resolveSkillsPaths(envVal?: string): string[] {
   const currentFile = fileURLToPath(import.meta.url);
   const vmAgentRoot = resolve(dirname(currentFile), "..");
   const defaultPaths = [
-    join(vmAgentRoot, "skills"),   // vm-agent/skills (monorepo & bundled)
-    "/shared/skills",              // container fallback
+    join(vmAgentRoot, "skills"), // vm-agent/skills (monorepo & bundled)
   ];
+  if (process.platform === "linux") {
+    defaultPaths.push("/shared/skills"); // container fallback
+  }
   return defaultPaths;
 }
 

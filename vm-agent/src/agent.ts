@@ -2,6 +2,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join, resolve, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createAgentSession,
   SessionManager,
@@ -276,7 +277,7 @@ function setupNodePath(cfg: Config): void {
   }
 
   // 2. Dev mode: vm-agent's own node_modules
-  const vmAgentRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+  const vmAgentRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const devNm = join(vmAgentRoot, "node_modules");
   if (existsSync(devNm)) {
     nodePaths.push(devNm);

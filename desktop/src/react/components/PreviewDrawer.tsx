@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import hljs from "../lib/hljs-setup";
 import {
   ArrowLeft,
@@ -165,6 +165,8 @@ export default function PreviewDrawer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [docHtml, setDocHtml] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewUrlLoading, setPreviewUrlLoading] = useState(false);
 
   // XLSX multi-sheet
   const [xlsxData, setXlsxData] = useState<XlsxResult | null>(null);
@@ -207,6 +209,8 @@ export default function PreviewDrawer({
       setPreview(null);
       setDocHtml(null);
       setXlsxData(null);
+      setPreviewUrl(null);
+      setPreviewUrlLoading(false);
       setError(null);
       return;
     }
@@ -215,6 +219,8 @@ export default function PreviewDrawer({
     setError(null);
     setDocHtml(null);
     setXlsxData(null);
+    setPreviewUrl(null);
+    setPreviewUrlLoading(false);
     setZoomLevel(1);
     setPanX(0);
     setPanY(0);
@@ -326,10 +332,52 @@ export default function PreviewDrawer({
     setTimeout(() => setCopied(false), 1500);
   }, [preview?.path]);
 
-  const previewUrl = useMemo(() => {
-    if (!preview) return null;
-    try { return convertFileSrc(preview.path); } catch { return null; }
-  }, [preview]);
+  useEffect(() => {
+    if (!preview) {
+      setPreviewUrl(null);
+      setPreviewUrlLoading(false);
+      return;
+    }
+
+    if (preview.category === "image") {
+      setPreviewUrl(preview.content || null);
+      setPreviewUrlLoading(false);
+      return;
+    }
+
+    if (preview.category !== "pdf" && preview.category !== "video" && preview.category !== "audio") {
+      setPreviewUrl(null);
+      setPreviewUrlLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    setPreviewUrl(null);
+    setPreviewUrlLoading(true);
+
+    invoke<string>("read_file_base64", {
+      path: preview.path,
+      workspace: workspace || null,
+    })
+      .then((url) => {
+        if (disposed) return;
+        setPreviewUrl(url);
+      })
+      .catch((err) => {
+        if (disposed) return;
+        console.error("[preview] read_file_base64 failed:", err);
+        setPreviewUrl(null);
+      })
+      .finally(() => {
+        if (!disposed) {
+          setPreviewUrlLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [preview, workspace]);
 
   /* ---- Image pan handlers ---- */
   const handleImageWheel = useCallback((e: React.WheelEvent) => {
@@ -487,12 +535,36 @@ export default function PreviewDrawer({
       }
 
       case "pdf":
+        if (previewUrlLoading) {
+          return (
+            <div className="preview-loading">
+              <LoaderCircle size={20} className="spinning" />
+              <span>加载中...</span>
+            </div>
+          );
+        }
         return previewUrl ? <PdfPreviewContent key={preview.path} fileUrl={previewUrl} /> : <BinaryInfo preview={preview} />;
 
       case "video":
+        if (previewUrlLoading) {
+          return (
+            <div className="preview-loading">
+              <LoaderCircle size={20} className="spinning" />
+              <span>加载中...</span>
+            </div>
+          );
+        }
         return previewUrl ? <VideoPreviewContent key={preview.path} fileUrl={previewUrl} /> : <BinaryInfo preview={preview} />;
 
       case "audio":
+        if (previewUrlLoading) {
+          return (
+            <div className="preview-loading">
+              <LoaderCircle size={20} className="spinning" />
+              <span>加载中...</span>
+            </div>
+          );
+        }
         return previewUrl ? <AudioPreviewContent key={preview.path} fileUrl={previewUrl} /> : <BinaryInfo preview={preview} />;
 
       case "archive":

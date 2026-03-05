@@ -94,7 +94,8 @@ export function createPowershellTool(): ToolDefinition<typeof PowershellParams> 
       const timeout = params.timeout ?? DEFAULT_TIMEOUT_MS;
 
       return new Promise((resolve) => {
-        const args = ["-NoProfile", "-NonInteractive", "-Command", params.command];
+        const utf8Preamble = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; ";
+        const args = ["-NoProfile", "-NonInteractive", "-Command", utf8Preamble + params.command];
         const child = spawn(exe, args, {
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,

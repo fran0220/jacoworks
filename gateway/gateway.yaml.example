@@ -10,7 +10,7 @@ auth:
   session_ttl_hours: 720
 
 database:
-  url: "postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks"
+  url: "postgresql://postgres:YOUR_DB_PASSWORD@127.0.0.1:5432/jacoworks"
 
 llm:
   proxy_url: "http://67.230.182.59:8317"

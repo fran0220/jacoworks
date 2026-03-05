@@ -28,7 +28,10 @@ jobs:
         working-directory: vm-agent
         run: |
           mkdir -p dist
-          bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
+          bun build --compile --target=bun-darwin-arm64  src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin
+          bun build --compile --target=bun-darwin-x64    src/index.ts --outfile dist/vm-agent-x86_64-apple-darwin
+          bun build --compile --target=bun-windows-x64   src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
+          echo "📦 Sidecar binaries:"
           ls -lh dist/vm-agent-*
       - uses: actions/upload-artifact@v4
         with:
@@ -42,6 +45,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-arm64
+            platform: darwin-aarch64
+            sidecar: vm-agent-aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+            label: macOS-x64
+            platform: darwin-x86_64
+            sidecar: vm-agent-x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
@@ -78,7 +91,7 @@ jobs:
         run: |
           mkdir -p desktop/src-tauri/binaries
           cp sidecar-bin/${{ matrix.sidecar }} desktop/src-tauri/binaries/${{ matrix.sidecar }}
-          chmod +x desktop/src-tauri/binaries/${{ matrix.sidecar }}
+          chmod +x desktop/src-tauri/binaries/${{ matrix.sidecar }} || true
 
           tar -czf desktop/src-tauri/resources/skills.tar.gz -C vm-agent/skills .
 
@@ -86,6 +99,23 @@ jobs:
           ls -lh desktop/src-tauri/binaries/
           echo "📦 Skills archive:"
           ls -lh desktop/src-tauri/resources/skills.tar.gz
+
+          # Verify sidecar is real (>= 1KB)
+          SIDECAR_SIZE=$(stat -f%z "desktop/src-tauri/binaries/${{ matrix.sidecar }}" 2>/dev/null || stat -c%s "desktop/src-tauri/binaries/${{ matrix.sidecar }}" 2>/dev/null || echo 0)
+          if [ "$SIDECAR_SIZE" -lt 1024 ]; then
+            echo "❌ Sidecar binary too small ($SIDECAR_SIZE bytes), likely a placeholder"
+            exit 1
+          fi
+          echo "✅ Sidecar size: $SIDECAR_SIZE bytes"
+
+      # Windows: prepare bundled bash + bun
+      - name: Prepare Windows dependencies
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # On Windows CI, use the script to download deps
+          # 7z is pre-installed on windows-latest
+          bash desktop/src-tauri/scripts/prepare-win-deps.sh
 
       - run: npm ci
         working-directory: desktop
@@ -204,6 +234,7 @@ jobs:
           SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
           SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
           SSH_HOST: ${{ secrets.JINGAO_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
           BASE_URL="https://jaco.jingao.club/releases/${VERSION}"
@@ -219,7 +250,7 @@ jobs:
 
           # 在 jingao 上通过 psql 写入 releases 表
           $SSH "$HOST" "
-            export PGPASSWORD='[REDACTED:password]'
+            export PGPASSWORD="${DB_PASSWORD}"
 
             # 创建 release 记录
             RELEASE_ID=\$(psql -h 127.0.0.1 -U postgres -d jacoworks -tAc \"
@@ -245,8 +276,15 @@ jobs:
                 *.dmg)           PLATFORM='darwin-aarch64' ;;
                 *.exe)           PLATFORM='windows-x86_64' ;;
                 *.tar.gz)
-                  if echo \"\$FILENAME\" | grep -qi 'darwin\\|macos\\|apple'; then
-                    PLATFORM='darwin-aarch64'
+                  if echo \"\$FILENAME\" | grep -qi 'darwin\|macos\|apple'; then
+                    # Distinguish arm64 vs x64 by filename
+                    if echo \"\$FILENAME\" | grep -qi 'aarch64\|arm64'; then
+                      PLATFORM='darwin-aarch64'
+                    elif echo \"\$FILENAME\" | grep -qi 'x86_64\|x64'; then
+                      PLATFORM='darwin-x86_64'
+                    else
+                      PLATFORM='darwin-aarch64'
+                    fi
                   fi
                   ;;
               esac
