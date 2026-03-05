@@ -265,15 +265,15 @@ jobs:
 
           # 在 jingao 上通过 psql 写入 releases 表
           $SSH "$HOST" "
-            export PGPASSWORD="${DB_PASSWORD}"
+            export PGPASSWORD=\"${DB_PASSWORD}\"
 
-            # 创建 release 记录
+            # 创建 release 记录 (trim whitespace from psql output)
             RELEASE_ID=\$(psql -h 127.0.0.1 -U postgres -d jacoworks -tAc \"
               INSERT INTO releases (id, version, notes, pub_date, is_latest)
               VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), false)
               ON CONFLICT (version) DO UPDATE SET notes = EXCLUDED.notes
               RETURNING id;
-            \")
+            \" | tr -d '[:space:]')
 
             echo \"Release ID: \$RELEASE_ID\"
 
@@ -285,21 +285,18 @@ jobs:
               # 跳过签名文件
               case \"\$FILENAME\" in *.sig) continue;; esac
 
-              # 推断平台
+              # 推断平台 (DMG: check filename for arch; EXE: windows)
               PLATFORM=''
               case \"\$FILENAME\" in
-                *.dmg)           PLATFORM='darwin-aarch64' ;;
-                *.exe)           PLATFORM='windows-x86_64' ;;
+                *aarch64*.dmg|*arm64*.dmg) PLATFORM='darwin-aarch64' ;;
+                *x64*.dmg|*x86_64*.dmg)   PLATFORM='darwin-x86_64' ;;
+                *.dmg)                     PLATFORM='darwin-aarch64' ;;
+                *.exe)                     PLATFORM='windows-x86_64' ;;
                 *.tar.gz)
-                  if echo \"\$FILENAME\" | grep -qi 'darwin\|macos\|apple'; then
-                    # Distinguish arm64 vs x64 by filename
-                    if echo \"\$FILENAME\" | grep -qi 'aarch64\|arm64'; then
-                      PLATFORM='darwin-aarch64'
-                    elif echo \"\$FILENAME\" | grep -qi 'x86_64\|x64'; then
-                      PLATFORM='darwin-x86_64'
-                    else
-                      PLATFORM='darwin-aarch64'
-                    fi
+                  if echo \"\$FILENAME\" | grep -qi 'aarch64\|arm64'; then
+                    PLATFORM='darwin-aarch64'
+                  elif echo \"\$FILENAME\" | grep -qi 'x86_64\|x64'; then
+                    PLATFORM='darwin-x86_64'
                   fi
                   ;;
               esac
