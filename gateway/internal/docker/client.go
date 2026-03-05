@@ -227,12 +227,30 @@ func (c *Client) GetIP(name string) (string, error) {
 }
 
 func (c *Client) getIPByInspect(name string) (string, error) {
-	tmpl := fmt.Sprintf("{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}")
-	out, err := c.docker("inspect", "--format", tmpl, name)
+	out, err := c.docker("inspect", name)
 	if err != nil {
 		return "", fmt.Errorf("docker inspect %s: %w", name, err)
 	}
-	return strings.TrimSpace(out), nil
+	// Parse JSON output to extract IP from NetworkSettings
+	var containers []struct {
+		NetworkSettings struct {
+			Networks map[string]struct {
+				IPAddress string `json:"IPAddress"`
+			} `json:"Networks"`
+		} `json:"NetworkSettings"`
+	}
+	if err := json.Unmarshal([]byte(out), &containers); err != nil {
+		return "", fmt.Errorf("parse docker inspect json: %w", err)
+	}
+	if len(containers) == 0 {
+		return "", fmt.Errorf("container %s not found", name)
+	}
+	for _, net := range containers[0].NetworkSettings.Networks {
+		if net.IPAddress != "" {
+			return net.IPAddress, nil
+		}
+	}
+	return "", nil
 }
 
 // List returns all containers matching the "agent-" prefix.
