@@ -30,17 +30,19 @@ type Proxy struct {
 	backend          ContainerBackend
 	freezer          Freezer
 	agentPort        int
+	dockerHostIP     string // Docker host WireGuard IP (e.g. "10.0.1.3")
 	token            string // GATEWAY_TOKEN for upstream auth
 	onContainerReady func(userID, containerName string)
 }
 
-func NewProxy(s *store.Store, backend ContainerBackend, freezer Freezer, agentPort int, token string) *Proxy {
+func NewProxy(s *store.Store, backend ContainerBackend, freezer Freezer, agentPort int, dockerHostIP, token string) *Proxy {
 	return &Proxy{
-		store:     s,
-		backend:   backend,
-		freezer:   freezer,
-		agentPort: agentPort,
-		token:     token,
+		store:        s,
+		backend:      backend,
+		freezer:      freezer,
+		agentPort:    agentPort,
+		dockerHostIP: dockerHostIP,
+		token:        token,
 	}
 }
 
@@ -81,7 +83,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer downstream.Close()
 
-	upstreamURL := p.upstreamURL(info.ContainerIP)
+	upstreamURL := p.upstreamURL(info)
 	upstream, _, err := websocket.DefaultDialer.Dial(upstreamURL, nil)
 	if err != nil {
 		log.Error().Err(err).Str("url", upstreamURL).Str("user_id", user.ID).Msg("agent ws: upstream dial failed")
@@ -103,8 +105,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // upstreamURL builds the vm-agent WebSocket URL with token auth.
-func (p *Proxy) upstreamURL(containerIP string) string {
-	url := fmt.Sprintf("ws://%s:%d", containerIP, p.agentPort)
+// Prefers host port mapping (dockerHostIP:hostPort) over container internal IP.
+func (p *Proxy) upstreamURL(info *store.ContainerInfo) string {
+	var host string
+	var port int
+	if info.HostPort > 0 && p.dockerHostIP != "" {
+		host = p.dockerHostIP
+		port = info.HostPort
+	} else {
+		host = info.ContainerIP
+		port = p.agentPort
+	}
+	url := fmt.Sprintf("ws://%s:%d", host, port)
 	if p.token != "" {
 		url += "?token=" + p.token
 	}

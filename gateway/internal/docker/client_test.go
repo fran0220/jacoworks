@@ -63,7 +63,7 @@ func (m *mockRunner) findCall(substr string) (mockCall, bool) {
 }
 
 func newTestClient(runner *mockRunner) *Client {
-	c := NewClient("opc@10.0.1.3", "jacoworks/vm-agent:latest", "agent-net", 18789)
+	c := NewClient("opc@10.0.1.3", "jacoworks/vm-agent:latest", "agent-net", 18789, "10.0.1.3")
 	c.runner = runner
 	return c
 }
@@ -77,7 +77,7 @@ func TestCreate(t *testing.T) {
 		"LLM_PROXY_KEY": "sk-test",
 	}
 
-	if err := c.Create("agent-user1", envVars); err != nil {
+	if err := c.Create("agent-user1", envVars, 0); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -183,8 +183,9 @@ func TestStatus(t *testing.T) {
 	c := newTestClient(m)
 
 	psJSON := `{"Names":"agent-user1","State":"running","Status":"Up 2 hours"}`
+	inspectJSON := `[{"NetworkSettings":{"Networks":{"agent-net":{"IPAddress":"172.18.0.5"}}}}]`
 	m.On("docker ps", psJSON, nil)
-	m.On("docker inspect", "172.18.0.5", nil)
+	m.On("docker inspect", inspectJSON, nil)
 
 	info, err := c.Status("agent-user1")
 	if err != nil {
@@ -220,7 +221,8 @@ func TestGetIP(t *testing.T) {
 	m := newMockRunner()
 	c := newTestClient(m)
 
-	m.On("docker inspect", "10.20.20.5", nil)
+	inspectJSON := `[{"NetworkSettings":{"Networks":{"agent-net":{"IPAddress":"10.20.20.5"}}}}]`
+	m.On("docker inspect", inspectJSON, nil)
 
 	ip, err := c.GetIP("agent-user1")
 	if err != nil {
@@ -238,7 +240,7 @@ func TestList(t *testing.T) {
 	psOut := `{"Names":"agent-user1","State":"running","Status":"Up 2 hours"}
 {"Names":"agent-user2","State":"paused","Status":"Up 1 hour (Paused)"}`
 	m.On("docker ps", psOut, nil)
-	m.On("docker inspect", "172.18.0.5", nil)
+	m.On("docker inspect", `[{"NetworkSettings":{"Networks":{"agent-net":{"IPAddress":"172.18.0.5"}}}}]`, nil)
 
 	list, err := c.List()
 	if err != nil {
@@ -261,7 +263,7 @@ func TestCreateError(t *testing.T) {
 
 	m.On("docker run", "Error: name already in use", fmt.Errorf("exit 125"))
 
-	err := c.Create("agent-user1", nil)
+	err := c.Create("agent-user1", nil, 0)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -294,7 +296,7 @@ func TestSSHCommandFormat(t *testing.T) {
 
 func TestLocalClient(t *testing.T) {
 	m := newMockRunner()
-	c := NewClient("local", "jacoworks/vm-agent:latest", "agent-net", 18789)
+	c := NewClient("local", "jacoworks/vm-agent:latest", "agent-net", 18789, "")
 	c.runner = m
 
 	c.docker("ps")

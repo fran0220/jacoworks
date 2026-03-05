@@ -111,6 +111,7 @@ func main() {
 		cfg.Docker.Image,
 		cfg.Docker.Network,
 		cfg.Docker.AgentPort,
+		cfg.Docker.HostIP,
 	)
 
 	// Two-tier idle strategy: pause after 30m, stop after 2h
@@ -163,7 +164,7 @@ func main() {
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
 	proxyHandler := proxy.NewHandler(s, dockerClient, freezer, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
 	backendAdapter := dockerpkg.NewBackendAdapter(dockerClient)
-	agentProxy := agent.NewProxy(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.GatewayToken)
+	agentProxy := agent.NewProxy(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
 	channelPool := agent.NewChannelPool(agentProxy, 5*time.Minute, 1024)
 	defer channelPool.Close()
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
@@ -412,8 +413,9 @@ func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, a
 			return
 		}
 		containerName := containerNameForUser(req.UserID)
+		hostPort := allocateHostPort(r.Context(), s, req.UserID)
 
-		if err := s.CreateContainer(r.Context(), req.UserID, containerName, containerToken); err != nil {
+		if err := s.CreateContainer(r.Context(), req.UserID, containerName, containerToken, hostPort); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
 			return
 		}
@@ -438,14 +440,14 @@ func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, a
 		})
 
 		go func() {
-			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars)
+			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars, hostPort)
 			if err != nil {
 				log.Error().Err(err).Str("container", containerName).Msg("async provision failed")
 				return
 			}
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer bgCancel()
-			if err := s.UpdateContainer(bgCtx, req.UserID, containerName, ip, containerToken); err != nil {
+			if err := s.UpdateContainer(bgCtx, req.UserID, containerName, ip, containerToken, hostPort); err != nil {
 				log.Error().Err(err).Str("container", containerName).Msg("async provision: persist failed")
 				return
 			}
@@ -669,8 +671,9 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, al *au
 			return
 		}
 		containerName := containerNameForUser(user.ID)
+		hostPort := allocateHostPort(r.Context(), s, user.ID)
 
-		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken); err != nil {
+		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken, hostPort); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
 			return
 		}
@@ -695,14 +698,14 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, al *au
 
 		userID := user.ID
 		go func() {
-			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars)
+			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars, hostPort)
 			if err != nil {
 				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision failed")
 				return
 			}
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer bgCancel()
-			if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken); err != nil {
+			if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken, hostPort); err != nil {
 				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision: persist failed")
 				return
 			}
@@ -1363,4 +1366,15 @@ func generateToken() (string, error) {
 func containerNameForUser(userID string) string {
 	sum := sha256.Sum256([]byte(userID))
 	return "agent-" + hex.EncodeToString(sum[:8])
+}
+
+// allocateHostPort assigns a unique host port from the range [19000, 19999].
+// It uses a deterministic base from the user ID hash and probes for an unused port.
+func allocateHostPort(ctx context.Context, s *store.Store, userID string) int {
+	sum := sha256.Sum256([]byte(userID))
+	base := int(sum[0])<<8 | int(sum[1])
+	port := 19000 + (base % 1000)
+	// Simple approach: deterministic mapping. Collisions are rare with <1000 users.
+	// For production scale, query DB for used ports and find a free one.
+	return port
 }

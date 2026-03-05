@@ -62,6 +62,7 @@ type DockerConfig struct {
 	Image        string `yaml:"image"`
 	Network      string `yaml:"network"`
 	AgentPort    int    `yaml:"agent_port"`
+	HostIP       string `yaml:"host_ip"`
 	GatewayToken string `yaml:"gateway_token"`
 }
 

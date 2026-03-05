@@ -344,7 +344,7 @@ func (c *UserChannel) run() {
 			continue
 		}
 
-		upstreamURL := c.pool.proxy.upstreamURL(info.ContainerIP)
+		upstreamURL := c.pool.proxy.upstreamURL(info)
 		upstream, err := dialWithRetry(upstreamURL, dialRetryTotal)
 		if err != nil {
 			log.Warn().Err(err).Str("user_id", c.userID).Str("url", upstreamURL).Msg("agent channel: upstream dial failed")

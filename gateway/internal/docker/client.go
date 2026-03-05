@@ -37,15 +37,17 @@ type Client struct {
 	image     string // e.g. "jacoworks/vm-agent:latest"
 	network   string // e.g. "agent-net"
 	agentPort int    // vm-agent port (default 18789)
+	hostIP    string // WireGuard IP to bind ports (e.g. "10.0.1.3")
 	runner    CommandRunner
 }
 
-func NewClient(sshTarget, image, network string, agentPort int) *Client {
+func NewClient(sshTarget, image, network string, agentPort int, hostIP string) *Client {
 	return &Client{
 		sshTarget: sshTarget,
 		image:     image,
 		network:   network,
 		agentPort: agentPort,
+		hostIP:    hostIP,
 		runner:    &execRunner{},
 	}
 }
@@ -70,14 +72,20 @@ func (c *Client) docker(args ...string) (string, error) {
 
 // Create creates and starts a new container from the configured image.
 // Environment variables are injected at creation time via -e flags.
-func (c *Client) Create(name string, envVars map[string]string) error {
-	log.Info().Str("name", name).Str("image", c.image).Msg("creating container")
+// If hostPort > 0, the container's agentPort is mapped to hostIP:hostPort.
+func (c *Client) Create(name string, envVars map[string]string, hostPort int) error {
+	log.Info().Str("name", name).Str("image", c.image).Int("host_port", hostPort).Msg("creating container")
 
 	args := []string{
 		"run", "-d",
 		"--name", name,
 		"--network", c.network,
 		"--restart", "unless-stopped",
+	}
+	// Bind to WireGuard IP only for security
+	if hostPort > 0 {
+		bindAddr := fmt.Sprintf("%s:%d:%d", c.hostIP, hostPort, c.agentPort)
+		args = append(args, "-p", bindAddr)
 	}
 	for k, v := range envVars {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
@@ -450,8 +458,30 @@ func (c *Client) PushSkillFiles(containerName string, files map[string]string) e
 	return nil
 }
 
+// WaitForHealthPort polls the agent health endpoint via host port mapping until ready.
+func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	healthURL := fmt.Sprintf("http://%s:%d/health", c.hostIP, hostPort)
+	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 %s", healthURL)
+
+	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
+
+	for time.Now().Before(deadline) {
+		out, err := c.ssh(curlCmd)
+		if err == nil {
+			code := strings.TrimSpace(strings.Trim(out, "'"))
+			if len(code) == 3 && code[0] >= '1' && code[0] <= '5' && code != "000" {
+				log.Info().Str("url", healthURL).Str("status", code).Msg("container healthy")
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("container at %s:%d not healthy after %s", c.hostIP, hostPort, timeout)
+}
+
 // ProvisionContainer creates a new container with env vars injected and waits for health.
-func (c *Client) ProvisionContainer(name, containerToken string, envVars map[string]string) (string, error) {
+func (c *Client) ProvisionContainer(name, containerToken string, envVars map[string]string, hostPort int) (string, error) {
 	log.Info().Str("name", name).Str("image", c.image).Msg("provisioning container")
 
 	// Merge all env vars including the container token
@@ -461,7 +491,7 @@ func (c *Client) ProvisionContainer(name, containerToken string, envVars map[str
 	}
 	allEnv["OPENCLAW_GATEWAY_TOKEN"] = containerToken
 
-	if err := c.Create(name, allEnv); err != nil {
+	if err := c.Create(name, allEnv, hostPort); err != nil {
 		return "", fmt.Errorf("create: %w", err)
 	}
 
@@ -473,8 +503,14 @@ func (c *Client) ProvisionContainer(name, containerToken string, envVars map[str
 		return "", fmt.Errorf("get ip: %w", err)
 	}
 
-	if err := c.WaitForHealth(ip, 30*time.Second); err != nil {
-		log.Warn().Err(err).Str("name", name).Msg("container started but health check failed")
+	if hostPort > 0 {
+		if err := c.WaitForHealthPort(hostPort, 30*time.Second); err != nil {
+			log.Warn().Err(err).Str("name", name).Msg("container started but health check failed")
+		}
+	} else {
+		if err := c.WaitForHealth(ip, 30*time.Second); err != nil {
+			log.Warn().Err(err).Str("name", name).Msg("container started but health check failed")
+		}
 	}
 
 	log.Info().Str("name", name).Str("ip", ip).Msg("container provisioned")

@@ -11,6 +11,7 @@ type ContainerInfo struct {
 	ContainerName  string
 	ContainerIP    string
 	ContainerToken string
+	HostPort       int
 }
 
 type Container struct {
@@ -30,22 +31,22 @@ type Container struct {
 func (s *Store) GetContainerInfo(ctx context.Context, userID string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0)
 		 FROM containers WHERE user_id = $1`,
 		userID,
-	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken)
+	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort)
 	if err != nil {
 		return nil, fmt.Errorf("get container info: %w", err)
 	}
 	return info, nil
 }
 
-func (s *Store) CreateContainer(ctx context.Context, userID, containerName, containerToken string) error {
+func (s *Store) CreateContainer(ctx context.Context, userID, containerName, containerToken string, hostPort int) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO containers (user_id, container_name, container_token, status)
-		 VALUES ($1, $2, $3, 'creating')
-		 ON CONFLICT (user_id) DO UPDATE SET container_name = $2, container_token = $3`,
-		userID, containerName, containerToken,
+		`INSERT INTO containers (user_id, container_name, container_token, host_port, status)
+		 VALUES ($1, $2, $3, $4, 'creating')
+		 ON CONFLICT (user_id) DO UPDATE SET container_name = $2, container_token = $3, host_port = $4`,
+		userID, containerName, containerToken, hostPort,
 	)
 	return err
 }
@@ -58,11 +59,11 @@ func (s *Store) UpdateContainerIP(ctx context.Context, userID, ip string) error 
 	return err
 }
 
-func (s *Store) UpdateContainer(ctx context.Context, userID, name, ip, token string) error {
+func (s *Store) UpdateContainer(ctx context.Context, userID, name, ip, token string, hostPort int) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE containers SET container_name = $1, container_ip = $2::inet, container_token = $3, status = 'running'
-		 WHERE user_id = $4`,
-		name, ip, token, userID,
+		`UPDATE containers SET container_name = $1, container_ip = $2::inet, container_token = $3, host_port = $4, status = 'running'
+		 WHERE user_id = $5`,
+		name, ip, token, hostPort, userID,
 	)
 	return err
 }
