@@ -193,6 +193,24 @@ function skip(): boolean {
   return false;
 }
 
+async function expectPromptSuccess(opts: {
+  sessionId: string;
+  userId: string;
+  model?: string;
+}) {
+  const payload: Record<string, unknown> = {
+    type: "prompt",
+    message: "Reply: PONG",
+    session_id: opts.sessionId,
+    user_id: opts.userId,
+  };
+  if (opts.model) payload.model = opts.model;
+
+  const result = await client.collectSessionEvents(payload);
+  expect(result.response.success).toBe(true);
+  expect(result.errors.length).toBe(0);
+}
+
 // ─── Setup / Teardown ───────────────────────────────
 
 beforeAll(async () => {
@@ -525,6 +543,181 @@ describe("7. Session 生命周期", () => {
     return (async () => {
       const resp = await client.request({ type: "abort", session_id: "nonexistent-xyz" });
       expect(resp.type).toBe("response");
+    })();
+  });
+});
+
+// ═══════════════════════════════════════════
+//  8. 多模型切换
+// ═══════════════════════════════════════════
+
+describe("8. 多模型切换", () => {
+  test("gpt-5.4 路由成功", () => {
+    if (skip()) return;
+    return expectPromptSuccess({
+      sessionId: "model-switch-gpt52",
+      userId: env!.admin.id,
+      model: "gpt-5.4",
+    });
+  });
+
+  test("gemini-3-flash-preview 路由成功", () => {
+    if (skip()) return;
+    return expectPromptSuccess({
+      sessionId: "model-switch-gemini-flash",
+      userId: env!.admin.id,
+      model: "gemini-3-flash-preview",
+    });
+  });
+
+  test("grok-4.1-fast 路由成功", () => {
+    if (skip()) return;
+    return expectPromptSuccess({
+      sessionId: "model-switch-grok",
+      userId: env!.admin.id,
+      model: "grok-4.1-fast",
+    });
+  });
+
+  test("glm-5 路由成功", () => {
+    if (skip()) return;
+    return expectPromptSuccess({
+      sessionId: "model-switch-glm",
+      userId: env!.admin.id,
+      model: "glm-5",
+    });
+  });
+
+  test("显式 provider 路由 proxy-claude/claude-haiku-4-5 成功", () => {
+    if (skip()) return;
+    return expectPromptSuccess({
+      sessionId: "model-switch-claude-explicit",
+      userId: env!.admin.id,
+      model: "proxy-claude/claude-haiku-4-5",
+    });
+  });
+
+  test("无效 model 返回错误但进程不崩溃", () => {
+    if (skip()) return;
+    return (async () => {
+      const result = await client.collectSessionEvents({
+        type: "prompt",
+        message: "Reply: PONG",
+        session_id: "model-switch-invalid",
+        user_id: env!.admin.id,
+        model: "nonexistent-model",
+      });
+
+      expect(result.response.success).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(String(result.errors[0]?.error || "")).toContain("unsupported model");
+
+      // 进程应继续可用
+      const health = await client.request({ type: "health" });
+      expect(health.success).toBe(true);
+    })();
+  });
+
+  test("不指定 model 时使用 PRIMARY_MODEL 默认值", () => {
+    if (skip()) return;
+    return expectPromptSuccess({
+      sessionId: "model-switch-default",
+      userId: env!.admin.id,
+    });
+  });
+});
+
+// ═══════════════════════════════════════════
+//  9. Sidecar 启动行为
+// ═══════════════════════════════════════════
+
+describe("9. Sidecar 启动行为", () => {
+  let startupClient: RpcClient | null = null;
+  let startupWorkspace = "";
+  let startupMemory = "";
+
+  beforeAll(async () => {
+    if (skip()) return;
+
+    startupWorkspace = mkdtempSync(join(tmpdir(), "e2e-sidecar-ws-"));
+    startupMemory = mkdtempSync(join(tmpdir(), "e2e-sidecar-mem-"));
+
+    const proc = spawn({
+      cmd: ["bun", ENTRY],
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        LLM_PROXY_URL: env!.config.llmProxyUrl,
+        LLM_PROXY_KEY: env!.config.llmProxyKey,
+        EMBEDDING_API_KEY: env!.config.embeddingApiKey,
+        EMBEDDING_BASE_URL: env!.config.embeddingBaseUrl,
+        WORKSPACE_DIR: startupWorkspace,
+        MEMORY_ROOT_DIR: startupMemory,
+        MEMORY_ENABLED: "true",
+        HEARTBEAT_ENABLED: "false",
+        CRON_ENABLED: "false",
+        PRIMARY_MODEL: "claude-sonnet-4-6",
+        PRIMARY_PROVIDER: "proxy-claude",
+      },
+    });
+
+    startupClient = new RpcClient(proc);
+  });
+
+  afterAll(() => {
+    startupClient?.kill();
+    if (startupWorkspace) rmSync(startupWorkspace, { recursive: true, force: true });
+    if (startupMemory) rmSync(startupMemory, { recursive: true, force: true });
+  });
+
+  test("ready 事件在 20s 内到达", () => {
+    if (skip() || !startupClient) return;
+    return (async () => {
+      const ready = await startupClient.waitReady();
+      expect(ready.type).toBe("ready");
+    })();
+  });
+
+  test("ready 事件包含非空 skills 列表", () => {
+    if (skip() || !startupClient) return;
+    return (async () => {
+      const ready = startupClient.allMessages.find((m) => m.type === "ready") ?? await startupClient.waitReady();
+      const skills = ready.skills as unknown[];
+      expect(Array.isArray(skills)).toBe(true);
+      expect(skills.length).toBeGreaterThan(0);
+    })();
+  });
+
+  test("health 命令返回 success", () => {
+    if (skip() || !startupClient) return;
+    return (async () => {
+      const health = await startupClient.request({ type: "health" });
+      expect(health.success).toBe(true);
+      expect((health.data as Record<string, unknown>).status).toBe("ok");
+    })();
+  });
+
+  test("list_skills 返回技能列表", () => {
+    if (skip() || !startupClient) return;
+    return (async () => {
+      const resp = await startupClient.request({ type: "list_skills" });
+      expect(resp.success).toBe(true);
+      const skills = (resp.data as Record<string, unknown>).skills as unknown[];
+      expect(Array.isArray(skills)).toBe(true);
+      expect(skills.length).toBeGreaterThan(0);
+    })();
+  });
+
+  test("list_sessions 初始为空", () => {
+    if (skip() || !startupClient) return;
+    return (async () => {
+      const resp = await startupClient.request({ type: "list_sessions" });
+      expect(resp.success).toBe(true);
+      const sessions = (resp.data as Record<string, unknown>).sessions as unknown[];
+      expect(Array.isArray(sessions)).toBe(true);
+      expect(sessions.length).toBe(0);
     })();
   });
 });

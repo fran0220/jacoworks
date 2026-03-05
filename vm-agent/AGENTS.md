@@ -55,7 +55,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 | Provider | 模型 |
 |----------|------|
 | `proxy-claude` (anthropic) | claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5 |
-| `proxy-gpt` (openai) | gpt-5.3-codex, gpt-5.2 |
+| `proxy-gpt` (openai) | gpt-5.3-codex, gpt-5.4 |
 | `proxy-gemini` (openai) | gemini-3.1-pro-preview, gemini-3-flash-preview |
 | `proxy-grok` (openai) | grok-4.1-fast |
 | `proxy-glm` (openai) | glm-5 |
@@ -94,21 +94,30 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 - **持久化 (server)**: `{workspaceDir}/cron-jobs.json` + `{workspaceDir}/cron/runs/{jobId}.jsonl`
 - **持久化 (sidecar)**: Gateway PostgreSQL `cron_jobs` 表
 
-## 测试 (5 层)
+## 测试矩阵（持续扩展）
 
 | 层 | 命令 | 测试数 | 依赖 |
 |---|---|---|---|
 | **Unit** | `npm test` | 37 | 零网络，纯本地 SQLite |
 | **Cron Unit** | `bun test src/services/__tests__/cron.test.ts` | 20 | 零网络，mock prompt |
-| **Gateway API E2E** | `npm run test:gateway-e2e` | 75 | 真实网关 |
-| **RPC E2E** | `npm run test:e2e` | 15 | 真实网关 + LLM |
+| **Gateway API E2E** | `npm run test:gateway-e2e` | 80+ | 真实网关 |
+| **RPC Core E2E** | `bun test src/__tests__/rpc.test.ts --timeout 120000` | 27+ | 真实网关 + LLM |
+| **Extensions E2E (新增)** | `bun test src/__tests__/extensions.e2e.test.ts --timeout 120000` | ~12 | 真实网关 + LLM |
+| **Workspace E2E (新增)** | `bun test src/__tests__/workspace.e2e.test.ts --timeout 120000` | ~10 | 真实网关 + LLM + 本地文件系统 |
+| **Edge Cases E2E (新增)** | `bun test src/__tests__/edge-cases.e2e.test.ts --timeout 120000` | ~10 | 真实网关 + LLM |
 | **Cron E2E** | `bun test src/__tests__/cron.e2e.test.ts` | 7 | 真实网关 + LLM (cron_manage 全流程) |
 | **Journey E2E** | `npm run test:journeys` | 8 | 全链路场景 |
+| **Website Smoke Routes (跨服务)** | `cd ../website && cargo test --test smoke_routes` | 12+ | 官网服务路由可达性 |
 
 - **单元测试** (`src/lib/__tests__/`): memory-store (FTS5+CJK+hybrid+migration+cache) + daily-log
 - **Cron 单元测试** (`src/services/__tests__/cron.test.ts`): 三种调度、session 模式、deleteAfterRun、历史、退避、迁移
 - **Cron E2E** (`src/__tests__/cron.e2e.test.ts`): spawn 进程 → 真实 LLM 调用 cron_manage → 创建/列出/运行/历史/删除
-- **E2E RPC** (`src/__tests__/rpc.test.ts`): spawn 进程 → 真实网关认证 → LLM 对话 → 双用户隔离
+- **E2E RPC Core** (`src/__tests__/rpc.test.ts`): spawn 进程 → 真实网关认证 → 双用户隔离 + 多模型切换 + sidecar 启动行为
+- **Extensions E2E** (`src/__tests__/extensions.e2e.test.ts`): memory/read_document/generate_image/web_search 等扩展能力验证
+- **Workspace E2E** (`src/__tests__/workspace.e2e.test.ts`): 工作区读写、路径解析与文件操作隔离验证
+- **Edge Cases E2E** (`src/__tests__/edge-cases.e2e.test.ts`): 非法输入、边界参数、容错与回归场景
+- **Gateway API E2E 扩展** (`src/__tests__/gateway-api.e2e.test.ts`): 会话、认证、配置、代理与异常路径覆盖持续增加
+- **Website Smoke Routes** (`../website/tests/smoke_routes.rs`): 官网公开路由 + updater/health 等关键路径冒烟覆盖提升
 - **自动降级**: 网关不可达时 E2E 全部优雅跳过，单元测试始终可跑
 - `make check-agent` = typecheck + 单元测试 (CI 安全)
 

@@ -113,7 +113,7 @@ export class RpcClient {
     return this.waitFor((m) => m.id === id && m.type === "response");
   }
 
-  async collectSessionEvents(cmd: Record<string, unknown>): Promise<{
+  async collectSessionEvents(cmd: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<{
     response: RpcMessage;
     sessionEvents: RpcMessage[];
     done: RpcMessage;
@@ -129,10 +129,10 @@ export class RpcClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(new Error(
-          `collectSessionEvents timeout. response=${!!response}, events=${sessionEvents.length}\n` +
+          `collectSessionEvents timeout (${timeoutMs}ms). response=${!!response}, events=${sessionEvents.length}\n` +
           `Stderr: ${this.stderrChunks.join("").slice(-300)}`,
         ));
-      }, DEFAULT_TIMEOUT_MS);
+      }, timeoutMs);
 
       const check = (msg: RpcMessage) => {
         if (msg.id !== id) {

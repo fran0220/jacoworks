@@ -198,11 +198,16 @@ beforeAll(async () => {
     stderr: "pipe",
     env: {
       ...process.env,
+      // Force local cron path: disable sidecar gateway proxy even if parent env exports it.
+      MODE: "sidecar",
+      GATEWAY_URL: "",
+      GATEWAY_TOKEN: "",
       LLM_PROXY_URL: env.config.llmProxyUrl,
       LLM_PROXY_KEY: env.config.llmProxyKey,
       EMBEDDING_API_KEY: env.config.embeddingApiKey,
       EMBEDDING_BASE_URL: env.config.embeddingBaseUrl,
       WORKSPACE_DIR: tmpWorkspace,
+      AGENT_HOME_DIR: tmpWorkspace,
       MEMORY_ROOT_DIR: tmpMemory,
       MEMORY_ENABLED: "false",
       HEARTBEAT_ENABLED: "false",

@@ -63,6 +63,15 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
   }
 
   const requestedModel = resolveModel(command.model);
+  if (command.model && !requestedModel) {
+    const sessionId = command.session_id || "invalid-model";
+    const error = `unsupported model: ${command.model}`;
+    sendResponse(sender, id, command.type, false, { error });
+    sendError(sender, id, sessionId, error);
+    sendDone(sender, id, sessionId);
+    return;
+  }
+
   const modelKey = requestedModel
     ? `${requestedModel.provider}/${requestedModel.id}`
     : `${config.primaryProvider}/${config.primaryModel}`;

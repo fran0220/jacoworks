@@ -26,11 +26,17 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { setupTestEnv, type TestEnv } from "./helpers/gateway-config.js";
 import { createHash } from "node:crypto";
+import { Socket } from "node:net";
 
 // ─── Constants ──────────────────────────────────────
 
 const T = 10_000; // default fetch timeout ms
 const PREFIX = `e2e-api-${Date.now()}`;
+const WS_TIMEOUT = 8_000;
+const WS_EXPIRE_WAIT_MS = 31_000;
+const CONTAINER_POLL_TIMEOUT_MS = 45_000;
+const CONTAINER_POLL_INTERVAL_MS = 3_000;
+const AGENT_TCP_PORT = 18_789;
 
 const ADMIN_CREDS = { username: "admin@jacoworks.local", password: "admin123" };
 const USER_CREDS = { username: "e2e-tester", password: "e2e-test-2026" };
@@ -52,6 +58,13 @@ function skip(): boolean {
 }
 function skipNoUser(): boolean {
   if (!env?.user) { console.log("  → skipped (no e2e-tester)"); return true; }
+  return false;
+}
+function skipSlow(): boolean {
+  if (process.env.JACO_E2E_SLOW !== "1") {
+    console.log("  → skipped (set JACO_E2E_SLOW=1)");
+    return true;
+  }
   return false;
 }
 
@@ -82,6 +95,157 @@ async function login(creds: { username: string; password: string }): Promise<str
 
 function contentChecksum(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+type CoworkContainerStatus = {
+  provisioned: boolean;
+  container_name?: string;
+  container_ip?: string;
+  status?: string;
+};
+
+type WebSocketProbe = {
+  opened: boolean;
+  closeCode?: number;
+  closeReason?: string;
+  error?: string;
+};
+
+function wsAgentUrl(ticket: string): string {
+  const url = new URL(env!.gatewayUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/ws/agent";
+  url.search = `ticket=${encodeURIComponent(ticket)}`;
+  return url.toString();
+}
+
+function wsAgentPath(ticket: string): string {
+  return `/ws/agent?ticket=${encodeURIComponent(ticket)}`;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function issueWsTicket(token: string): Promise<string> {
+  const res = await api("/api/oc/ws-ticket", { method: "POST", token });
+  expect(res.status).toBe(200);
+  const data = await json<{ ticket: string }>(res);
+  expect(typeof data.ticket).toBe("string");
+  expect(data.ticket.length).toBeGreaterThan(10);
+  return data.ticket;
+}
+
+function expectContainerStatusShape(data: CoworkContainerStatus): void {
+  expect(typeof data.provisioned).toBe("boolean");
+  if (data.container_name !== undefined) {
+    expect(typeof data.container_name).toBe("string");
+  }
+  if (data.container_ip !== undefined) {
+    expect(typeof data.container_ip).toBe("string");
+  }
+  if (data.status !== undefined) {
+    expect(typeof data.status).toBe("string");
+  }
+
+  if (data.provisioned) {
+    expect(typeof data.container_name).toBe("string");
+  }
+}
+
+async function fetchContainerStatus(token: string): Promise<CoworkContainerStatus> {
+  const res = await api("/api/cowork/container-status", { token });
+  expect(res.status).toBe(200);
+  const data = await json<CoworkContainerStatus>(res);
+  expectContainerStatusShape(data);
+  return data;
+}
+
+function isContainerReady(data: CoworkContainerStatus): boolean {
+  return data.provisioned
+    && typeof data.container_name === "string" && data.container_name.length > 0
+    && typeof data.container_ip === "string" && data.container_ip.length > 0;
+}
+
+async function waitForContainerReady(token: string): Promise<CoworkContainerStatus | null> {
+  const deadline = Date.now() + CONTAINER_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const data = await fetchContainerStatus(token);
+    if (isContainerReady(data)) {
+      return data;
+    }
+    await sleep(CONTAINER_POLL_INTERVAL_MS);
+  }
+  return null;
+}
+
+async function canConnectTCP(host: string, port: number, timeoutMs = 3_000): Promise<boolean> {
+  if (!host.trim()) return false;
+
+  return new Promise((resolve) => {
+    const socket = new Socket();
+    let settled = false;
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    socket.connect(port, host);
+  });
+}
+
+async function probeWebSocket(url: string, timeoutMs = WS_TIMEOUT): Promise<WebSocketProbe> {
+  return new Promise((resolve) => {
+    let opened = false;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const ws = new WebSocket(url);
+
+    const finish = (result: WebSocketProbe) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        try {
+          ws.close();
+        } catch {
+          // best effort close
+        }
+      }
+
+      resolve(result);
+    };
+
+    timer = setTimeout(() => {
+      finish({ opened, error: "timeout" });
+    }, timeoutMs);
+
+    ws.onopen = () => {
+      opened = true;
+      finish({ opened: true });
+    };
+
+    ws.onerror = () => {
+      finish({ opened: false, error: "error" });
+    };
+
+    ws.onclose = (event) => {
+      finish({
+        opened,
+        closeCode: event.code,
+        closeReason: event.reason || undefined,
+      });
+    };
+  });
 }
 
 // ─── Setup / Teardown ───────────────────────────────
@@ -858,6 +1022,11 @@ describe("9. 管理员 API", () => {
 // ═══════════════════════════════════════════════════════
 
 describe("10. 聊天代理", () => {
+  // 注: /v1/chat/completions 是 Gateway → ChatAgent 的代理端点。
+  // 当前无 shared ChatAgent 运行 (chat_agent.url → 127.0.0.1:18790 未部署)，
+  // 因此只验证路由存在 + 认证要求，不测试实际 LLM 响应。
+  // 实际 LLM 对话通过 sidecar RPC 测试 (rpc.test.ts)。
+
   test("POST /v1/chat/completions — 无 auth → 401", async () => {
     if (skip()) return;
     const res = await api("/v1/chat/completions", {
@@ -870,10 +1039,8 @@ describe("10. 聊天代理", () => {
     expect(res.status).toBe(401);
   });
 
-  test("POST /v1/chat/completions — admin 可访问 (路由存在)", async () => {
+  test("POST /v1/chat/completions — admin 认证通过 (路由+代理存在)", async () => {
     if (skip()) return;
-    // 注: 实际代理到 ChatAgent，可能返回 502/503 如果后端不可达
-    // 这里只验证路由和认证正常工作
     const res = await api("/v1/chat/completions", {
       method: "POST",
       token: adminToken,
@@ -882,7 +1049,7 @@ describe("10. 聊天代理", () => {
         messages: [{ role: "user", content: "reply PONG" }],
       }),
     }, 15_000);
-    // 路由通过认证 → 不是 401/403
+    // 认证通过 → 不是 401/403; 502 = ChatAgent 未运行 (预期)
     expect(res.status).not.toBe(401);
     expect(res.status).not.toBe(403);
   });
@@ -895,19 +1062,12 @@ describe("10. 聊天代理", () => {
 describe("11. Cowork Bridge", () => {
   test("POST /api/oc/ws-ticket — admin 签发 ticket", async () => {
     if (skip()) return;
-    const res = await api("/api/oc/ws-ticket", { method: "POST", token: adminToken });
-    expect(res.status).toBe(200);
-    const data = await json<{ ticket: string }>(res);
-    expect(typeof data.ticket).toBe("string");
-    expect(data.ticket.length).toBeGreaterThan(10);
+    await issueWsTicket(adminToken);
   });
 
   test("POST /api/oc/ws-ticket — user 也可签发", async () => {
     if (skip() || skipNoUser()) return;
-    const res = await api("/api/oc/ws-ticket", { method: "POST", token: userToken });
-    expect(res.status).toBe(200);
-    const data = await json<{ ticket: string }>(res);
-    expect(data.ticket.length).toBeGreaterThan(10);
+    await issueWsTicket(userToken);
   });
 
   test("POST /api/oc/ws-ticket — 无 auth → 401", async () => {
@@ -916,9 +1076,90 @@ describe("11. Cowork Bridge", () => {
     expect(res.status).toBe(401);
   });
 
+  test("POST /api/oc/ws-ticket → GET /ws/agent 完整流程", async () => {
+    if (skip() || skipNoUser()) return;
+
+    const status = await fetchContainerStatus(userToken);
+    const ticket = await issueWsTicket(userToken);
+    const wsResult = await probeWebSocket(wsAgentUrl(ticket));
+
+    // 有容器时通常应能升级成功；若当前环境不允许 WS 升级，则退化验证桥接端点行为。
+    const fallbackTicket = await issueWsTicket(userToken);
+    const fallback = await api(wsAgentPath(fallbackTicket));
+
+    if (status.provisioned) {
+      if (!wsResult.opened) {
+        const bridgeStatus = await api("/api/oc/status", { token: userToken });
+        expect(bridgeStatus.status).toBe(200);
+        expect([400, 401, 502]).toContain(fallback.status);
+      }
+      return;
+    }
+
+    expect(wsResult.opened).toBe(false);
+    expect([401, 502]).toContain(fallback.status);
+  });
+
+  test("GET /ws/agent — invalid ticket 被拒绝", async () => {
+    if (skip()) return;
+
+    const invalidTicket = `${PREFIX}-invalid-ticket`;
+    const wsResult = await probeWebSocket(wsAgentUrl(invalidTicket));
+    expect(wsResult.opened).toBe(false);
+
+    const probe = await api(wsAgentPath(invalidTicket));
+    expect(probe.status).toBe(401);
+  });
+
+  test("GET /ws/agent — ticket 单次使用，重复连接被拒绝", async () => {
+    if (skip()) return;
+
+    const ticket = await issueWsTicket(adminToken);
+
+    // 第一次连接（成功或因无容器失败）都会消耗 ticket
+    await probeWebSocket(wsAgentUrl(ticket));
+
+    const second = await probeWebSocket(wsAgentUrl(ticket));
+    expect(second.opened).toBe(false);
+
+    const probe = await api(wsAgentPath(ticket));
+    expect(probe.status).toBe(401);
+  });
+
+  test("GET /ws/agent — 过期 ticket 被拒绝", async () => {
+    if (skip()) return;
+
+    const ticket = await issueWsTicket(adminToken);
+    await sleep(WS_EXPIRE_WAIT_MS);
+
+    const wsResult = await probeWebSocket(wsAgentUrl(ticket));
+    expect(wsResult.opened).toBe(false);
+
+    const probe = await api(wsAgentPath(ticket));
+    expect(probe.status).toBe(401);
+  });
+
+  test("POST /api/oc/ws-ticket — 并发 3 次返回不同 ticket", async () => {
+    if (skip() || skipNoUser()) return;
+
+    const tickets = await Promise.all(Array.from({ length: 3 }, () => issueWsTicket(userToken)));
+    expect(tickets.length).toBe(3);
+    expect(new Set(tickets).size).toBe(3);
+  });
+
   test("GET /api/oc/status — admin 查询状态", async () => {
     if (skip()) return;
     const res = await api("/api/oc/status", { token: adminToken });
+    expect(res.status).toBe(200);
+    const data = await json<{ connected: boolean; reconnecting: boolean; containerName: string }>(res);
+    expect(typeof data.connected).toBe("boolean");
+    expect(typeof data.reconnecting).toBe("boolean");
+    expect(typeof data.containerName).toBe("string");
+  });
+
+  test("GET /api/oc/status — user 查询状态", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api("/api/oc/status", { token: userToken });
     expect(res.status).toBe(200);
     const data = await json<{ connected: boolean; reconnecting: boolean; containerName: string }>(res);
     expect(typeof data.connected).toBe("boolean");
@@ -938,20 +1179,38 @@ describe("11. Cowork Bridge", () => {
 // ═══════════════════════════════════════════════════════
 
 describe("12. Cowork", () => {
-  test("GET /api/cowork/container-status — admin → 200", async () => {
+  test("GET /api/cowork/container-status — admin 返回结构正确", async () => {
     if (skip()) return;
-    const res = await api("/api/cowork/container-status", { token: adminToken });
-    expect(res.status).toBe(200);
-    const data = await json<{ provisioned: boolean }>(res);
-    expect(typeof data.provisioned).toBe("boolean");
+    await fetchContainerStatus(adminToken);
   });
 
-  test("GET /api/cowork/container-status — user → 200", async () => {
+  test("GET /api/cowork/container-status — user 返回结构正确", async () => {
     if (skip() || skipNoUser()) return;
-    const res = await api("/api/cowork/container-status", { token: userToken });
-    expect(res.status).toBe(200);
-    const data = await json<{ provisioned: boolean }>(res);
-    expect(typeof data.provisioned).toBe("boolean");
+    await fetchContainerStatus(userToken);
+  });
+
+  test("GET /api/cowork/container-status — 重复调用幂等", async () => {
+    if (skip()) return;
+
+    const first = await fetchContainerStatus(adminToken);
+    const second = await fetchContainerStatus(adminToken);
+
+    expect(second.provisioned).toBe(first.provisioned);
+    if (first.provisioned && second.provisioned) {
+      expect(second.container_name).toBe(first.container_name);
+    }
+  });
+
+  test("GET /api/cowork/container-status — 并发 5 次全部成功", async () => {
+    if (skip() || skipNoUser()) return;
+
+    const statuses = await Promise.all(
+      Array.from({ length: 5 }, () => fetchContainerStatus(userToken)),
+    );
+    expect(statuses.length).toBe(5);
+    for (const status of statuses) {
+      expectContainerStatusShape(status);
+    }
   });
 
   test("GET /api/cowork/container-status — 无 auth → 401", async () => {
@@ -960,11 +1219,43 @@ describe("12. Cowork", () => {
     expect(res.status).toBe(401);
   });
 
-  // 注: POST /api/cowork/provision 会实际分配容器，不在 API 测试中触发
-  // 改为验证路由存在 + 认证要求
   test("POST /api/cowork/provision — 无 auth → 401", async () => {
     if (skip()) return;
     const res = await api("/api/cowork/provision", { method: "POST" });
     expect(res.status).toBe(401);
+  });
+
+  test("POST /api/cowork/provision — user/admin 都可访问 (slow)", async () => {
+    if (skip() || skipNoUser() || skipSlow()) return;
+
+    const userRes = await api("/api/cowork/provision", {
+      method: "POST",
+      token: userToken,
+    }, 20_000);
+    expect([200, 202, 409]).toContain(userRes.status);
+
+    const adminRes = await api("/api/cowork/provision", {
+      method: "POST",
+      token: adminToken,
+    }, 20_000);
+    expect([200, 202, 409]).toContain(adminRes.status);
+  });
+
+  test("POST /api/cowork/provision — user 分配并轮询就绪 + TCP 可达 (slow)", async () => {
+    if (skip() || skipNoUser() || skipSlow()) return;
+
+    const provisionRes = await api("/api/cowork/provision", {
+      method: "POST",
+      token: userToken,
+    }, 20_000);
+    expect([200, 202, 409]).toContain(provisionRes.status);
+
+    const ready = await waitForContainerReady(userToken);
+    if (!ready || !ready.container_ip) {
+      throw new Error("container not ready before timeout (need container_ip)");
+    }
+
+    const reachable = await canConnectTCP(ready.container_ip, AGENT_TCP_PORT);
+    expect(reachable).toBe(true);
   });
 });
