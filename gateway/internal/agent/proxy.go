@@ -1,0 +1,295 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
+
+	"github.com/fran0220/jacoworks/gateway/internal/auth"
+	"github.com/fran0220/jacoworks/gateway/internal/store"
+)
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // CORS already handled by outer middleware
+	},
+	ReadBufferSize:  16 * 1024,
+	WriteBufferSize: 16 * 1024,
+}
+
+// Proxy handles WebSocket proxying between desktop clients and vm-agent containers.
+type Proxy struct {
+	store            *store.Store
+	backend          ContainerBackend
+	freezer          Freezer
+	agentPort        int
+	token            string // GATEWAY_TOKEN for upstream auth
+	onContainerReady func(userID, containerName string)
+}
+
+func NewProxy(s *store.Store, backend ContainerBackend, freezer Freezer, agentPort int, token string) *Proxy {
+	return &Proxy{
+		store:     s,
+		backend:   backend,
+		freezer:   freezer,
+		agentPort: agentPort,
+		token:     token,
+	}
+}
+
+// SetOnContainerReady sets a callback for when a container becomes ready after unfreeze/start.
+func (p *Proxy) SetOnContainerReady(fn func(userID, containerName string)) {
+	p.onContainerReady = fn
+}
+
+// ServeHTTP upgrades the connection and starts bidirectional proxying.
+func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	info, err := p.store.GetContainerInfo(r.Context(), user.ID)
+	if err != nil {
+		log.Error().Err(err).Str("user_id", user.ID).Msg("agent ws: no container provisioned")
+		http.Error(w, `{"error":"no container provisioned"}`, http.StatusBadGateway)
+		return
+	}
+
+	if p.freezer != nil {
+		p.freezer.Touch(info.ContainerName)
+	}
+
+	if err := p.ensureRunning(r.Context(), info, user.ID); err != nil {
+		log.Error().Err(err).Str("container", info.ContainerName).Msg("agent ws: container unavailable")
+		http.Error(w, `{"error":"container unavailable, try again"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	downstream, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Error().Err(err).Str("user_id", user.ID).Msg("agent ws: upgrade failed")
+		return
+	}
+	defer downstream.Close()
+
+	upstreamURL := p.upstreamURL(info.ContainerIP)
+	upstream, _, err := websocket.DefaultDialer.Dial(upstreamURL, nil)
+	if err != nil {
+		log.Error().Err(err).Str("url", upstreamURL).Str("user_id", user.ID).Msg("agent ws: upstream dial failed")
+		writeWSError(downstream, "upstream connection failed")
+		return
+	}
+	defer upstream.Close()
+
+	log.Info().
+		Str("user_id", user.ID).
+		Str("container", info.ContainerName).
+		Str("upstream", upstreamURL).
+		Msg("agent ws: connected, forwarding")
+
+	readyMsg, _ := json.Marshal(map[string]string{"type": "proxy.ready"})
+	_ = downstream.WriteMessage(websocket.TextMessage, readyMsg)
+
+	p.forward(downstream, upstream, user.ID, info.ContainerName)
+}
+
+// upstreamURL builds the vm-agent WebSocket URL with token auth.
+func (p *Proxy) upstreamURL(containerIP string) string {
+	url := fmt.Sprintf("ws://%s:%d", containerIP, p.agentPort)
+	if p.token != "" {
+		url += "?token=" + p.token
+	}
+	return url
+}
+
+// forward does zero-copy bidirectional message forwarding with heartbeat.
+func (p *Proxy) forward(downstream, upstream *websocket.Conn, userID, containerName string) {
+	var once sync.Once
+	done := make(chan struct{})
+	var downstreamWriteMu sync.Mutex
+	var upstreamWriteMu sync.Mutex
+
+	writeDownstream := func(msgType int, msg []byte) error {
+		downstreamWriteMu.Lock()
+		defer downstreamWriteMu.Unlock()
+		return downstream.WriteMessage(msgType, msg)
+	}
+
+	writeUpstream := func(msgType int, msg []byte) error {
+		upstreamWriteMu.Lock()
+		defer upstreamWriteMu.Unlock()
+		return upstream.WriteMessage(msgType, msg)
+	}
+
+	writeDownstreamControl := func(msgType int, data []byte, deadline time.Time) error {
+		downstreamWriteMu.Lock()
+		defer downstreamWriteMu.Unlock()
+		return downstream.WriteControl(msgType, data, deadline)
+	}
+
+	writeUpstreamControl := func(msgType int, data []byte, deadline time.Time) error {
+		upstreamWriteMu.Lock()
+		defer upstreamWriteMu.Unlock()
+		return upstream.WriteControl(msgType, data, deadline)
+	}
+
+	closeAll := func() {
+		once.Do(func() {
+			close(done)
+			_ = downstream.Close()
+			_ = upstream.Close()
+		})
+	}
+
+	// Downstream -> upstream (client messages to container).
+	go func() {
+		defer closeAll()
+		for {
+			msgType, msg, err := downstream.ReadMessage()
+			if err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws: downstream read error")
+				}
+				return
+			}
+
+			if msgType == websocket.TextMessage && isPingMessage(msg) {
+				pong, _ := json.Marshal(map[string]string{"type": "pong"})
+				if err := writeDownstream(websocket.TextMessage, pong); err != nil {
+					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws: downstream pong write error")
+					return
+				}
+
+				if p.freezer != nil {
+					p.freezer.Touch(containerName)
+				}
+				continue
+			}
+
+			if p.freezer != nil {
+				p.freezer.Touch(containerName)
+			}
+
+			if err := writeUpstream(msgType, msg); err != nil {
+				log.Debug().Err(err).Str("user_id", userID).Msg("agent ws: upstream write error")
+				return
+			}
+		}
+	}()
+
+	// Upstream -> downstream (container events to client).
+	go func() {
+		defer closeAll()
+		for {
+			msgType, msg, err := upstream.ReadMessage()
+			if err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws: upstream read error")
+				}
+				return
+			}
+
+			if err := writeDownstream(msgType, msg); err != nil {
+				log.Debug().Err(err).Str("user_id", userID).Msg("agent ws: downstream write error")
+				return
+			}
+		}
+	}()
+
+	// Server-side heartbeat: WS-level ping to detect dead connections.
+	go func() {
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				deadline := time.Now().Add(writeWait)
+				if err := writeDownstreamControl(websocket.PingMessage, nil, deadline); err != nil {
+					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws: downstream ping control write error")
+					return
+				}
+				if err := writeUpstreamControl(websocket.PingMessage, nil, deadline); err != nil {
+					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws: upstream ping control write error")
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	<-done
+	log.Info().Str("user_id", userID).Str("container", containerName).Msg("agent ws: session ended")
+}
+
+// ensureRunning checks and starts/unfreezes the container if needed.
+func (p *Proxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, userID string) error {
+	if p.backend == nil {
+		return nil
+	}
+
+	status, err := p.backend.Status(info.ContainerName)
+	if err != nil {
+		return fmt.Errorf("check status: %w", err)
+	}
+
+	switch strings.ToUpper(status) {
+	case "RUNNING":
+		if err := p.backend.WaitForHealth(info.ContainerName, info.ContainerIP); err == nil {
+			return nil
+		}
+		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("container running but service not healthy")
+		return fmt.Errorf("container running but not healthy")
+	case "FROZEN", "PAUSED":
+		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("unfreezing for ws")
+		if err := p.backend.Unfreeze(info.ContainerName); err != nil {
+			return err
+		}
+		if err := p.store.UpdateContainerStatusByName(ctx, info.ContainerName, "running"); err != nil {
+			return fmt.Errorf("update container status after unfreeze: %w", err)
+		}
+		if p.onContainerReady != nil {
+			go p.onContainerReady(userID, info.ContainerName)
+		}
+		return nil
+	case "STOPPED", "EXITED":
+		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("starting stopped container for ws")
+		if err := p.backend.Start(info.ContainerName); err != nil {
+			return err
+		}
+		if err := p.store.UpdateContainerStatusByName(ctx, info.ContainerName, "running"); err != nil {
+			return fmt.Errorf("update container status after start: %w", err)
+		}
+		if p.onContainerReady != nil {
+			go p.onContainerReady(userID, info.ContainerName)
+		}
+		return p.backend.WaitForHealth(info.ContainerName, info.ContainerIP)
+	default:
+		return fmt.Errorf("container in unexpected state: %s", status)
+	}
+}
+
+func isPingMessage(msg []byte) bool {
+	var m map[string]interface{}
+	if json.Unmarshal(msg, &m) == nil {
+		if t, ok := m["type"].(string); ok && t == "ping" {
+			return true
+		}
+	}
+	return false
+}
+
+func writeWSError(conn *websocket.Conn, errMsg string) {
+	msg, _ := json.Marshal(map[string]string{"type": "proxy.error", "error": errMsg})
+	_ = conn.WriteMessage(websocket.TextMessage, msg)
+}

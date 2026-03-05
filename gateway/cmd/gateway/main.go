@@ -22,16 +22,15 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/fran0220/jacoworks/gateway/internal/agent"
 	"github.com/fran0220/jacoworks/gateway/internal/audit"
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
 	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
-	"github.com/fran0220/jacoworks/gateway/internal/cowork"
+	dockerpkg "github.com/fran0220/jacoworks/gateway/internal/docker"
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	"github.com/fran0220/jacoworks/gateway/internal/games"
 	"github.com/fran0220/jacoworks/gateway/internal/github"
-	"github.com/fran0220/jacoworks/gateway/internal/lxd"
-	"github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/proxy"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
@@ -106,15 +105,16 @@ func main() {
 
 	auditLogger := audit.NewLogger(s.Pool())
 
-	// Initialize LXD client
-	lxdClient := lxd.NewSSHClient(
-		cfg.LXD.SSHTarget,
-		cfg.LXD.Template,
-		cfg.LXD.Network,
-		cfg.LXD.OpenClawPort,
+	// Initialize Docker client
+	dockerClient := dockerpkg.NewClient(
+		cfg.Docker.SSHTarget,
+		cfg.Docker.Image,
+		cfg.Docker.Network,
+		cfg.Docker.AgentPort,
 	)
 
-	freezer := lxd.NewFreezer(lxdClient, 5*24*time.Hour, 1*time.Hour)
+	// Two-tier idle strategy: pause after 30m, stop after 2h
+	freezer := dockerpkg.NewFreezer(dockerClient, 30*time.Minute, 2*time.Hour, 5*time.Minute)
 	freezer.Start()
 	defer freezer.Stop()
 
@@ -126,7 +126,7 @@ func main() {
 			log.Error().Err(err).Str("container", containerName).Msg("idle stop: lookup user failed")
 			return
 		}
-		files, err := lxdClient.PullMemoryFiles(containerName)
+		files, err := dockerClient.PullMemoryFiles(containerName)
 		if err != nil {
 			log.Error().Err(err).Str("container", containerName).Msg("idle stop: pull memory failed")
 			return
@@ -161,15 +161,15 @@ func main() {
 	// Initialize handlers
 	authMiddleware := auth.NewMiddleware(s, cfg.Auth.AdminToken)
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
-	proxyHandler := proxy.NewHandler(s, lxdClient, freezer, cfg.LXD.OpenClawPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
-	coworkHandler := cowork.NewHandler(s, lxdClient)
-	wsProxy := openclaw.NewWSProxy(s, lxdClient, freezer, cfg.LXD.OpenClawPort, "data")
-	channelPool := openclaw.NewChannelPool(wsProxy, 5*time.Minute, 1024)
+	proxyHandler := proxy.NewHandler(s, dockerClient, freezer, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
+	backendAdapter := dockerpkg.NewBackendAdapter(dockerClient)
+	agentProxy := agent.NewProxy(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.GatewayToken)
+	channelPool := agent.NewChannelPool(agentProxy, 5*time.Minute, 1024)
 	defer channelPool.Close()
-	wsTicketStore := openclaw.NewTicketStore(30 * time.Second)
+	wsTicketStore := agent.NewTicketStore(30 * time.Second)
 	defer wsTicketStore.Close()
-	wsHandler := openclaw.NewWSHandler(channelPool, wsTicketStore)
-	sseHandler := openclaw.NewSSEHandler(channelPool)
+	wsHandler := agent.NewWSHandler(channelPool, wsTicketStore)
+	sseHandler := agent.NewSSEHandler(channelPool)
 
 	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
@@ -196,7 +196,7 @@ func main() {
 
 	// Authenticated: sessions
 	mux.Handle("GET /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(listSessionsHandler(s))))
-	mux.Handle("POST /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(createSessionHandler(s, lxdClient))))
+	mux.Handle("POST /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(createSessionHandler(s, dockerClient))))
 	mux.Handle("GET /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(getSessionHandler(s))))
 	mux.Handle("PUT /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(updateSessionHandler(s))))
 	mux.Handle("DELETE /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteSessionHandler(s))))
@@ -214,10 +214,7 @@ func main() {
 
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
-	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, lxdClient, auditLogger, cfg, wsProxy))))
-	mux.Handle("POST /api/cowork/{sid}/upload", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Upload)))
-	mux.Handle("GET /api/cowork/{sid}/changes", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Changes)))
-	mux.Handle("GET /api/cowork/{sid}/download", authMiddleware.Authenticate(http.HandlerFunc(coworkHandler.Download)))
+	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, dockerClient, auditLogger, cfg))))
 
 	// Games (list is public, deploy/delete require auth)
 	mux.HandleFunc("GET /api/games", gamesHandler.List)
@@ -228,25 +225,26 @@ func main() {
 	// Authenticated: chat proxy
 	mux.Handle("POST /v1/chat/completions", authMiddleware.Authenticate(http.HandlerFunc(proxyHandler.ChatCompletions)))
 
-	// Authenticated: OpenClaw WebSocket proxy
-	mux.Handle("GET /ws/openclaw", authMiddleware.Authenticate(wsProxy))
+	// Authenticated: Agent WebSocket proxy (direct desktop ↔ container)
+	mux.Handle("GET /ws/openclaw", authMiddleware.Authenticate(agentProxy)) // legacy path
+	mux.Handle("GET /ws/agent", authMiddleware.Authenticate(agentProxy))    // new path
 
-	// OpenClaw browser WebSocket bridge (ticket auth)
+	// Agent browser WebSocket bridge (ticket auth)
 	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(wsTicketStore.IssueTicket)))
 	mux.Handle("GET /ws/oc", wsHandler)
 
-	// OpenClaw SSE/HTTP bridge (legacy compatibility)
+	// Agent SSE/HTTP bridge
 	mux.Handle("GET /api/oc/stream", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.StreamEvents)))
 	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
 	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
 
 	// Admin: container management
-	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(lxdClient)))))
-	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(lxdClient, s, auditLogger)))))
-	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(lxdClient, s, auditLogger)))))
+	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(dockerClient)))))
+	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(dockerClient, s, auditLogger)))))
+	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(dockerClient, s, auditLogger)))))
 
 	// Admin: user management (container provisioning after activation)
-	mux.Handle("POST /api/admin/provision", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(provisionContainerHandler(s, lxdClient, auditLogger, cfg, wsProxy)))))
+	mux.Handle("POST /api/admin/provision", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(provisionContainerHandler(s, dockerClient, auditLogger, cfg)))))
 
 	// Admin: invite codes
 	mux.Handle("POST /api/admin/invite-codes", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(createInviteCodeHandler(s)))))
@@ -344,7 +342,7 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func listContainersHandler(client *lxd.SSHClient) http.HandlerFunc {
+func listContainersHandler(client *dockerpkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		containers, err := client.List()
 		if err != nil {
@@ -355,7 +353,7 @@ func listContainersHandler(client *lxd.SSHClient) http.HandlerFunc {
 	}
 }
 
-func startContainerHandler(client *lxd.SSHClient, s *store.Store, al *audit.Logger) http.HandlerFunc {
+func startContainerHandler(client *dockerpkg.Client, s *store.Store, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		user := auth.GetUser(r.Context())
@@ -372,7 +370,7 @@ func startContainerHandler(client *lxd.SSHClient, s *store.Store, al *audit.Logg
 	}
 }
 
-func stopContainerHandler(client *lxd.SSHClient, s *store.Store, al *audit.Logger) http.HandlerFunc {
+func stopContainerHandler(client *dockerpkg.Client, s *store.Store, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		user := auth.GetUser(r.Context())
@@ -389,7 +387,7 @@ func stopContainerHandler(client *lxd.SSHClient, s *store.Store, al *audit.Logge
 	}
 }
 
-func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Logger, cfg *config.Config, wsProxy *openclaw.WSProxy) http.HandlerFunc {
+func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
 	type provisionRequest struct {
 		UserID   string `json:"user_id"`
 		Username string `json:"username"`
@@ -427,9 +425,11 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 			"OPENAI_API_KEY": llm.OpenAIAPIKey,
 			"FAL_API_KEY":    llm.FalAPIKey,
 		}
-		deviceKey := wsProxy.GetDeviceKeyInfo()
+		if cfg.Docker.GatewayToken != "" {
+			envVars["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken
+		}
 
-		// Respond immediately — provisioning runs in background (dir backend clone is slow)
+		// Respond immediately — provisioning runs in background
 		al.Log(admin.ID, "provision_container", "container", containerName, r.RemoteAddr)
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"user_id":   req.UserID,
@@ -438,7 +438,7 @@ func provisionContainerHandler(s *store.Store, lxdClient *lxd.SSHClient, al *aud
 		})
 
 		go func() {
-			ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
+			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars)
 			if err != nil {
 				log.Error().Err(err).Str("container", containerName).Msg("async provision failed")
 				return
@@ -543,7 +543,7 @@ func getSessionHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func createSessionHandler(s *store.Store, lxdClient *lxd.SSHClient) http.HandlerFunc {
+func createSessionHandler(s *store.Store, dockerClient *dockerpkg.Client) http.HandlerFunc {
 	type createSessionRequest struct {
 		Type          string `json:"type"`
 		WorkspacePath string `json:"workspace_path"`
@@ -567,23 +567,6 @@ func createSessionHandler(s *store.Store, lxdClient *lxd.SSHClient) http.Handler
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create session"})
 			return
-		}
-
-		if req.Type == "cowork" {
-			dir := filepath.Join("/data/cowork", user.ID, sess.ID)
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				log.Warn().Err(err).Str("user_id", user.ID).Str("session_id", sess.ID).Str("dir", dir).Msg("create cowork workspace directory failed")
-			}
-
-			info, err := s.GetContainerInfo(r.Context(), user.ID)
-			if err != nil {
-				log.Warn().Err(err).Str("user_id", user.ID).Str("session_id", sess.ID).Msg("load container info for cowork mount failed")
-			} else if info != nil && info.ContainerName != "" {
-				device := "cw-" + sess.ID[:12]
-				if err := lxdClient.MountDisk(info.ContainerName, device, dir, "/home/agent/cowork"); err != nil {
-					log.Warn().Err(err).Str("container", info.ContainerName).Str("session_id", sess.ID).Str("device", device).Msg("mount cowork workspace into container failed")
-				}
-			}
 		}
 
 		writeJSON(w, http.StatusCreated, sess)
@@ -662,7 +645,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 }
 
 // selfProvisionHandler allows a user to provision their own container for cowork mode.
-func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Logger, cfg *config.Config, wsProxy *openclaw.WSProxy) http.HandlerFunc {
+func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -699,9 +682,11 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 			"OPENAI_API_KEY": llm.OpenAIAPIKey,
 			"FAL_API_KEY":    llm.FalAPIKey,
 		}
-		deviceKey := wsProxy.GetDeviceKeyInfo()
+		if cfg.Docker.GatewayToken != "" {
+			envVars["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken
+		}
 
-		// Respond immediately — provisioning runs in background (dir backend clone is slow)
+		// Respond immediately — provisioning runs in background
 		al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"status":         "provisioning",
@@ -710,7 +695,7 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 
 		userID := user.ID
 		go func() {
-			ip, err := lxdClient.ProvisionContainer(containerName, containerToken, envVars, deviceKey)
+			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars)
 			if err != nil {
 				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision failed")
 				return
@@ -731,7 +716,7 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 				for _, f := range memFiles {
 					fileMap[f.FilePath] = f.Content
 				}
-				if err := lxdClient.PushMemoryFiles(containerName, fileMap); err != nil {
+				if err := dockerClient.PushMemoryFiles(containerName, fileMap); err != nil {
 					log.Error().Err(err).Str("container", containerName).Msg("provision: push memory failed")
 				}
 			}
@@ -742,7 +727,7 @@ func selfProvisionHandler(s *store.Store, lxdClient *lxd.SSHClient, al *audit.Lo
 					for _, f := range skillFiles {
 						fileMap[f.FilePath] = f.Content
 					}
-					if err := lxdClient.PushSkillFiles(containerName, fileMap); err != nil {
+					if err := dockerClient.PushSkillFiles(containerName, fileMap); err != nil {
 						log.Error().Err(err).Str("container", containerName).Msg("provision: push skills failed")
 					}
 				}
@@ -773,11 +758,12 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
+				{"id": "claude-haiku-4-5", "provider": "proxy-claude", "label": "Haiku 4.5"},
 				{"id": "gpt-5.3-codex", "provider": "proxy-gpt", "label": "GPT-5.3 Codex"},
 				{"id": "gpt-5.2", "provider": "proxy-gpt", "label": "GPT-5.2"},
 				{"id": "gemini-3.1-pro-preview", "provider": "proxy-gemini", "label": "Gemini 3.1 Pro"},
 				{"id": "gemini-3-flash-preview", "provider": "proxy-gemini", "label": "Gemini 3 Flash"},
-				{"id": "grok-4.20-beta", "provider": "proxy-grok", "label": "Grok 4.20"},
+				{"id": "grok-4.1-fast", "provider": "proxy-grok", "label": "Grok 4.1 Fast"},
 				{"id": "glm-5", "provider": "proxy-glm", "label": "GLM-5"},
 			},
 		})
@@ -1376,6 +1362,5 @@ func generateToken() (string, error) {
 
 func containerNameForUser(userID string) string {
 	sum := sha256.Sum256([]byte(userID))
-	// Deterministic 16-hex suffix avoids collisions from truncated IDs.
-	return "oc-" + hex.EncodeToString(sum[:8])
+	return "agent-" + hex.EncodeToString(sum[:8])
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
-	"github.com/fran0220/jacoworks/gateway/internal/lxd"
+	dockerpkg "github.com/fran0220/jacoworks/gateway/internal/docker"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -22,19 +22,19 @@ const ContainerMountPath = "/home/agent/cowork"
 
 type Handler struct {
 	store          *store.Store
-	lxdClient      *lxd.SSHClient
-	freezer        *lxd.Freezer
-	openclawPort   int
+	dockerClient   *dockerpkg.Client
+	freezer        *dockerpkg.Freezer
+	agentPort      int
 	chatAgentURL   string
 	chatAgentToken string
 }
 
-func NewHandler(s *store.Store, lxdClient *lxd.SSHClient, freezer *lxd.Freezer, openclawPort int, chatAgentURL, chatAgentToken string) *Handler {
+func NewHandler(s *store.Store, dockerClient *dockerpkg.Client, freezer *dockerpkg.Freezer, agentPort int, chatAgentURL, chatAgentToken string) *Handler {
 	return &Handler{
 		store:          s,
-		lxdClient:      lxdClient,
+		dockerClient:   dockerClient,
 		freezer:        freezer,
-		openclawPort:   openclawPort,
+		agentPort:      agentPort,
 		chatAgentURL:   chatAgentURL,
 		chatAgentToken: chatAgentToken,
 	}
@@ -126,7 +126,7 @@ func (h *Handler) proxyToContainer(w http.ResponseWriter, r *http.Request, user 
 
 	target := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%d", info.ContainerIP, h.openclawPort),
+		Host:   fmt.Sprintf("%s:%d", info.ContainerIP, h.agentPort),
 	}
 
 	proxy := &httputil.ReverseProxy{
@@ -193,35 +193,35 @@ func injectCoworkContext(r *http.Request, workspacePath string) {
 }
 
 func (h *Handler) ensureRunning(ctx context.Context, containerName, userID string) error {
-	if h.lxdClient == nil {
+	if h.dockerClient == nil {
 		return nil
 	}
 
-	status, err := h.lxdClient.Status(containerName)
+	info, err := h.dockerClient.Status(containerName)
 	if err != nil {
 		return fmt.Errorf("check status: %w", err)
 	}
 
-	switch strings.ToUpper(status.Status) {
+	switch strings.ToUpper(info.Status) {
 	case "RUNNING":
 		return nil
-	case "FROZEN":
-		log.Info().Str("container", containerName).Str("user_id", userID).Msg("unfreezing container")
-		if err := h.lxdClient.Unfreeze(containerName); err != nil {
+	case "PAUSED":
+		log.Info().Str("container", containerName).Str("user_id", userID).Msg("unpausing container")
+		if err := h.dockerClient.Unfreeze(containerName); err != nil {
 			return err
 		}
 		return h.store.UpdateContainerStatusByName(ctx, containerName, "running")
-	case "STOPPED":
+	case "EXITED":
 		log.Info().Str("container", containerName).Str("user_id", userID).Msg("starting stopped container")
-		if err := h.lxdClient.Start(containerName); err != nil {
+		if err := h.dockerClient.Start(containerName); err != nil {
 			return err
 		}
-		ip, err := h.lxdClient.GetIP(containerName)
+		ip, err := h.dockerClient.GetIP(containerName)
 		if err != nil {
 			return err
 		}
 		return h.store.UpdateContainerIP(ctx, userID, ip)
 	default:
-		return fmt.Errorf("container in unexpected state: %s", status.Status)
+		return fmt.Errorf("container in unexpected state: %s", info.Status)
 	}
 }

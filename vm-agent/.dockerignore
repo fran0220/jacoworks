@@ -1,0 +1,15 @@
+node_modules/
+dist/
+output/
+memory/
+.env
+.env.*
+!.env.template
+!.env.test.example
+*.log
+.DS_Store
+**/__tests__/
+**/*.test.ts
+**/*.spec.ts
+scripts/
+数据模板.xlsx

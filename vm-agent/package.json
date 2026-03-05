@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/index.ts",
+    "dev:server": "MODE=server bun --watch src/server.ts",
     "start": "bun dist/index.js",
+    "server": "bun src/server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "bun test src/lib/__tests__/",
@@ -19,6 +21,7 @@
     "compile:darwin-x64": "bun build --compile --target=bun-darwin-x64 src/index.ts --outfile dist/vm-agent-x86_64-apple-darwin",
     "compile:linux-x64": "bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/vm-agent-x86_64-unknown-linux-gnu",
     "compile:windows-x64": "bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe",
+    "compile:server:linux-arm64": "bun build --compile --target=bun-linux-arm64 src/server.ts --outfile dist/vm-agent-server-aarch64-unknown-linux-gnu",
     "compile:all": "npm run compile:darwin-arm64 && npm run compile:darwin-x64 && npm run compile:linux-x64 && npm run compile:windows-x64"
   },
   "dependencies": {

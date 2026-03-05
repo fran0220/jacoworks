@@ -1,0 +1,18 @@
+services:
+  vm-agent:
+    build: .
+    ports:
+      - "18789:18789"
+    environment:
+      - MODE=server
+      - LLM_PROXY_URL=${LLM_PROXY_URL}
+      - LLM_PROXY_KEY=${LLM_PROXY_KEY}
+      - GATEWAY_TOKEN=${GATEWAY_TOKEN:-dev-token}
+    volumes:
+      - agent-workspace:/home/agent/workspace
+      - agent-memory:/home/agent/memory
+    restart: unless-stopped
+
+volumes:
+  agent-workspace:
+  agent-memory:

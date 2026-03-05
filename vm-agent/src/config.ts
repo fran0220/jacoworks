@@ -4,6 +4,7 @@ import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface Config {
+  mode: "sidecar" | "server";
   port: number;
   gatewayToken: string;
   proxyUrl: string;
@@ -29,8 +30,6 @@ export interface Config {
   skillsPaths: string[];
   /** 用户自建技能目录 (可编辑) */
   userSkillsDir: string;
-  /** 远程技能目录 (从网关拉取, 最高优先) */
-  remoteSkillsDir: string;
   heartbeatEnabled: boolean;
   heartbeatIntervalMs: number;
   heartbeatActiveHours?: { start: string; end: string };
@@ -58,10 +57,6 @@ function defaultMemoryRootDir(): string {
 
 function defaultUserSkillsDir(): string {
   return join(defaultAppDataDir(), "skills");
-}
-
-function defaultRemoteSkillsDir(): string {
-  return join(defaultAppDataDir(), "remote-skills");
 }
 
 export function parseInterval(str: string): number {
@@ -150,11 +145,15 @@ export function loadConfig(): Config {
   const heartbeatActiveStart = process.env.HEARTBEAT_ACTIVE_START;
   const heartbeatActiveEnd = process.env.HEARTBEAT_ACTIVE_END;
 
+  const mode = (process.env.MODE === "server" ? "server" : "sidecar") as "sidecar" | "server";
+  const isServer = mode === "server";
+
   const openaiApiKey = process.env.OPENAI_API_KEY || "";
   const embeddingApiKey = process.env.EMBEDDING_API_KEY || openaiApiKey;
   const embeddingBaseUrl = process.env.EMBEDDING_BASE_URL || "https://api.openai.com/v1";
 
   return {
+    mode,
     port: parseInt(process.env.PORT || "18789", 10),
     gatewayToken: process.env.GATEWAY_TOKEN || "",
     proxyUrl,
@@ -173,14 +172,17 @@ export function loadConfig(): Config {
     memoryEnabled: process.env.MEMORY_ENABLED !== "false",
     skillsPaths: resolveSkillsPaths(process.env.SKILLS_PATHS),
     userSkillsDir: process.env.USER_SKILLS_DIR || defaultUserSkillsDir(),
-    remoteSkillsDir: process.env.REMOTE_SKILLS_DIR || defaultRemoteSkillsDir(),
-    heartbeatEnabled: process.env.HEARTBEAT_ENABLED === "true",
+    heartbeatEnabled: process.env.HEARTBEAT_ENABLED !== undefined
+      ? process.env.HEARTBEAT_ENABLED === "true"
+      : isServer,
     heartbeatIntervalMs: parseInterval(process.env.HEARTBEAT_INTERVAL || "30m"),
     heartbeatActiveHours:
       heartbeatActiveStart && heartbeatActiveEnd
         ? { start: heartbeatActiveStart, end: heartbeatActiveEnd }
         : undefined,
-    cronEnabled: process.env.CRON_ENABLED === "true",
+    cronEnabled: process.env.CRON_ENABLED !== undefined
+      ? process.env.CRON_ENABLED === "true"
+      : isServer,
     toolDenyList: (process.env.TOOL_DENY_LIST || "WebSearch,WebFetch")
       .split(",")
       .map((s) => s.trim())

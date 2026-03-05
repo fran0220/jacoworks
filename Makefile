@@ -4,11 +4,12 @@
 
 .PHONY: help dev dev-gateway dev-website dev-agent dev-desktop \
         build build-gateway build-website build-agent build-desktop \
-        bundle-doc-packages compile-agent \
+        bundle-doc-packages compile-agent prepare-win-deps \
         deploy deploy-gateway deploy-website push-skills \
         check check-gateway check-website check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
-        db-reset db-migrate clean
+        db-reset db-migrate clean \
+        docker-build-agent docker-run-agent
 
 # ─── 配置 ───
 JINGAO_HOST   ?= jingao
@@ -86,7 +87,10 @@ compile-agent: bundle-doc-packages ## 编译 vm-agent 为单二进制 (bun compi
 	@echo "✅ Sidecar binary → desktop/src-tauri/binaries/"
 	@echo "✅ Skills archive → desktop/src-tauri/resources/skills.tar.gz"
 
-build-desktop: compile-agent ## 构建 Desktop 安装包 (当前平台)
+prepare-win-deps: ## 下载 Windows 构建依赖 (bash + bun, 用于交叉编译)
+	bash desktop/src-tauri/scripts/prepare-win-deps.sh
+
+build-desktop: compile-agent ## 构建 Desktop 安装包 (Windows 需先 make prepare-win-deps)
 	cd desktop && cargo tauri build
 	@echo "✅ Desktop 安装包在 desktop/src-tauri/target/release/bundle/"
 
@@ -181,3 +185,13 @@ clean: ## 清理所有构建产物
 	cd website && cargo clean
 	rm -rf vm-agent/dist/
 	rm -rf desktop/dist/ desktop/src-tauri/target/
+
+# ═══════════════════════════════════════════
+#  Docker (vm-agent server)
+# ═══════════════════════════════════════════
+
+docker-build-agent: ## 构建 vm-agent Docker 镜像 (ARM64)
+	cd vm-agent && docker buildx build --platform linux/arm64 -t jacoworks/vm-agent:latest .
+
+docker-run-agent: ## 启动 vm-agent Docker 容器
+	cd vm-agent && docker compose up -d

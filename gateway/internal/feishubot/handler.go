@@ -3,7 +3,6 @@ package feishubot
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,7 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/fran0220/jacoworks/gateway/internal/openclaw"
+	"github.com/fran0220/jacoworks/gateway/internal/agent"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -24,33 +23,29 @@ const (
 	maxReplyLength     = 3000
 	responseTimeout    = 120 * time.Second
 	channelReadyWait   = 30 * time.Second
-	defaultSessionKey  = "main"
 	dedupTTL           = 30 * time.Minute
 	dedupCleanInterval = 10 * time.Minute
 )
 
 var mentionPattern = regexp.MustCompile(`@_user_\d+\s*`)
 
-// ocAttachment represents an image attachment for OpenClaw chat.send protocol.
-type ocAttachment struct {
-	Type     string `json:"type"`
-	MimeType string `json:"mimeType"`
-	FileName string `json:"fileName"`
-	Content  string `json:"content"` // raw base64
+// imageAttachment holds downloaded image data for inline inclusion in agent prompts.
+type imageAttachment struct {
+	URL string // descriptive label (e.g. image_key + extension)
 }
 
-// Handler processes Feishu webhook events and routes messages to OpenClaw containers
+// Handler processes Feishu webhook events and routes messages to vm-agent containers
 // via the shared ChannelPool (WebSocket protocol), enabling conversation sync with desktop.
 type Handler struct {
 	client      *Client
 	store       *store.Store
-	channelPool *openclaw.ChannelPool
+	channelPool *agent.ChannelPool
 
 	chatLocks       sync.Map // userID → *sync.Mutex (single-flight per user)
 	processedEvents sync.Map // event_id → time.Time (webhook dedup)
 }
 
-func NewHandler(client *Client, s *store.Store, channelPool *openclaw.ChannelPool) *Handler {
+func NewHandler(client *Client, s *store.Store, channelPool *agent.ChannelPool) *Handler {
 	h := &Handler{
 		client:      client,
 		store:       s,
@@ -160,7 +155,7 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 
 	// Handle supported message types
 	var text string
-	var attachments []ocAttachment
+	var attachments []imageAttachment
 
 	switch msg.Message.MessageType {
 	case "text":
@@ -191,11 +186,8 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 			return
 		}
 		mimeType := http.DetectContentType(imgData)
-		attachments = append(attachments, ocAttachment{
-			Type:     "image",
-			MimeType: mimeType,
-			FileName: content.ImageKey + mimeExtension(mimeType),
-			Content:  base64.StdEncoding.EncodeToString(imgData),
+		attachments = append(attachments, imageAttachment{
+			URL: content.ImageKey + mimeExtension(mimeType),
 		})
 		text = "请查看这张图片"
 		log.Info().Str("image_key", content.ImageKey).Int("size", len(imgData)).Str("mime", mimeType).Msg("feishu bot: image downloaded")
@@ -223,7 +215,7 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	// Route message via OpenClaw channel (shared with desktop)
+	// Route message via agent channel (shared with desktop)
 	response, err := h.routeViaChannel(ctx, user.ID, text, attachments)
 	if err != nil {
 		log.Error().Err(err).Str("user_id", user.ID).Msg("feishu bot: route via channel failed")
@@ -256,10 +248,10 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 
 // --- Channel routing (replaces HTTP routeToContainer) ---
 
-// routeViaChannel sends a message through the shared OpenClaw ChannelPool and
+// routeViaChannel sends a message through the shared agent ChannelPool and
 // collects the streaming response. This uses the same WS protocol as the desktop,
-// ensuring conversation context (sessionKey) is shared between both channels.
-func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, attachments []ocAttachment) (string, error) {
+// ensuring conversation context is shared between both channels.
+func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, attachments []imageAttachment) (string, error) {
 	channel, _, err := h.channelPool.GetOrCreate(ctx, userID)
 	if err != nil {
 		return "", fmt.Errorf("get channel: %w", err)
@@ -279,29 +271,36 @@ func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, a
 	// Generate unique request ID for correlation
 	requestID := generateRequestID()
 
-	// Build chat.send params (same protocol as desktop)
-	paramsMap := map[string]interface{}{
-		"sessionKey":     defaultSessionKey,
-		"message":        message,
-		"deliver":        true,
-		"idempotencyKey": requestID,
-	}
+	// Build vm-agent prompt message
+	actualMessage := message
 	if len(attachments) > 0 {
-		paramsMap["attachments"] = attachments
+		var sb strings.Builder
+		sb.WriteString(message)
+		for _, att := range attachments {
+			sb.WriteString(fmt.Sprintf("\n[图片: %s]", att.URL))
+		}
+		actualMessage = sb.String()
+	}
+
+	paramsMap := map[string]interface{}{
+		"type":       "prompt",
+		"message":    actualMessage,
+		"session_id": "feishu-" + userID,
+		"user_id":    userID,
 	}
 	params, _ := json.Marshal(paramsMap)
 
 	// Send the request through the shared channel
-	if err := channel.SendRequest("chat.send", params, requestID); err != nil {
-		return "", fmt.Errorf("send chat.send: %w", err)
+	if err := channel.SendRequest("prompt", params, requestID); err != nil {
+		return "", fmt.Errorf("send prompt: %w", err)
 	}
 
 	// Collect streaming response
 	return collectResponse(updates, requestID)
 }
 
-// waitForReady blocks until the channel emits proxy.ready or times out.
-func waitForReady(updates <-chan openclaw.SSEEvent) error {
+// waitForReady blocks until the channel emits proxy.ready/ready or times out.
+func waitForReady(updates <-chan agent.Event) error {
 	timeout := time.After(channelReadyWait)
 	for {
 		select {
@@ -309,7 +308,7 @@ func waitForReady(updates <-chan openclaw.SSEEvent) error {
 			if !ok {
 				return fmt.Errorf("channel closed while waiting for ready")
 			}
-			if event.Event == "proxy.ready" {
+			if event.Event == "proxy.ready" || event.Event == "ready" {
 				return nil
 			}
 			if event.Event == "proxy.error" {
@@ -321,62 +320,66 @@ func waitForReady(updates <-chan openclaw.SSEEvent) error {
 	}
 }
 
-// collectResponse waits for the chat.send response and collects streaming assistant
-// content. It uses requestID gating: events before our request is accepted are skipped.
-// Prefers chat.final text when available (authoritative), falls back to accumulated deltas.
-func collectResponse(updates <-chan openclaw.SSEEvent, requestID string) (string, error) {
-	var deltaBuf strings.Builder
-	requestAccepted := false
+// collectResponse waits for the vm-agent streaming response and collects assistant
+// content. It extracts text deltas from session_event messages and returns the
+// accumulated text when a done event is received.
+func collectResponse(updates <-chan agent.Event, requestID string) (string, error) {
+	var response strings.Builder
 	timeout := time.After(responseTimeout)
 
 	for {
 		select {
 		case event, ok := <-updates:
 			if !ok {
-				if deltaBuf.Len() > 0 {
-					return strings.TrimSpace(deltaBuf.String()), nil
+				if response.Len() > 0 {
+					return strings.TrimSpace(response.String()), nil
 				}
 				return "", fmt.Errorf("channel closed during response collection")
 			}
 
-			switch event.Event {
-			case "response":
-				accepted, errMsg := parseResponseEvent(event.Data, requestID)
-				if errMsg != "" {
-					return "", fmt.Errorf("chat.send rejected: %s", errMsg)
-				}
-				if accepted {
-					requestAccepted = true
-				}
+			var envelope struct {
+				ID   string `json:"id"`
+				Type string `json:"type"`
+			}
+			json.Unmarshal(event.Data, &envelope)
 
-			case "agent":
-				if !requestAccepted {
-					continue
-				}
-				stream, delta, phase := parseAgentEvent(event.Data)
-				switch stream {
-				case "assistant":
-					if delta != "" {
-						deltaBuf.WriteString(delta)
-					}
-				case "lifecycle":
-					if phase == "end" {
-						return strings.TrimSpace(deltaBuf.String()), nil
-					}
-				}
+			// Only process events matching our requestID (if present)
+			if envelope.ID != "" && envelope.ID != requestID {
+				continue
+			}
 
-			case "chat":
-				if !requestAccepted {
-					continue
+			switch envelope.Type {
+			case "session_event":
+				var se struct {
+					Event struct {
+						Type                  string `json:"type"`
+						AssistantMessageEvent struct {
+							Type  string `json:"type"`
+							Delta string `json:"delta"`
+						} `json:"assistantMessageEvent"`
+					} `json:"event"`
 				}
-				if finalText := parseChatFinalEvent(event.Data); finalText != "" {
-					return strings.TrimSpace(finalText), nil
+				if json.Unmarshal(event.Data, &se) == nil {
+					if se.Event.Type == "message_update" && se.Event.AssistantMessageEvent.Type == "text_delta" {
+						response.WriteString(se.Event.AssistantMessageEvent.Delta)
+					}
 				}
+			case "done":
+				return strings.TrimSpace(response.String()), nil
+			case "error":
+				var errMsg struct {
+					Error string `json:"error"`
+				}
+				json.Unmarshal(event.Data, &errMsg)
+				if response.Len() > 0 {
+					return strings.TrimSpace(response.String()), nil
+				}
+				return "", fmt.Errorf("agent error: %s", errMsg.Error)
 			}
 
 		case <-timeout:
-			if deltaBuf.Len() > 0 {
-				return strings.TrimSpace(deltaBuf.String()), nil
+			if response.Len() > 0 {
+				return strings.TrimSpace(response.String()), nil
 			}
 			return "", fmt.Errorf("response timeout (%v)", responseTimeout)
 		}
@@ -454,91 +457,6 @@ func (h *Handler) findOrCreateCoworkSession(ctx context.Context, userID string) 
 		return "", err
 	}
 	return sess.ID, nil
-}
-
-// --- Event parsing helpers ---
-
-// parseResponseEvent checks if a "response" event matches our requestID.
-// Returns (accepted, errorMessage).
-func parseResponseEvent(data []byte, requestID string) (bool, string) {
-	var env struct {
-		ID    string          `json:"id"`
-		OK    bool            `json:"ok"`
-		Error json.RawMessage `json:"error"`
-	}
-	if json.Unmarshal(data, &env) != nil {
-		return false, ""
-	}
-	if env.ID != requestID {
-		return false, ""
-	}
-	if len(env.Error) > 0 && string(env.Error) != "null" {
-		var errObj struct {
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(env.Error, &errObj) == nil && errObj.Message != "" {
-			return false, errObj.Message
-		}
-		return false, string(env.Error)
-	}
-	return env.OK, ""
-}
-
-// parseAgentEvent extracts stream type, delta text, and lifecycle phase from an agent event.
-func parseAgentEvent(data []byte) (stream, delta, phase string) {
-	var env struct {
-		Payload struct {
-			Stream string `json:"stream"`
-			Data   struct {
-				Delta string `json:"delta"`
-				Phase string `json:"phase"`
-			} `json:"data"`
-		} `json:"payload"`
-	}
-	if json.Unmarshal(data, &env) != nil {
-		return "", "", ""
-	}
-	return env.Payload.Stream, env.Payload.Data.Delta, env.Payload.Data.Phase
-}
-
-// parseChatFinalEvent extracts the final message text from a chat event with state:"final".
-func parseChatFinalEvent(data []byte) string {
-	var env struct {
-		Payload struct {
-			State   string `json:"state"`
-			Message struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		} `json:"payload"`
-	}
-	if json.Unmarshal(data, &env) != nil || env.Payload.State != "final" {
-		return ""
-	}
-
-	raw := env.Payload.Message.Content
-	if len(raw) == 0 {
-		return ""
-	}
-
-	// Content can be a plain string
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-
-	// Or an array of content parts [{text: "..."}, ...]
-	var parts []struct {
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) == nil {
-		var buf strings.Builder
-		for _, p := range parts {
-			buf.WriteString(p.Text)
-		}
-		return buf.String()
-	}
-
-	return ""
 }
 
 // --- Helpers ---

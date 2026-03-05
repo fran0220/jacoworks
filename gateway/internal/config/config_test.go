@@ -32,8 +32,11 @@ database:
 	if cfg.Auth.SessionTTLHours != 720 {
 		t.Fatalf("session ttl hours = %d, want %d", cfg.Auth.SessionTTLHours, 720)
 	}
-	if cfg.LXD.OpenClawPort != 18789 {
-		t.Fatalf("openclaw port = %d, want %d", cfg.LXD.OpenClawPort, 18789)
+	if cfg.Docker.AgentPort != 18789 {
+		t.Fatalf("agent port = %d, want %d", cfg.Docker.AgentPort, 18789)
+	}
+	if cfg.Docker.Image != "jacoworks/vm-agent:latest" {
+		t.Fatalf("docker image = %q, want %q", cfg.Docker.Image, "jacoworks/vm-agent:latest")
 	}
 }
 

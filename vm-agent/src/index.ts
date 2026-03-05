@@ -2,70 +2,13 @@ import { createInterface } from "node:readline";
 import { loadConfig } from "./config.js";
 import {
   initAgent,
-  getSession,
-  abortSession,
-  listSessions,
-  resolveModel,
   startBackgroundServices,
-  destroySession,
   destroyAllSessions,
   cleanupStaleSessions,
-  generateSessionTitle,
   listAvailableSkills,
 } from "./agent.js";
-
-type RpcId = string | number;
-
-interface RpcCommandBase {
-  id?: RpcId;
-  type: string;
-}
-
-interface PromptCommand extends RpcCommandBase {
-  type: "prompt";
-  message: string;
-  model?: string;
-  session_id?: string;
-  user_id?: string;
-  workspace?: string;
-  restricted?: boolean;
-  streaming_behavior?: "steer" | "followUp";
-  thinking_level?: string;
-}
-
-interface AbortCommand extends RpcCommandBase {
-  type: "abort";
-  session_id: string;
-}
-
-interface DestroySessionCommand extends RpcCommandBase {
-  type: "destroy_session";
-  session_id: string;
-}
-
-interface GenerateTitleCommand extends RpcCommandBase {
-  type: "generate_title";
-  user_message: string;
-  assistant_message: string;
-}
-
-interface HealthCommand extends RpcCommandBase {
-  type: "health";
-}
-
-interface ListSessionsCommand extends RpcCommandBase {
-  type: "list_sessions";
-}
-
-type RpcCommand =
-  | PromptCommand
-  | AbortCommand
-  | DestroySessionCommand
-  | GenerateTitleCommand
-  | HealthCommand
-  | ListSessionsCommand;
-
-type RawCommand = RpcCommandBase & Record<string, unknown>;
+import { handleCommand, type RawCommand } from "./transport/handler.js";
+import type { TransportSender } from "./transport/types.js";
 
 const config = loadConfig();
 initAgent(config);
@@ -74,221 +17,11 @@ startBackgroundServices().catch((err) => {
   console.error("❌ Background services error:", err);
 });
 
-function send(payload: unknown) {
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
-}
-
-function sendResponse(id: RpcId | undefined, command: string, success: boolean, data?: unknown) {
-  send({ id, type: "response", command, success, data });
-}
-
-function sendError(id: RpcId | undefined, sessionId: string | undefined, message: string) {
-  send({ id, type: "error", session_id: sessionId, error: message });
-}
-
-function sendDone(id: RpcId | undefined, sessionId: string | undefined) {
-  send({ id, type: "done", session_id: sessionId });
-}
-
-function normalizeId(id: RpcId | undefined): RpcId {
-  return id ?? `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-const promptInFlight = new Map<string, { finish: (error?: string) => void }>();
-
-async function handlePrompt(command: PromptCommand) {
-  const id = normalizeId(command.id);
-
-  if (!command.message?.trim()) {
-    sendResponse(id, command.type, false, { error: "message required" });
-    sendError(id, command.session_id, "message required");
-    sendDone(id, command.session_id);
-    return;
-  }
-
-  const requestedModel = resolveModel(command.model);
-  const modelKey = requestedModel
-    ? `${requestedModel.provider}/${requestedModel.id}`
-    : `${config.primaryProvider}/${config.primaryModel}`;
-  const sessionId = command.session_id || modelKey;
-
-  if (promptInFlight.has(sessionId)) {
-    sendResponse(id, command.type, false, { error: "prompt already in-flight for this session" });
-    sendError(id, sessionId, "prompt already in-flight for this session");
-    sendDone(id, sessionId);
-    return;
-  }
-
-  // Mark as in-flight immediately (finish callback will be set below)
-  promptInFlight.set(sessionId, { finish: () => {} });
-
-  try {
-    const { session } = await getSession(sessionId, {
-      userId: command.user_id,
-      workspace: command.workspace,
-      restricted: command.restricted,
-      model: requestedModel,
-    });
-
-    if (requestedModel) {
-      await session.setModel(requestedModel);
-    }
-
-    if (command.thinking_level) {
-      const validLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
-      if (validLevels.includes(command.thinking_level)) {
-        session.setThinkingLevel(command.thinking_level as "off" | "minimal" | "low" | "medium" | "high" | "xhigh");
-      }
-    }
-
-    sendResponse(id, command.type, true, { session_id: sessionId, model: modelKey });
-
-    let finished = false;
-    const keepaliveId = setInterval(() => {
-      send({ id, type: "session_event", session_id: sessionId, event: { type: "keepalive" } });
-    }, 15_000);
-
-    const finish = (error?: string) => {
-      if (finished) return;
-      finished = true;
-      clearInterval(keepaliveId);
-      promptInFlight.delete(sessionId);
-      if (error) {
-        sendError(id, sessionId, error);
-      }
-      sendDone(id, sessionId);
-      unsub();
-    };
-
-    // Update with real finish callback
-    promptInFlight.set(sessionId, { finish });
-
-    const unsub = session.subscribe((event) => {
-      if (finished) return;
-
-      if (event.type === "message_update") {
-        const ame = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
-        if (ame?.type === "thinking_start") console.error("[stream] thinking_start");
-        else if (ame?.type === "thinking_delta") console.error(`[stream] thinking_delta (${ame.delta?.length || 0} chars)`);
-        else if (ame?.type === "thinking_end") console.error("[stream] thinking_end");
-      } else if (event.type === "agent_start" || event.type === "agent_end" || event.type === "turn_start" || event.type === "turn_end") {
-        console.error(`[stream] ${event.type}`);
-      } else if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
-        const te = event as { toolName?: string };
-        console.error(`[stream] ${event.type}: ${te.toolName || "?"}`);
-      } else if (event.type === "auto_compaction_start" || event.type === "auto_compaction_end" || event.type === "auto_retry_start" || event.type === "auto_retry_end") {
-        console.error(`[stream] ${event.type}`);
-      }
-
-      send({ id, type: "session_event", session_id: sessionId, event });
-    });
-
-    const options = session.isStreaming
-      ? { streamingBehavior: command.streaming_behavior || "followUp" as const }
-      : undefined;
-
-    session.prompt(command.message, options)
-      .then(() => finish())
-      .catch((err) => {
-        finish(err instanceof Error ? err.message : "prompt failed");
-      });
-  } catch (err) {
-    promptInFlight.delete(sessionId);
-    const error = err instanceof Error ? err.message : "prompt failed";
-    sendResponse(id, command.type, false, { error });
-    sendError(id, sessionId, error);
-    sendDone(id, sessionId);
-  }
-}
-
-async function handleCommand(command: RawCommand) {
-  switch (command.type) {
-    case "health":
-      sendResponse(command.id, command.type, true, {
-        status: "ok",
-        service: "vm-agent",
-        version: "0.2.0-rpc",
-        sessions: listSessions().length,
-      });
-      return;
-
-    case "list_skills":
-      sendResponse(command.id, command.type, true, {
-        skills: listAvailableSkills(),
-      });
-      return;
-
-    case "list_sessions":
-      sendResponse(command.id, command.type, true, { sessions: listSessions() });
-      return;
-
-    case "destroy_session": {
-      const sessionId = typeof command.session_id === "string" ? command.session_id : "";
-      if (!sessionId) {
-        sendResponse(command.id, command.type, false, { error: "session_id required" });
-        return;
-      }
-      const removed = destroySession(sessionId);
-      sendResponse(command.id, command.type, removed, { removed });
-      return;
-    }
-
-    case "abort": {
-      const sessionId = typeof command.session_id === "string" ? command.session_id : "";
-      if (!sessionId) {
-        sendResponse(command.id, command.type, false, { error: "session_id required" });
-        return;
-      }
-      const aborted = await abortSession(sessionId);
-
-      // Fallback: if prompt is still in-flight after abort, force finish
-      const inFlight = promptInFlight.get(sessionId);
-      if (inFlight?.finish) {
-        // Give Pi SDK 3s to settle naturally, then force
-        setTimeout(() => {
-          if (promptInFlight.has(sessionId)) {
-            inFlight.finish("aborted");
-          }
-        }, 3_000);
-      }
-
-      sendResponse(command.id, command.type, aborted, { aborted, session_id: sessionId });
-      return;
-    }
-
-    case "prompt": {
-      if (typeof command.message !== "string") {
-        sendResponse(command.id, command.type, false, { error: "message required" });
-        return;
-      }
-      await handlePrompt(command as unknown as PromptCommand);
-      return;
-    }
-
-    case "generate_title": {
-      const userMsg = typeof command.user_message === "string" ? command.user_message : "";
-      const assistantMsg = typeof command.assistant_message === "string" ? command.assistant_message : "";
-      if (!assistantMsg) {
-        sendResponse(command.id, command.type, false, { error: "assistant_message required" });
-        return;
-      }
-      try {
-        const title = await generateSessionTitle(userMsg, assistantMsg);
-        sendResponse(command.id, command.type, true, { title });
-      } catch (err) {
-        sendResponse(command.id, command.type, false, {
-          error: err instanceof Error ? err.message : "title generation failed",
-        });
-      }
-      return;
-    }
-
-    default:
-      sendResponse(command.id, command.type, false, {
-        error: `unsupported command: ${command.type}`,
-      });
-  }
-}
+const sender: TransportSender = {
+  send(payload: unknown) {
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+  },
+};
 
 const rl = createInterface({
   input: process.stdin,
@@ -304,13 +37,17 @@ rl.on("line", (line) => {
   try {
     parsed = JSON.parse(raw) as RawCommand;
   } catch {
-    send({ type: "error", error: "invalid_json" });
+    sender.send({ type: "error", error: "invalid_json" });
     return;
   }
 
-  void handleCommand(parsed).catch((err) => {
-    sendResponse(parsed.id, parsed.type, false, {
-      error: err instanceof Error ? err.message : "command failed",
+  void handleCommand(config, sender, parsed).catch((err) => {
+    sender.send({
+      id: parsed.id,
+      type: "response",
+      command: parsed.type,
+      success: false,
+      data: { error: err instanceof Error ? err.message : "command failed" },
     });
   });
 });
@@ -343,4 +80,4 @@ process.on("unhandledRejection", (reason) => {
   console.error("unhandled rejection:", reason);
 });
 
-send({ type: "ready", service: "vm-agent", version: "0.2.0-rpc", skills: listAvailableSkills() });
+sender.send({ type: "ready", service: "vm-agent", version: "0.2.0-rpc", skills: listAvailableSkills() });

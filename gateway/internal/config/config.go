@@ -14,7 +14,7 @@ type Config struct {
 	llmMu     sync.RWMutex    `yaml:"-"`
 	Server    ServerConfig    `yaml:"server"`
 	Auth      AuthConfig      `yaml:"auth"`
-	LXD       LXDConfig       `yaml:"lxd"`
+	Docker    DockerConfig    `yaml:"docker"`
 	LLM       LLMConfig       `yaml:"llm"`
 	Database  DatabaseConfig  `yaml:"database"`
 	GitHub    GitHubConfig    `yaml:"github"`
@@ -57,12 +57,12 @@ type AuthConfig struct {
 	SessionTTLHours    int    `yaml:"session_ttl_hours"`
 }
 
-type LXDConfig struct {
+type DockerConfig struct {
 	SSHTarget    string `yaml:"ssh_target"`
-	Socket       string `yaml:"socket"`
-	Template     string `yaml:"template"`
+	Image        string `yaml:"image"`
 	Network      string `yaml:"network"`
-	OpenClawPort int    `yaml:"openclaw_port"`
+	AgentPort    int    `yaml:"agent_port"`
+	GatewayToken string `yaml:"gateway_token"`
 }
 
 type DatabaseConfig struct {
@@ -92,8 +92,11 @@ func Load(path string) (*Config, error) {
 	if cfg.Auth.SessionTTLHours == 0 {
 		cfg.Auth.SessionTTLHours = 720
 	}
-	if cfg.LXD.OpenClawPort == 0 {
-		cfg.LXD.OpenClawPort = 18789
+	if cfg.Docker.AgentPort == 0 {
+		cfg.Docker.AgentPort = 18789
+	}
+	if cfg.Docker.Image == "" {
+		cfg.Docker.Image = "jacoworks/vm-agent:latest"
 	}
 
 	applyEnvOverrides(cfg)
@@ -138,19 +141,22 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Auth.SessionTTLHours = ttl
 		}
 	}
-	if v := os.Getenv("GATEWAY_LXD_SSH_TARGET"); v != "" {
-		cfg.LXD.SSHTarget = v
+	if v := os.Getenv("GATEWAY_DOCKER_SSH_TARGET"); v != "" {
+		cfg.Docker.SSHTarget = v
 	}
-	if v := os.Getenv("GATEWAY_LXD_SOCKET"); v != "" {
-		cfg.LXD.Socket = v
+	if v := os.Getenv("GATEWAY_DOCKER_IMAGE"); v != "" {
+		cfg.Docker.Image = v
 	}
-	if v := os.Getenv("GATEWAY_LXD_TEMPLATE"); v != "" {
-		cfg.LXD.Template = v
+	if v := os.Getenv("GATEWAY_DOCKER_NETWORK"); v != "" {
+		cfg.Docker.Network = v
 	}
-	if v := os.Getenv("GATEWAY_LXD_OPENCLAW_PORT"); v != "" {
+	if v := os.Getenv("GATEWAY_DOCKER_AGENT_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
-			cfg.LXD.OpenClawPort = port
+			cfg.Docker.AgentPort = port
 		}
+	}
+	if v := os.Getenv("GATEWAY_DOCKER_GATEWAY_TOKEN"); v != "" {
+		cfg.Docker.GatewayToken = v
 	}
 	if v := os.Getenv("GATEWAY_DATABASE_URL"); v != "" {
 		cfg.Database.URL = v

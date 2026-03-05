@@ -41,6 +41,8 @@ vm-agent/memory/
 desktop/src-tauri/binaries/vm-agent-*
 desktop/src-tauri/resources/skills.tar.gz
 desktop/src-tauri/resources/doc-packages.tar.gz
+desktop/src-tauri/resources/win-bash/
+desktop/src-tauri/resources/win-bin/
 
 # === Vite ===
 vite.config.js.timestamp-*

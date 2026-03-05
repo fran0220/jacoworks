@@ -2,142 +2,18 @@
 
 > Tauri 桌面端内嵌 Pi SDK Agent sidecar 直接读写本地文件。Go 网关 (jingao 云主机, OpenResty 反代) 提供认证、会话存储和管理 API。Rust 官网 (Axum, 同机部署) 提供公开页面、文档、反馈、管理后台和 Tauri 更新 API。LLM 中转站 (`http://67.230.182.59:8317`) 统一接入 Claude/GPT/Gemini/Grok。本地宿主机通过 WireGuard VPN 提供 LXD 容器 (OpenClaw)。
 
-## 1. 代码结构
+## AGENTS.md 层级
 
-```
-gateway/                         Go 管理网关 (jingao :8847, OpenResty 反代 jacoapi.jingao.club)
-  cmd/gateway/main.go            入口 (认证 + 会话 CRUD + 管理 + WS 代理)
-  internal/
-    config/config.go             YAML + env override, ChatAgentConfig, GitHubConfig
-    auth/{middleware,handlers}.go Goth 飞书 SSO + bcrypt + 激活码
-    auth/feishu/                 Goth Feishu Provider
-    store/{pg,users,sessions,containers,invites,settings,memory,skills,games}.go  PostgreSQL (pgx/v5)
-    proxy/handler.go             ReverseProxy (OpenClaw HTTP + ChatAgent)
-    cowork/handler.go            文件操作 (upload/download/changes)
-    openclaw/ws_proxy.go         WebSocket 代理 (Ed25519 设备密钥)
-    openclaw/ws_handler.go       新 WS 传输 (ticket auth + 容器健康管理)
-    openclaw/ws_ticket.go        WS ticket 签发/验证 (HMAC-SHA256, 30s TTL)
-    github/client.go             GitHub API 客户端 (Issue 创建 + 图片上传到 feedback-assets 分支)
-    lxd/{client,ssh_client,freezer.go}  LXD 容器生命周期 + 记忆/技能推拉 + 健康检查
-    feishubot/{client,handler}.go  飞书 Bot webhook + 消息路由到容器
-    games/handler.go             游戏画廊 API (tar.gz 部署 + 静态文件)
-    audit/logger.go
+| 文件 | 内容 |
+|------|------|
+| `AGENTS.md` (本文件) | 项目概览、架构、数据库、CI/CD、本地开发 |
+| `gateway/AGENTS.md` | API 端点、Go 环境变量、测试 |
+| `vm-agent/AGENTS.md` | RPC 协议、模型、TS 环境变量、4 层测试 |
+| `desktop/AGENTS.md` | 组件结构、Design Token、React 规范 |
+| `website/AGENTS.md` | 路由、Askama 模板、Rust 规范 |
+| `deploy/AGENTS.md` | SQL schema、测试账号、基础设施、部署策略 |
 
-vm-agent/                        本地 Agent sidecar (Pi SDK + RPC stdio)
-  src/
-    index.ts                     RPC 主循环 (stdin/stdout JSON lines)
-    config.ts                    环境变量 (网关下发, 无本地 fallback)
-    agent.ts                     Session 池 + 5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离 + title 生成
-    prompts/system.ts            系统提示词 (核心身份 + SOUL.md overlay + 动态能力)
-    extensions/memory.ts         记忆系统 (context hook 纯本地读 + memory_search/save 工具)
-    services/{heartbeat,cron}.ts 后台服务 (sidecar 模式默认关闭)
-    tools/web.ts                 web_search (Tavily) + web_fetch
-    lib/embedding.ts             OpenAI Embedding API 客户端 (text-embedding-3-small, AbortController 超时)
-    lib/memory-store.ts          SQLite + FTS5 记忆存储 (BM25 + CJK 分词 + 向量 rerank + 迁移)
-    lib/{daily-log,prompt-queue}.ts
-    __tests__/rpc.test.ts        E2E RPC 测试 (真实网关认证 + 双用户隔离)
-    __tests__/helpers/            测试辅助 (gateway-config.ts — 自动获取 LLM 配置)
-    lib/__tests__/               单元测试 (memory-store, daily-log)
-
-desktop/                         Tauri v2 + React 18 桌面客户端
-  src-tauri/src/
-    lib.rs                       Tauri 入口
-    sidecar.rs                   Agent 生命周期 + RPC + 记忆管理
-    stream.rs                    http_fetch (网关 API)
-    cowork.rs                    目录选择/tar (保留兼容)
-  src/
-    App.tsx                      Login → Agent → 会话 / OpenClaw 切换
-    app.css                      Design Token (:root 变量)
-    react/
-      components/                LoginPanel Sidebar TopBar ChatView Composer
-                                 MessageBubble Markdown StreamingMarkdown
-                                 ToolStatus NewSessionPanel SettingsModal RpcLogPanel
-      hooks/                     use-agent-bootstrap use-chat-stream
-                                 use-responsive-sidebar use-session-state
-      lib/                       auth sessions agent transport config
-                                 cowork recentFolders session-persistence skills
-      openclaw/                  完全独立模块 (不复用本地模式组件)
-        OpenClawApp.tsx          容器分配 → WS 对话
-        lib/{api,sessions,ws}.ts
-        components/              OcChatView OcComposer OcMarkdown Provision...
-      styles/                    按组件拆分 CSS (chat composer layout sidebar...)
-      types.ts                   ChatMessage ChatSession StreamBlock
-
-website/                         Rust 官网 + 管理后台 (Axum :9527, jingao 同机, jaco.jingao.club)
-  Cargo.toml                     Axum + Askama + sqlx + pulldown-cmark
-  src/
-    main.rs                      Axum 入口, 路由注册, admin 登录/登出
-    config.rs                    TOML 配置 (website.toml)
-    db.rs                        sqlx PgPool 工厂
-    error.rs                     AppError → IntoResponse
-    auth.rs                      Admin cookie 认证 + AdminUser 提取器 (bcrypt + sha256 双格式)
-    models/                      user, invite, release, feedback, audit, session, auth_session, game, skill
-    routes/
-      pages.rs                   首页 / 下载 / 关于
-      docs.rs                    文档渲染 (Markdown → HTML)
-      feedback.rs                反馈表单 (公开)
-      games.rs                   游戏画廊 (gallery + play 页面)
-      update.rs                  Tauri Updater API (GET /api/update/:target/:arch/:version)
-      admin/
-        mod.rs                   Admin 路由组
-        dashboard.rs             统计仪表盘
-        users.rs                 用户 CRUD
-        invites.rs               激活码管理 (创建/列表/撤销)
-        releases.rs              版本发布 (CRUD + 安装包上传)
-        containers.rs            容器管理 (代理 Gateway API)
-        feedback.rs              反馈管理 (回复/状态变更)
-        audit.rs                 审计日志 (分页+筛选)
-        settings.rs              系统设置 (LLM 密钥管理, 网关/DB 状态, 模型列表)
-        skills.rs                技能管理 (上传/列表/删除)
-    services/
-      docs.rs                    Markdown 解析 + TOC + 导航树
-      gateway.rs                 Gateway Admin API HTTP 客户端
-  templates/                     Askama HTML 模板
-    base.html                    公开页面布局 (Tailwind + HTMX CDN)
-    pages/{index,download,about}.html
-    docs/{layout,index}.html     文档三栏布局
-    feedback.html                反馈表单
-    games/{gallery,play}.html    游戏画廊 + 游戏播放页
-    admin/
-      login.html                 管理登录 (独立布局)
-      layout.html                管理后台布局 (深色侧边栏)
-      {dashboard,users,invites,releases,release_edit}.html
-      {containers,feedback_list,audit,settings,skills}.html
-  static/css/style.css           自定义样式
-  static/js/app.js               平台检测 + Toast + HTMX 事件
-  content/                       Markdown 文档源文件
-    index.md                     文档首页
-    getting-started.md           快速开始
-    guide/{overview,models,workspace,memory,skills,openclaw}.md
-    architecture.md              技术架构
-    faq.md                       常见问题
-    changelog.md                 更新日志
-
-deploy/
-  sql/001_init_business_tables.sql   PostgreSQL 全量 schema
-  sql/002_website_tables.sql         官网表: releases, release_assets, feedback
-  sql/003_system_settings.sql        system_settings 表 (LLM 密钥管理)
-  sql/004_memory_and_skills.sql      user_memory + skill_files 表 (记忆/技能同步)
-  sql/005_games.sql                  games 表 (游戏画廊)
-  sql/002_seed_test_data.sql         测试数据 (admin 用户 + 激活码)
-  gateway/{frpc.toml,jacoworks-gateway.service,gateway.yaml.example}
-  website/{deploy.sh,jacoworks-website.service}
-  openclaw/{.env.template,openclaw.json}
-
-.github/workflows/
-  ci.yml                           PR/push CI (按模块变更检测, 只跑有改动的 job)
-  issue-autofix.yml                issue opened/labeled → AI 分诊 + mini-swe-agent 自动修复 → PR
-  release-desktop.yml              git tag v* 触发跨平台 Tauri 构建 → GitHub Release
-
-Makefile                           根目录统一命令入口 (dev/build/deploy/check)
-vm-agent/skills/                 预制技能包 (创作/办公/工具/开发)
-  开发/game-dev-ai/             游戏 AI 开发技能
-docs/design-system.md            Design Token 完整规范
-docs/ci-cd.md                    CI/CD 与本地开发完整指南
-tasks/                           lessons.md next-steps.md
-```
-
-## 2. 架构概览
+## 架构概览
 
 ```
 浏览器 ──────────→ Rust 官网 (jaco.jingao.club, OpenResty → :9527)
@@ -171,384 +47,88 @@ jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233
 **双模式**: 本地 `type="chat"` (sidecar RPC) / OpenClaw `type="cowork"` (WebSocket)
 **跨机**: WireGuard VPN 经 jpdata relay 中继连接 jingao ↔ oracle, 网关通过 SSH 管理 LXD, WS 直连容器 IP
 
-## 3. 网关 API
+## 数据库
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/auth/login` | 用户名/密码登录 (username 支持用户名或邮箱) |
-| POST | `/api/auth/activate` | 激活码注册 |
-| GET | `/api/auth/feishu[/callback]` | 飞书 SSO |
-| POST | `/api/auth/logout` | 登出 |
-| GET | `/api/users/me` | 当前用户 |
-| GET | `/api/agent/config` | 下发 LLM 配置 (proxy_url + proxy_key + 模型列表) |
-| CRUD | `/api/sessions[/{id}]` | 会话 (title/messages/model/workspace_path) |
-| POST | `/v1/chat/completions` | OpenClaw/ChatAgent HTTP 代理 |
-| GET | `/api/cowork/container-status` | 容器状态 |
-| POST | `/api/cowork/provision` | 自助分配 LXD 容器 |
-| GET | `/ws/openclaw` | WebSocket 代理 → 容器 :18789 |
-| POST | `/api/cowork/{sid}/upload` | 上传项目 |
-| POST | `/api/memory/sync` | 记忆双向同步 (manifest + push/pull) |
-| POST | `/api/skills/upload` | 技能文件上传 |
-| GET | `/api/skills/checksum` | 技能文件校验和 |
-| POST | `/api/games/deploy` | 游戏部署 (tar.gz + metadata) |
-| GET | `/api/games` | 游戏列表 (公开) |
-| DELETE | `/api/games/{id}` | 删除游戏 (作者或管理员) |
-| POST | `/api/feedback` | 提交桌面端反馈并同步 GitHub Issue (支持最多 3 张截图) |
-| POST | `/api/feishu/webhook` | 飞书 Bot webhook (无需认证) |
-| GET | `/api/admin/settings` | 读取系统设置 (LLM 密钥等) |
-| PUT | `/api/admin/settings` | 更新系统设置 + 热重载内存配置 |
-| * | `/api/admin/...` | 管理: invite-codes, containers, provision |
-| GET | `/health` | 健康检查 |
-
-## 4. vm-agent RPC
-
-**命令**: `prompt` `abort` `destroy_session` `generate_title` `health` `list_sessions` `list_skills`
-
-**prompt 字段**: `message` `session_id` `model` `user_id` `workspace?` `restricted` `streaming_behavior`
-
-**事件** (stdout JSON lines): `response` `session_event` `error` `done` `ready` (启动握手, 含技能列表)
-
-**模型**:
-
-| Provider | 模型 |
-|----------|------|
-| `proxy-claude` (anthropic) | claude-sonnet-4-6, claude-opus-4-6 |
-| `proxy-gpt` (openai) | gpt-5.3-codex, gpt-5.2 |
-| `proxy-gemini` (openai) | gemini-3.1-pro-preview, gemini-3-flash-preview |
-| `proxy-grok` (openai) | grok-4.20-beta |
-| `proxy-glm` (openai) | glm-5 |
-
-**路由**: `"model-id"` (自动匹配) 或 `"provider/model-id"` (显式指定)
-
-## 5. 数据库
-
-PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001_init_business_tables.sql` + `002_website_tables.sql` + `003_system_settings.sql` + `004_memory_and_skills.sql` + `005_games.sql`
+PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~005*.sql`
 
 | 表 | 关键字段 |
 |-----|------|
 | `users` | id TEXT PK, name, email, password_hash, role, feishu_open_id |
 | `auth_sessions` | token, user_id → users, expires_at |
 | `chat_sessions` | user_id, title, type('chat'\|'cowork'), model, workspace_path, messages JSONB |
-| `containers` | user_id UNIQUE, container_name, container_ip, status('running'\|'stopped'\|'frozen'\|'creating'\|'error') |
+| `containers` | user_id UNIQUE, container_name, container_ip, status |
 | `invite_codes` | code PK, role, max_uses, used_count |
 | `audit_logs` | user_id, action, detail JSONB |
-| `system_settings` | key TEXT PK, value TEXT, description TEXT (LLM/GitHub 等运行时配置，含 `github_token` `github_repo`) |
+| `system_settings` | key TEXT PK, value TEXT, description TEXT |
 | `user_memory` | user_id + file_path UNIQUE, content TEXT, checksum TEXT |
-| `skill_files` | owner + file_path UNIQUE, content TEXT, checksum TEXT (owner='system' 或 user_id) |
-| `games` | id TEXT PK, user_id → users, author_name, title, description, thumbnail_url, play_url, status, play_count |
+| `skill_files` | owner + file_path UNIQUE, content TEXT, checksum TEXT |
+| `games` | id TEXT PK, user_id → users, title, play_url, status, play_count |
 | `releases` | id TEXT PK, version UNIQUE, notes, pub_date, is_latest BOOL |
-| `release_assets` | release_id → releases, platform, download_url, signature, file_size, download_count |
+| `release_assets` | release_id → releases, platform, download_url, signature |
 | `feedback` | id TEXT PK, name, email, category, message, status, admin_reply |
 
 `user_id` 为 TEXT (gen_random_uuid()::text)。`updated_at` 触发器自动更新。
 
-## 6. 环境变量
-
-**gateway.yaml** (宿主机, env override `GATEWAY_*`):
-```yaml
-server: { port: 8847, host: "0.0.0.0", public_url: "https://jacoapi.jingao.club" }
-auth: { admin_token, feishu_client_id, feishu_client_secret, session_ttl_hours: 720 }
-database: { url: "postgresql://...@127.0.0.1:5432/jacoworks" }
-llm: { proxy_url, proxy_key }   # 留空, LLM 配置统一由 DB system_settings 管理
-github: { token, repo }         # 反馈同步 GitHub Issues (可由 system_settings: github_token/github_repo 覆盖)
-lxd: { ssh_target: "opc@10.0.1.3", template: "tpl-openclaw", network: "jaconet", openclaw_port: 18789 }
-chat_agent: { url, token }  # 可选外部 ChatAgent
-```
-
-- `GATEWAY_GITHUB_TOKEN` / `GATEWAY_GITHUB_REPO` — 网关 GitHub 反馈同步配置 (Issue + feedback-assets 截图分支)
-
-**vm-agent** (.env, Tauri 启动时注入):
-- `LLM_PROXY_URL` / `LLM_PROXY_KEY` — 中转站 (网关下发, 无本地 fallback)
-- `WORKSPACE_DIR` — 默认 cwd (可被请求级 workspace 覆盖)
-- `MEMORY_ROOT_DIR` — 记忆根目录 (默认 `~/Library/Application Support/JAcoworks/memory`)
-- `PRIMARY_MODEL=claude-opus-4-6` / `PRIMARY_PROVIDER=proxy-claude`
-- `MEMORY_ENABLED=true` / `HEARTBEAT_ENABLED=false` / `CRON_ENABLED=false`
-- `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` — 向量 embedding (可选, 回退 OPENAI_API_KEY)
-- `MEMORY_EMBED_TIMEOUT_MS=8000` / `MEMORY_EMBED_CACHE_MAX=10000`
-- `MEMORY_HYBRID_W_BM25=0.3` / `MEMORY_HYBRID_W_VEC=0.7` — hybrid 搜索权重
-- `SKILLS_PATHS` — 技能目录 (逗号分隔)
-- `TOOL_DENY_LIST` / `TAVILY_API_KEY`
-
-**desktop** (config.ts + Vite env):
-- `GATEWAY_URL` (`VITE_GATEWAY_URL`) = `https://jacoapi.jingao.club`
-- `DEFAULT_MODEL` = `proxy-claude/claude-opus-4-6`
-
-**website** (website.toml, env override `WEBSITE_*`):
-```toml
-cookie_secret = "32-byte-hex-string"
-[server]
-host = "0.0.0.0"
-port = 9527
-[database]
-url = "postgresql://...@127.0.0.1:5432/jacoworks"
-[gateway]
-url = "http://localhost:8847"
-admin_token = "your-admin-token"
-[site]
-name = "JAcoworks"
-description = "企业 AI 协同办公平台"
-base_url = "https://jaco.jingao.club"
-```
-
-## 7. 基础设施
-
-| 服务 | 位置 | 说明 |
-|------|------|------|
-| Rust 官网 | jingao 82.156.239.212 | :9527, OpenResty 反代 jaco.jingao.club |
-| Go 网关 | jingao 82.156.239.212 | :8847, OpenResty 反代 jacoapi.jingao.club |
-| PostgreSQL | jingao 本地 | 127.0.0.1:5432/jacoworks |
-| 1Panel | jingao 82.156.239.212 | :8090, OpenResty + SSL 证书管理 |
-| WireGuard | jingao ↔ jpdata ↔ oracle | wg1: 10.0.1.1 ↔ 10.0.1.254 ↔ 10.0.1.3, UDP 51820 |
-| LXD 容器 | oracle 161.33.28.249 | jaconet 10.20.20.0/24, tpl-openclaw (ARM), SSH: `opc@10.0.1.3` |
-| LLM 中转站 | 67.230.182.59 | :8317 LLM 中转 |
-| WG relay (jpdata) | 185.200.65.233 | :51820 WireGuard hub, xTom Japan Tokyo |
-| Oracle 主机 | 161.33.28.249 | Oracle Linux 9.7 ARM, 4 vCPU, 22GB RAM, 200GB Disk |
-| Windows 构建 VM | local 192.168.31.162 (KVM) | win-build, IP 192.168.122.98, Win11 LTSC x64, SSH builder/build2026 |
-| 本地服务器 | 192.168.31.162 | Ubuntu 24.04 AMD x86_64, 62GB RAM, 12核, 1.7TB, KVM 宿主机 |
-
-## 8. CI/CD 与桌面端发布
-
-### 流水线
+## CI/CD
 
 | 工作流 | 触发 | 作用 |
 |--------|------|------|
-| `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job (go vet/test, cargo check/test, tsc) |
-| `issue-autofix.yml` | issue opened/labeled | AI 分诊 (GPT-5.2) → mini-swe-agent 自动修复 (GPT-5.3 Codex) → 创建 PR |
-| `release-desktop.yml` | git tag `v*` | (CI 付费暂停) 构建 vm-agent sidecar → Windows Tauri 构建 → GitHub Release + jingao 分发 |
+| `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job |
+| `issue-autofix.yml` | issue opened/labeled | AI 分诊 (GPT-5.2) → mini-swe-agent (GPT-5.3 Codex) → PR |
+| `release-desktop.yml` | git tag `v*` | (CI 付费暂停) Tauri 构建 → GitHub Release |
 
-> **注意**: 自动部署已移除。gateway/website 通过 `make deploy` 手动部署 (SSH 到 jingao 远程 git pull + 本地编译)。
-> **注意**: GitHub Actions CI 因计费问题暂停，Windows 构建改用本地 KVM VM 手动构建。
+**部署**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板) → 本地编译 → 重启。详见 `deploy/AGENTS.md`。
 
 ### Windows 构建 VM (win-build)
 
-本地服务器 (192.168.31.162) 上的 KVM 虚拟机，用于 Windows 桌面端构建。
-
 | 项目 | 值 |
 |------|-----|
-| VM 名称 | win-build |
-| 宿主机 | 192.168.31.162 (root, Ubuntu 24.04, AMD x86_64) |
-| VM IP | 192.168.122.98 (libvirt default NAT) |
-| OS | Windows 11 Enterprise LTSC Evaluation (10.0.26100) |
-| 用户 | builder / build2026 |
-| VNC | 宿主机 :5900 |
-| 磁盘 | 100GB qcow2, SATA, UEFI |
-| 工具 | Git, Rust (rustup), Node.js 22, Bun, VS Build Tools (C++), NSIS |
+| VM IP | 192.168.122.98 (KVM on 192.168.31.162) |
+| OS | Windows 11 LTSC, 用户 builder/build2026 |
+| 工具 | Git, Rust, Node.js 22, Bun, VS Build Tools, NSIS |
 | 构建目录 | `C:\build\jacoworks` |
 | 签名密钥 | `C:\build\tauri-signing.key` |
-
-**VM 管理命令** (在 local 192.168.31.162 上):
-```bash
-virsh start win-build       # 启动
-virsh shutdown win-build    # 关机
-virsh list --all            # 查看状态
-# SSH 连接:
-sshpass -p build2026 ssh builder@192.168.122.98
-```
-
-**Windows 构建步骤** (在 VM 内):
-```powershell
-# 1. 拉取代码
-cd C:\build\jacoworks && git pull
-
-# 2. 构建 sidecar
-cd vm-agent && npm ci && bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
-
-# 3. 准备资源
-mkdir -Force ..\desktop\src-tauri\binaries
-copy dist\vm-agent-x86_64-pc-windows-msvc.exe ..\desktop\src-tauri\binaries\
-
-# 4. 构建 Tauri
-cd ..\desktop && npm ci
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content C:\build\tauri-signing.key -Raw
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "jacoworks-updater-2026"
-npx tauri build --target x86_64-pc-windows-msvc
-
-# 5. 产物在 src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\
-```
-
-**从 Mac 取回产物** (经 local 中转):
-```bash
-# SSH 到 local, 从 VM 拉产物
-ssh root@192.168.31.162 "sshpass -p build2026 scp builder@192.168.122.98:'C:/build/jacoworks/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*' /tmp/win-build/"
-# 从 local 拉到 Mac
-scp root@192.168.31.162:/tmp/win-build/* /tmp/win-artifacts/
-```
-
-### 桌面端发布流程 (混合模式)
-
-**macOS: 本地构建 (Mac)** | **Windows: 本地 VM 构建 (win-build)**
-
-macOS 因 Apple 公证耗时不稳定，改为本地构建 + 手动公证。Windows 因 CI 付费暂停，改用本地 KVM VM 构建。
-
-#### macOS 本地构建步骤
-
-```bash
-# 1. 构建 sidecar
-cd vm-agent && npm ci && bun build --compile src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin
-
-# 2. 准备资源
-mkdir -p ../desktop/src-tauri/binaries
-cp dist/vm-agent-aarch64-apple-darwin ../desktop/src-tauri/binaries/
-
-# 3. 构建 Tauri (签名, 跳过公证)
-cd ../desktop
-APPLE_SIGNING_IDENTITY="Developer ID Application: fan Z (9UUWCMKMDH)" \
-TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/jacoworks.key)" \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD="jacoworks-updater-2026" \
-npm run tauri build -- --target aarch64-apple-darwin
-
-# 4. 生成 updater 签名
-BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle"
-cd "${BUNDLE}/macos" && tar -czf JAcoworks.app.tar.gz JAcoworks.app
-cd - && TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/jacoworks.key)" \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD="jacoworks-updater-2026" \
-npx tauri signer sign "${BUNDLE}/macos/JAcoworks.app.tar.gz"
-
-# 5. 手动公证 (可选, 后台异步)
-xcrun notarytool submit "${BUNDLE}/dmg/JAcoworks_*.dmg" \
-  --apple-id "zhangfan0220@gmail.com" \
-  --password "<app-specific-password>" \
-  --team-id "9UUWCMKMDH" --wait
-# 公证通过后 staple:
-xcrun stapler staple "${BUNDLE}/dmg/JAcoworks_*.dmg"
-```
-
-#### 完整发布流程
-
-```bash
-# 1. 版本号 bump
-#    - desktop/src-tauri/tauri.conf.json (version)
-#    - desktop/src-tauri/Cargo.toml (version)
-
-# 2. 提交 + 打 tag
-git add -A && git commit -m "release: vX.Y.Z"
-git tag vX.Y.Z && git push origin main --tags
-#    → CI 自动构建 Windows + sidecar
-
-# 3. 本地构建 macOS (上述步骤)
-
-# 4. Windows 构建 (在 win-build VM 内, 见上方 Windows 构建步骤)
-
-# 5. 上传到 jingao 分发
-scp <macOS产物> <Windows产物> jingao:/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/vX.Y.Z/
-
-# 6. 注册数据库 (releases + release_assets 表)
-ssh jingao "PGPASSWORD=... psql -h 127.0.0.1 -U postgres -d jacoworks -c \"INSERT INTO releases ...\""
-
-# 7. 创建 GitHub Release
-gh release create vX.Y.Z --repo fran0220/jacoworks --title "JAcoworks vX.Y.Z" <所有产物>
-```
-
-#### 关键注意事项
-
-- **Entitlements**: Bun 编译的 sidecar 需要 JIT 权限 (`Entitlements.plist`: `allow-jit` + `allow-unsigned-executable-memory`)
-- **公证**: 使用 App-Specific Password (非 Apple ID 密码), 格式 `xxxx-xxxx-xxxx-xxxx`, 在 appleid.apple.com 生成
-- **分发路径**: jingao 上 OpenResty 容器内 `/www/sites/jaco.jingao.club/releases/` (宿主机 `/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/`)
-- **构建矩阵**: macOS ARM64 + Windows x64 (Linux 已移除)
 
 ### GitHub Secrets
 
 | Secret | 说明 |
 |--------|------|
-| `JINGAO_HOST` | jingao 服务器 IP (82.156.239.212) |
-| `JINGAO_SSH_KEY` | SSH 私钥, 对应 jingao authorized_keys |
-| `JINGAO_SSH_USER` | SSH 用户名 (ubuntu) |
-| `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名私钥 (minisign, ~/.tauri/jacoworks.key) |
-| `TAURI_SIGNING_KEY_PASSWORD` | 签名密钥密码 |
-| `APPLE_CERTIFICATE` | Developer ID Application .p12 (base64) |
-| `APPLE_CERTIFICATE_PASSWORD` | .p12 密码 |
+| `JINGAO_HOST` / `JINGAO_SSH_KEY` / `JINGAO_SSH_USER` | jingao SSH |
+| `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_KEY_PASSWORD` | Tauri updater 签名 |
+| `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` | .p12 |
 | `APPLE_SIGNING_IDENTITY` | Developer ID Application: fan Z (9UUWCMKMDH) |
-| `APPLE_ID` | zhangfan0220@gmail.com |
-| `APPLE_PASSWORD` | App-Specific Password (appleid.apple.com 生成) |
-| `APPLE_TEAM_ID` | 9UUWCMKMDH |
-| `LLM_PROXY_URL` | LLM 中转站地址 (http://67.230.182.59:8317), issue-autofix 分诊 + mini-swe-agent |
-| `LLM_PROXY_KEY` | LLM 中转站密钥, issue-autofix 使用 |
+| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | 公证 |
+| `LLM_PROXY_URL` / `LLM_PROXY_KEY` | issue-autofix |
 
-### 部署策略
-
-- **gateway / website**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板访问 GitHub) → 本地编译 → 重启
-- **desktop macOS**: 本地构建 + 签名 + 手动公证 → 上传 jingao + GitHub Release
-- **desktop Windows**: 本地 VM 构建 (win-build) → 上传 jingao + GitHub Release
-- **vm-agent**: bun build --compile 打包进 desktop sidecar, 不独立部署
-
-### jingao GitHub 访问
-
-jingao 通过 jpdata (10.0.1.254) 做 SSH ProxyJump 访问 GitHub (GFW 限制直连)：
-```
-# jingao ~/.ssh/config
-Host github.com
-    ProxyJump root@10.0.1.254
-    IdentityFile ~/.ssh/id_ed25519
-```
-jingao 的 deploy key 已添加到 GitHub 仓库。代码仓库: `/opt/jacoworks/repo`
-
-## 9. 本地开发
+## 本地开发
 
 ### 数据库连接
 
-Gateway 和 Website 共享 jingao 上的 PostgreSQL, 本地通过 SSH 隧道访问:
-
 ```bash
-# 开隧道 (后台运行)
 ssh -L 5432:127.0.0.1:5432 jingao -N -f
-
-# 验证
-pg_isready -h 127.0.0.1 -p 5432
 ```
 
 连接串: `postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks`
 
-灌入测试数据:
-```bash
-psql "postgresql://postgres:jacoworks-jingao-2026@127.0.0.1:5432/jacoworks" \
-  -f deploy/sql/002_seed_test_data.sql
-```
+### 本地配置文件 (gitignore)
 
-测试账号: `admin@jacoworks.local` / `admin123` (role=admin)
-测试账号: `e2e-tester` / `e2e-test-2026` (role=user, E2E 测试专用)
-测试激活码: `JACO-TEST-2026` (admin) / `JACO-USER-2026` (user)
-E2E 激活码: `02fd4b5c6a128c762a99966de11ba110` (user, max_uses=100, E2E 自动注册用)
-
-### 本地配置文件 (gitignore, 不入库)
-
-| 文件 | 来源 | 关键修改 |
-|------|------|---------|
-| `gateway/gateway.yaml` | `gateway.yaml.example` | `database.url` 指向隧道, `port: 8847` |
-| `website/website.toml` | `website.toml.example` | `database.url` 指向隧道, `admin_token` 对齐 gateway |
-| `vm-agent/.env` | `.env.template` | `LLM_PROXY_URL` + `LLM_PROXY_KEY` |
-| `desktop/.env` | `.env.example` | `VITE_GATEWAY_URL=http://localhost:8847` |
+| 文件 | 来源 |
+|------|------|
+| `gateway/gateway.yaml` | `gateway.yaml.example` |
+| `website/website.toml` | `website.toml.example` |
+| `vm-agent/.env` | `.env.template` |
+| `desktop/.env` | `.env.example` |
 
 ### Makefile 命令
 
 ```bash
-make help              # 查看所有命令
 make dev-gateway       # Go 网关 → localhost:8847
 make dev-website       # Rust 官网 → localhost:9527
-make dev-agent         # vm-agent 热重载 (调试用)
+make dev-agent         # vm-agent 热重载
 make dev-desktop       # Tauri 桌面端 (Vite HMR)
-make check             # 全量 lint + typecheck + test (含 vm-agent 单元测试)
-make build             # 构建所有服务端组件
+make check             # 全量 lint + typecheck + test
 make deploy            # SSH jingao 远程 git pull + 编译 + 重启
-make deploy-gateway    # 仅部署 Gateway
-make deploy-website    # 仅部署 Website
-make deploy-sync       # 仅同步代码 (git pull)
-make clean             # 清理构建产物
 ```
-
-### vm-agent 测试
-
-三层测试，`bun test` 跑器，零额外依赖：
-
-| 层 | 命令 | 测试数 | 依赖 |
-|---|---|---|---|
-| **Unit** | `cd vm-agent && npm test` | 37 | 零网络，纯本地 SQLite |
-| **E2E** | `cd vm-agent && npm run test:e2e` | 15 | 自动从网关获取密钥 |
-| **全量** | `cd vm-agent && npm run test:all` | 52 | 同上 |
-
-- **单元测试** (`src/lib/__tests__/`): memory-store (FTS5+CJK+hybrid+migration+cache) + daily-log (CRUD+truncate)
-- **E2E RPC** (`src/__tests__/rpc.test.ts`): spawn vm-agent 进程 → 真实网关认证 (admin + e2e-tester 双用户) → LLM 对话 → 内存持久化 → user-scoped 隔离验证 → memory_save/search 工具链 → title 生成
-- **自动降级**: 网关不可达时 E2E 全部优雅跳过，单元测试始终可跑
-- `make check-agent` = typecheck + 单元测试 (CI 安全)
 
 ### 日常工作流
 
@@ -556,52 +136,14 @@ make clean             # 清理构建产物
 1. ssh -L 5432:127.0.0.1:5432 jingao -N -f   # 开隧道
 2. make dev-gateway    # 终端 1
 3. make dev-website    # 终端 2
-4. make dev-desktop    # 终端 3 (连本地 gateway)
+4. make dev-desktop    # 终端 3
 5. make check          # 提交前检查
-6. git push            # CI 自动跑检查
-7. make deploy         # 手动部署到 jingao (远程编译)
+6. make deploy         # 手动部署
 ```
 
-## 10. 待完成
+## 开发规范与约束
 
-- [x] TLS (OpenResty + Let's Encrypt via 1Panel)
-- [x] CI/CD (GitHub Actions: ci + release-desktop)
-- [x] 本地开发环境 (SSH 隧道 + Makefile + 配置模板)
-- [x] 官网 admin 登录 bcrypt 支持 (对齐网关, 自动检测哈希格式)
-- [x] LLM 密钥集中管理 (system_settings 表 + 网关热重载 + admin UI)
-- [x] 移除本地 fallback (vm-agent/desktop 仅从网关获取 LLM 配置)
-- [x] 飞书 SSO 联调 (凭证已配置, Goth Provider 热重载已修复)
-- [x] 飞书 Bot 消息路由 (feishubot 包, webhook → 容器路由)
-- [x] 向量记忆系统 (OpenAI Embedding API + 本地 JSON 向量缓存, 与 OpenClaw 同架构)
-- [x] 记忆系统重构 (SQLite+FTS5 hybrid search, context hook 零 API 调用, 向量 fire-and-forget)
-- [x] vm-agent 测试基础设施 (bun test: 37 单元 + 15 E2E RPC, 真实网关认证 + 双用户隔离)
-- [x] 记忆/技能同步 (gateway API + 容器冻结前拉取 + 解冻后推送)
-- [x] Tauri updater 签名密钥 (minisign 密钥对 + pubkey 写入 tauri.conf.json)
-- [x] GitHub Secrets 配置 (JINGAO_HOST/SSH_KEY/SSH_USER + TAURI_SIGNING_*)
-- [x] 官网下载页对接 releases 表 + 平台检测
-- [x] jingao GitHub 访问 (jpdata SSH ProxyJump + deploy key)
-- [x] 游戏画廊功能 (games 表 + 网关 API + 官网 gallery/play 页面)
-- [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
-- [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
-- [x] vm-agent 编译为单二进制 (bun build --compile)
-- [x] 预制技能 (vm-agent/skills/ — 创作/办公/工具/开发 四大类)
-- [x] 游戏 AI 开发技能 (vm-agent/skills/开发/game-dev-ai/)
-- [x] Apple 代码签名 (Developer ID Application 证书 + Entitlements JIT 权限)
-- [x] 桌面端发布流程打通 (macOS 本地构建 + Windows CI + jingao 分发 + DB 注册)
-- [x] OpenClaw WebSocket 传输 (ticket auth + 容器健康管理 + liveness 检测)
-- [x] 桌面端反馈系统 (设置面板反馈 Tab + 截图压缩 + GitHub Issue 自动同步)
-- [x] GitHub 反馈集成 (gateway github 客户端 + Issue 创建 + 截图上传到 feedback-assets 分支)
-- [x] 模型列表更新 (Sonnet 4.6 + GLM-5, 移除 Haiku 4.5 + Grok 4.1 Fast + Gemini 3 Pro)
-- [x] Issue 自动修复 (issue-autofix.yml: AI 分诊 GPT-5.2 + mini-swe-agent GPT-5.3 Codex → 自动 PR)
-- [ ] Apple 公证 (notarization) 端到端验证
-- [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
-- [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
-- [ ] 移动端 / 语音 / 文件上传
-- [ ] 桌面端接入 tauri-plugin-updater (运行时自动检查更新)
-
-## 11. 开发规范与约束
-
-**代码风格**: Go 标准 + golangci-lint | TS strict ES2022 NodeNext | React 18 纯 CSS 变量 | Rust Tauri v2 + Axum (官网) | Conventional Commits
+**代码风格**: Go 标准 + golangci-lint | TS strict ES2022 NodeNext | React 18 纯 CSS 变量 | Rust Axum + Askama | Conventional Commits
 
 **关键约束**:
 - **本地 Agent 优先**: 对话走 sidecar RPC，不经网关
@@ -609,20 +151,11 @@ make clean             # 清理构建产物
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session 和记忆
 - **OpenClaw 前端解耦**: `openclaw/` 不复用本地组件，仅共享 auth/config/transport
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，网关启动加载 + 热重载，无本地 fallback
-- **CSS 模块化**: 样式拆分到 `react/styles/` 按组件分文件
 
-**Agent 启动排查**:
-1. 看 RPC 日志面板 (`agent-rpc-log`)
-2. `需要 LLM_PROXY_KEY` → 检查管理后台「系统设置」中 LLM 密钥配置
-3. `Agent ready handshake timed out` → 重新构建 `vm-agent/dist/index.js`
+## 待完成
 
-### Design Token — 强制约束
-
-> Token 定义: `desktop/src/app.css :root`，完整规范: `docs/design-system.md`
-
-风格: Claude.ai 暖色奶油 — `#F5F0EB` 背景、`#C4724A` 陶土强调、白色卡片、大圆角。
-
-1. **禁止魔法数字**: spacing 用 `--space-*`、font-size 用 `--text-*`、radius 用 `--radius-*`、z-index 用 `--z-*`、transition 用 `--duration-*`
-2. **颜色必须用变量**: 禁止硬编码 `#hex` / `rgb()`
-3. **白色文字**: 强调色背景用 `var(--text-on-accent)`
-4. 例外: `0`/`auto`/%/`1px`/`opacity`/`em`/SVG/`@keyframes`
+- [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
+- [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
+- [ ] Apple 公证 (notarization) 端到端验证
+- [ ] 移动端 / 语音 / 文件上传
+- [ ] 桌面端接入 tauri-plugin-updater (运行时自动检查更新)

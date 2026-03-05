@@ -111,6 +111,15 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         maxTokens: 16384,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
+      {
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        reasoning: false,
+        input: ["text", "image"],
+        contextWindow: 200000,
+        maxTokens: 8192,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
     ],
   });
 
@@ -175,9 +184,9 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
     api: "openai-completions",
     models: [
       {
-        id: "grok-4.20-beta",
-        name: "Grok 4.20 Beta",
-        reasoning: true,
+        id: "grok-4.1-fast",
+        name: "Grok 4.1 Fast",
+        reasoning: false,
         input: ["text"],
         contextWindow: 128000,
         maxTokens: 8192,
@@ -414,7 +423,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     settingsManager,
     extensionFactories,
     additionalSkillPaths: [
-      ...(existsSync(config.remoteSkillsDir) ? [config.remoteSkillsDir] : []),
       ...config.skillsPaths.filter((p) => existsSync(p)),
       ...(existsSync(config.userSkillsDir) ? [config.userSkillsDir] : []),
     ],
@@ -697,11 +705,6 @@ export function listAvailableSkills(): SkillInfo[] {
     }
   }
 
-  // Remote skills (from gateway, highest priority)
-  if (existsSync(config.remoteSkillsDir)) {
-    loadFrom(config.remoteSkillsDir, "builtin");
-  }
-
   // Built-in skills (vm-agent/skills/ etc.)
   for (const dir of config.skillsPaths) {
     loadFrom(dir, "builtin");
@@ -725,8 +728,8 @@ export async function generateSessionTitle(
 
   // 优先用轻量模型，回退到主模型
   const titleModels = [
-    { model: "claude-haiku-4-5-20251001", api: "anthropic" },
-    { model: config.primaryModel, api: config.primaryProvider.includes("claude") ? "anthropic" : "openai" },
+    { model: "claude-haiku-4-5", api: "anthropic" },
+    { model: "gemini-3-flash-preview", api: "openai" },
   ];
 
   let lastError: Error | null = null;
