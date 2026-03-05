@@ -76,7 +76,7 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~
 | 工作流 | 触发 | 作用 |
 |--------|------|------|
 | `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job |
-| `issue-autofix.yml` | issue opened/labeled | AI 分诊 (GPT-5.2) → mini-swe-agent (GPT-5.3 Codex) → PR |
+| `issue-autofix.yml` | issue opened/labeled | AI 分诊 (GPT-5.4) → mini-swe-agent (GPT-5.3 Codex) → PR |
 | `release-desktop.yml` | git tag `v*` | (CI 付费暂停) Tauri 构建 → GitHub Release |
 
 **部署**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板) → 本地编译 → 重启。详见 `deploy/AGENTS.md`。

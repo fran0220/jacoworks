@@ -232,9 +232,9 @@ async fn render_settings_page(
             label: "GPT-5.3 Codex".into(),
         },
         ModelView {
-            id: "gpt-5.2".into(),
+            id: "gpt-5.4".into(),
             provider: "GPT".into(),
-            label: "GPT-5.2".into(),
+            label: "GPT-5.4".into(),
         },
         ModelView {
             id: "gemini-3.1-pro-preview".into(),

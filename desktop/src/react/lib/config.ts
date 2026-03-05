@@ -10,7 +10,7 @@ export const MODEL_OPTIONS = [
   { value: "proxy-claude/claude-sonnet-4-6", label: "Sonnet 4.6" },
   { value: "proxy-claude/claude-opus-4-6", label: "Opus 4.6" },
   { value: "proxy-gpt/gpt-5.3-codex", label: "GPT-5.3 Codex" },
-  { value: "proxy-gpt/gpt-5.2", label: "GPT-5.2" },
+  { value: "proxy-gpt/gpt-5.4", label: "GPT-5.4" },
   { value: "proxy-gemini/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
   { value: "proxy-gemini/gemini-3-flash-preview", label: "Gemini 3 Flash" },
   { value: "proxy-glm/glm-5", label: "GLM-5" },

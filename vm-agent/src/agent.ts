@@ -145,8 +145,8 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       {
-        id: "gpt-5.2",
-        name: "GPT-5.2",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
         reasoning: true,
         input: ["text", "image"],
         contextWindow: 128000,
@@ -502,7 +502,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
  * 解析请求中的 model 字段，支持格式：
  *   "proxy-claude/claude-opus-4-6"    → provider: proxy-claude, id: claude-opus-4-6
  *   "claude-opus-4-6"                 → 自动匹配 provider
- *   "gpt-5.2"                          → 自动匹配 proxy-gpt
+ *   "gpt-5.4"                          → 自动匹配 proxy-gpt
  */
 export function resolveModel(modelStr?: string) {
   if (!modelStr) return null;

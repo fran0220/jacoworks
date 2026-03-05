@@ -107,7 +107,7 @@ describe("sessions", () => {
     await sessions.updateSession("s-1", {
       title: "Updated",
       messages: [{ role: "user", content: "hello" }],
-      model: "proxy-gpt/gpt-5.2",
+      model: "proxy-gpt/gpt-5.4",
       workspacePath: "/tmp/ws",
     });
 
@@ -120,7 +120,7 @@ describe("sessions", () => {
     expect(JSON.parse(request.body)).toEqual({
       title: "Updated",
       messages: JSON.stringify([{ role: "user", content: "hello" }]),
-      model: "proxy-gpt/gpt-5.2",
+      model: "proxy-gpt/gpt-5.4",
       workspace_path: "/tmp/ws",
     });
   });
@@ -200,19 +200,19 @@ describe("sessions", () => {
         updated_at: updatedAt,
         type: "chat",
         workspace_path: "/tmp/ws",
-        model: "proxy-gpt/gpt-5.2",
+        model: "proxy-gpt/gpt-5.4",
       }),
     });
 
     const sessions = await loadSessions();
-    const session = await sessions.createSession({ model: "proxy-gpt/gpt-5.2" });
+    const session = await sessions.createSession({ model: "proxy-gpt/gpt-5.4" });
 
     expect(session).toMatchObject({
       id: "s-struct",
       title: "Struct Session",
       type: "chat",
       workspacePath: "/tmp/ws",
-      model: "proxy-gpt/gpt-5.2",
+      model: "proxy-gpt/gpt-5.4",
     });
     expect(session.createdAt).toBe(new Date(createdAt).getTime());
     expect(session.updatedAt).toBe(updatedAt);

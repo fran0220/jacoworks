@@ -45,7 +45,7 @@ Rust 官网 (jaco.jingao.club)
 | 模型 | Provider |
 |------|----------|
 | Claude Sonnet 4.6 / Opus 4.6 | Anthropic |
-| GPT-5.3 Codex / GPT-5.2 | OpenAI |
+| GPT-5.3 Codex / GPT-5.4 | OpenAI |
 | Gemini 3.1 Pro / Gemini 3 Flash | Google |
 | Grok 4.20 | xAI |
 | GLM-5 | 智谱 |

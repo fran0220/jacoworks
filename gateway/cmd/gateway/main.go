@@ -754,7 +754,7 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
 				{"id": "claude-haiku-4-5", "provider": "proxy-claude", "label": "Haiku 4.5"},
 				{"id": "gpt-5.3-codex", "provider": "proxy-gpt", "label": "GPT-5.3 Codex"},
-				{"id": "gpt-5.2", "provider": "proxy-gpt", "label": "GPT-5.2"},
+				{"id": "gpt-5.4", "provider": "proxy-gpt", "label": "GPT-5.4"},
 				{"id": "gemini-3.1-pro-preview", "provider": "proxy-gemini", "label": "Gemini 3.1 Pro"},
 				{"id": "gemini-3-flash-preview", "provider": "proxy-gemini", "label": "Gemini 3 Flash"},
 				{"id": "grok-4.1-fast", "provider": "proxy-grok", "label": "Grok 4.1 Fast"},
