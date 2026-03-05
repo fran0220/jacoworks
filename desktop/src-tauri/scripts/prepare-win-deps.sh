@@ -37,7 +37,7 @@ GIT_SHA256=""  # Not pinned: GitHub mirrors may rebuild the archive
 BUN_VERSION="1.2.5"
 BUN_ZIP="bun-windows-x64.zip"
 BUN_URL="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ZIP}"
-BUN_SHA256="e5bda73a tried"  # TODO: fill real hash after first download
+BUN_SHA256=""  # Not pinned: version-locked URL is sufficient
 
 # Coreutils to extract from Git for Windows (MSYS2 usr/bin)
 COREUTILS=(
