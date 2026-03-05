@@ -5,7 +5,7 @@
 .PHONY: help dev dev-gateway dev-website dev-agent dev-desktop \
         build build-gateway build-website build-agent build-desktop \
         bundle-doc-packages compile-agent prepare-win-deps \
-        deploy deploy-gateway deploy-website push-skills \
+        deploy deploy-gateway deploy-website deploy-agent push-skills \
         check check-gateway check-website check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
         db-reset db-migrate clean \
@@ -13,6 +13,7 @@
 
 # ─── 配置 ───
 JINGAO_HOST   ?= jingao
+ORACLE_HOST   ?= opc@10.0.1.3
 GATEWAY_PORT  ?= 8847
 WEBSITE_PORT  ?= 9527
 REPO_DIR      ?= /opt/jacoworks/repo
@@ -187,11 +188,27 @@ clean: ## 清理所有构建产物
 	rm -rf desktop/dist/ desktop/src-tauri/target/
 
 # ═══════════════════════════════════════════
-#  Docker (vm-agent server)
+#  Docker (vm-agent server → oracle)
 # ═══════════════════════════════════════════
 
 docker-build-agent: ## 构建 vm-agent Docker 镜像 (ARM64)
 	cd vm-agent && docker buildx build --platform linux/arm64 -t jacoworks/vm-agent:latest .
 
-docker-run-agent: ## 启动 vm-agent Docker 容器
+docker-run-agent: ## 本地启动 vm-agent Docker 容器
 	cd vm-agent && docker compose up -d
+
+deploy-agent: docker-build-agent ## 构建并部署 vm-agent 到 oracle
+	@echo "📦 导出 ARM64 镜像..."
+	docker save jacoworks/vm-agent:latest | gzip > /tmp/vm-agent.tar.gz
+	@echo "📤 传输到 oracle (via jingao)..."
+	scp /tmp/vm-agent.tar.gz $(JINGAO_HOST):/tmp/vm-agent.tar.gz
+	ssh $(JINGAO_HOST) "scp /tmp/vm-agent.tar.gz $(ORACLE_HOST):/tmp/vm-agent.tar.gz && rm /tmp/vm-agent.tar.gz"
+	@echo "🔄 加载镜像并重启容器..."
+	ssh $(JINGAO_HOST) "ssh $(ORACLE_HOST) ' \
+		docker load < /tmp/vm-agent.tar.gz && \
+		rm /tmp/vm-agent.tar.gz && \
+		docker ps -q --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker stop && \
+		docker ps -aq --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker rm && \
+		echo \"✅ 镜像已更新, 新容器将由网关按需创建\"'"
+	@rm -f /tmp/vm-agent.tar.gz
+	@echo "✅ vm-agent 已部署到 oracle"

@@ -1,62 +1,46 @@
 ---
 name: nano-banana-pro
 display-name: 图片生成
-display-description: 使用 Nano Banana Pro 生成或编辑图片 (中转站优先, fal.ai fallback)
+display-description: 生成或编辑高质量图片
 description: >
-  Generate or edit images with Nano Banana Pro (Google image generation model).
-  Primary via LLM Proxy (x-goog-api-key auth), auto-fallback to fal.ai nano-banana-2 if proxy unavailable.
+  Generate or edit images using the built-in generate_image tool.
   Supports text-to-image and image-to-image editing.
   Use when user asks to create, generate, draw, or edit an image.
 ---
 
 # 图片生成与编辑
 
-双引擎图片生成：优先 LLM 中转站 nano-banana-pro (统一计费, x-goog-api-key 认证)，失败自动 fallback 到 fal.ai nano-banana-2。
+JAcoworks 内置 `generate_image` 工具，支持文生图和图片编辑。
 
 ## 使用方法
 
+直接调用 `generate_image` 工具，无需运行脚本。
+
 **生成新图片：**
-```bash
-node {baseDir}/scripts/generate-image.mjs --prompt "图片描述" --filename "output.png"
+```
+generate_image(prompt="图片描述", filename="output.png")
 ```
 
 **编辑已有图片：**
-```bash
-node {baseDir}/scripts/generate-image.mjs --prompt "编辑指令" --filename "output.png" --input-image "input.png"
+```
+generate_image(prompt="编辑指令", filename="output.png", input_image="input.png")
 ```
 
-**指定宽高比 (fal.ai)：**
-```bash
-node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.png" --aspect-ratio 16:9
+**指定宽高比：**
 ```
-
-**指定分辨率 (仅 fallback 到 Pro 时生效)：**
-```bash
-node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.png" --resolution 4K
+generate_image(prompt="描述", filename="output.png", aspect_ratio="16:9")
 ```
-
-> **重要**：始终在用户工作目录下运行，让图片保存到用户所在位置。
 
 ## 参数
 
-| 参数 | 短写 | 必须 | 说明 |
-|------|------|------|------|
-| `--prompt` | `-p` | ✅ | 图片描述或编辑指令 |
-| `--filename` | `-f` | ✅ | 输出文件名 (含路径) |
-| `--input-image` | `-i` | ❌ | 待编辑的输入图片路径 |
-| `--aspect-ratio` | `-a` | ❌ | 宽高比: auto(默认) / 1:1 / 16:9 / 9:16 / 4:3 / 3:4 |
-| `--resolution` | `-r` | ❌ | 1K(默认) / 2K / 4K (仅 Pro fallback 时生效) |
+| 参数 | 必须 | 说明 |
+|------|------|------|
+| `prompt` | ✅ | 图片描述或编辑指令 |
+| `filename` | ✅ | 输出文件路径 (相对工作目录或绝对路径) |
+| `input_image` | ❌ | 待编辑的输入图片路径 |
+| `aspect_ratio` | ❌ | auto(默认) / 1:1 / 16:9 / 9:16 / 4:3 / 3:4 |
 
-## 引擎选择
-
-| 引擎 | 模型 | 协议 | 条件 |
-|------|------|------|------|
-| **Primary** | nano-banana-pro via LLM Proxy | Gemini generateContent (`x-goog-api-key` header) | `LLM_PROXY_KEY` 已配置 |
-| **Fallback** | nano-banana-2 via fal.ai | fal.ai REST | `FAL_KEY` 已配置 |
-
-脚本自动选择：LLM_PROXY_KEY 有值 → 中转站 nano-banana-pro；失败或无 key → fallback fal.ai nano-banana-2。
-
-## 宽高比映射 (nano-banana-2)
+## 宽高比映射
 
 | 用户说法 | 参数 |
 |----------|------|
@@ -66,19 +50,9 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 | "竖屏" / "手机" / "9:16" | `9:16` |
 | "4:3" / "标准" | `4:3` |
 
-## 分辨率映射
-
-| 用户说法 | 参数 |
-|----------|------|
-| 无提及 / "低分辨率" | `1K` |
-| "2K" / "中等" | `2K` |
-| "高清" / "4K" / "ultra" | `4K` |
-
-编辑模式下若未指定分辨率，脚本会根据输入图片尺寸自动选择。分辨率仅在中转站 Proxy 模式生效。
-
 ## 默认工作流：draft → iterate → final
 
-1. **草稿**: 快速验证 prompt (nano-banana-2, 几秒出图)
+1. **草稿**: 快速验证 prompt
 2. **迭代**: 微调 prompt，每次新文件名
 3. **定稿**: prompt 确认后输出最终版
 
@@ -102,30 +76,14 @@ node {baseDir}/scripts/generate-image.mjs --prompt "描述" --filename "output.p
 - 生成：`"Create an image of: <主体>. Style: <风格>. Composition: <构图>. Lighting: <光线>. Background: <背景>."`
 - 编辑：`"Change ONLY: <修改内容>. Keep identical: subject, composition, pose, lighting, color palette, background, text, and overall style."`
 
-## 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `LLM_PROXY_URL` | 中转站地址 (primary, 默认 `http://67.230.182.59:8317`) |
-| `LLM_PROXY_KEY` | 中转站 API 密钥 (primary) |
-| `FAL_KEY` | fal.ai API 密钥 (fallback) |
-
-这些变量由 Tauri 启动时注入（网关 `/api/agent/config` 下发）。
-
 ## 输出
 
-- 脚本将图片保存到指定路径
-- **stdout** 输出完整文件路径（供 Agent 捕获）
-- **stderr** 输出日志信息
+- 工具将图片保存到指定路径并返回文件路径和大小
 - 生成后告知用户文件路径，**不要**读取图片内容
 
 ## 常见错误
 
 | 错误 | 原因 | 解决 |
 |------|------|------|
-| `neither LLM_PROXY_KEY nor FAL_KEY` | 两个 key 都未配置 | 管理后台「系统设置」配置 LLM 密钥 |
-| `Proxy API error: HTTP 503` | 中转站渠道不可用 | 自动 fallback 到 fal.ai，或检查中转站 |
-| `fal API error: HTTP 401` | FAL_KEY 无效 | 检查 fal.ai 密钥 |
-| `fal API error: HTTP 429` | fal.ai 限流 | 等待后重试 |
-| `Error loading input image` | 文件不存在或不可读 | 检查 `--input-image` 路径 |
-| `No image was generated` | 模型拒绝生成（安全过滤） | 调整 prompt |
+| `no image generation API key configured` | 密钥未配置 | 联系管理员在「系统设置」中配置 |
+| `all image generation methods failed` | 生成失败 | 检查网络或稍后重试 |

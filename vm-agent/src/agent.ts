@@ -16,11 +16,15 @@ import type { ExtensionFactory, CreateAgentSessionResult } from "@mariozechner/p
 import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
+import { createImageGenExtension } from "./extensions/image-gen.js";
+import { createReadDocumentExtension } from "./extensions/read-document.js";
+import { createWebSearchExtension } from "./extensions/web-search.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
 import { createCronService, type CronService } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
+import { createPowershellTool, isPowershellAvailable } from "./tools/powershell.js";
 
 // ─── Session Metadata ───────────────────────────────
 
@@ -368,6 +372,13 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   const extensionFactories: ExtensionFactory[] = [];
 
+  // Windows: register PowerShell fallback tool for environment self-repair
+  if (process.platform === "win32" && isPowershellAvailable()) {
+    extensionFactories.push((pi) => {
+      pi.registerTool(createPowershellTool());
+    });
+  }
+
   if (config.memoryEnabled) {
     extensionFactories.push(
       createMemoryExtension(userMemoryRootDir(opts?.userId), {
@@ -382,7 +393,29 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     extensionFactories.push(cronService.getExtensionFactory());
   }
 
-  // Block read tool on binary document files — they produce garbled output
+  // Image generation tool (available when proxy or fal.ai key is configured)
+  const falApiKey = process.env.FAL_API_KEY || "";
+  if (config.proxyKey || falApiKey) {
+    extensionFactories.push(
+      createImageGenExtension(config.proxyUrl, config.proxyKey, falApiKey, workspace),
+    );
+  }
+
+  // Document reading tool (docx, xlsx, csv, pdf, pptx, images via OCR)
+  if (config.proxyKey) {
+    extensionFactories.push(
+      createReadDocumentExtension(config.proxyUrl, config.proxyKey, workspace),
+    );
+  }
+
+  // Web search tool (Tavily primary, Grok fallback)
+  if (process.env.TAVILY_API_KEY || config.proxyKey) {
+    extensionFactories.push(
+      createWebSearchExtension(config.proxyUrl, config.proxyKey),
+    );
+  }
+
+  // Redirect read tool on binary documents to read_document
   const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
   extensionFactories.push((pi) => {
     pi.on("tool_call", async (event) => {
@@ -390,7 +423,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
         if (BINARY_DOC_EXTS.test(event.input.path)) {
           return {
             block: true,
-            reason: `Cannot read binary file "${event.input.path}" with the read tool. Write a .mjs script instead — mammoth (docx), exceljs (xlsx), pdf-parse/pdf-lib (pdf), pptxgenjs (pptx), csv-parse/csv-stringify (csv), jszip (zip), fast-xml-parser (xml), iconv-lite (GBK encoding) are pre-installed.`,
+            reason: `Cannot read binary file "${event.input.path}" with the read tool. Use the read_document tool instead.`,
           };
         }
       }
@@ -599,6 +632,49 @@ async function executePrompt(prompt: string): Promise<string> {
   });
 }
 
+// ─── Isolated Prompt (fresh session per cron job run) ──
+
+const CRON_SESSION_PREFIX = "cron::";
+
+async function executeIsolatedPrompt(prompt: string, cronSessionId: string): Promise<string> {
+  const sessionId = `${CRON_SESSION_PREFIX}${cronSessionId}`;
+  const { session } = await getSession(sessionId);
+
+  let fullText = "";
+
+  const result = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsub();
+      reject(new Error("Isolated cron prompt timeout (5min)"));
+    }, 300_000);
+
+    const unsub = session.subscribe((event) => {
+      if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent.type === "text_delta"
+      ) {
+        fullText += event.assistantMessageEvent.delta;
+      }
+      if (event.type === "agent_end") {
+        clearTimeout(timeout);
+        unsub();
+        resolve(fullText);
+      }
+    });
+
+    session.prompt(prompt).catch((err) => {
+      clearTimeout(timeout);
+      unsub();
+      reject(err);
+    });
+  });
+
+  // Destroy isolated session after use to avoid memory leak
+  destroySession(sessionId);
+
+  return result;
+}
+
 // ─── Background Services ────────────────────────────
 
 export async function startBackgroundServices() {
@@ -621,23 +697,10 @@ export async function startBackgroundServices() {
     cronService = createCronService(
       { workspaceDir: config.workspaceDir },
       (prompt) => promptQueue!.enqueue(prompt),
+      (prompt, sessionId) => executeIsolatedPrompt(prompt, sessionId),
     );
     cronService.start();
-    // Register cron_manage tool into background session
-    const bgSessionId = `${config.primaryProvider}/${config.primaryModel}${BG_SESSION_SUFFIX}`;
-    const bgCacheKey = sessionCacheKey(
-      bgSessionId,
-      config.workspaceDir,
-      false,
-      userScopeKey(undefined),
-    );
-    const bgEntry = sessions.get(bgCacheKey);
-    if (!bgEntry) {
-      // Ensure bg session exists so cron tool gets registered on next getSession()
-      console.log("⏰ Cron service started (cron_manage tool available via agent)");
-    } else {
-      console.log("⏰ Cron service started");
-    }
+    console.log("⏰ Cron service started (cron_manage tool available via agent)");
   }
 }
 

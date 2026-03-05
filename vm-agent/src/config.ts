@@ -183,7 +183,7 @@ export function loadConfig(): Config {
     cronEnabled: process.env.CRON_ENABLED !== undefined
       ? process.env.CRON_ENABLED === "true"
       : isServer,
-    toolDenyList: (process.env.TOOL_DENY_LIST || "WebSearch,WebFetch")
+    toolDenyList: (process.env.TOOL_DENY_LIST || "WebSearch,WebFetch,WebBrowse")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),

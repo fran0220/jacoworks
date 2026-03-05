@@ -1,6 +1,6 @@
 # JAcoworks — 企业 AI 协同办公平台
 
-> Tauri 桌面端内嵌 Pi SDK Agent sidecar 直接读写本地文件。Go 网关 (jingao 云主机, OpenResty 反代) 提供认证、会话存储和管理 API。Rust 官网 (Axum, 同机部署) 提供公开页面、文档、反馈、管理后台和 Tauri 更新 API。LLM 中转站 (`http://67.230.182.59:8317`) 统一接入 Claude/GPT/Gemini/Grok。本地宿主机通过 WireGuard VPN 提供 LXD 容器 (OpenClaw)。
+> Tauri 桌面端内嵌 Pi SDK Agent sidecar 直接读写本地文件。Go 网关 (jingao 云主机, OpenResty 反代) 提供认证、会话存储和管理 API。Rust 官网 (Axum, 同机部署) 提供公开页面、文档、反馈、管理后台和 Tauri 更新 API。LLM 中转站 (`http://67.230.182.59:8317`) 统一接入 Claude/GPT/Gemini/Grok。oracle 主机通过 SSH 管理 Docker 容器。
 
 ## AGENTS.md 层级
 
@@ -8,7 +8,7 @@
 |------|------|
 | `AGENTS.md` (本文件) | 项目概览、架构、数据库、CI/CD、本地开发 |
 | `gateway/AGENTS.md` | API 端点、Go 环境变量、测试 |
-| `vm-agent/AGENTS.md` | RPC 协议、模型、TS 环境变量、4 层测试 |
+| `vm-agent/AGENTS.md` | RPC 协议、模型、TS 环境变量、5 层测试、Cron 定时任务 |
 | `desktop/AGENTS.md` | 组件结构、Design Token、React 规范 |
 | `website/AGENTS.md` | 路由、Askama 模板、Rust 规范 |
 | `deploy/AGENTS.md` | SQL schema、测试账号、基础设施、部署策略 |
@@ -27,25 +27,24 @@
   │                    ├─ Goth 认证 (飞书 SSO / bcrypt / 激活码)
   │                    ├─ chat_sessions CRUD (PostgreSQL jingao 本地)
   │                    ├─ GET /api/agent/config → 下发 LLM 密钥
-  │                    ├─ POST /v1/chat/completions → OpenClaw/ChatAgent 代理
-  │                    └─ GET /ws/openclaw → WS 代理 → WireGuard → 容器 :18789
+  │                    ├─ POST /v1/chat/completions → ChatAgent 代理
+  │                    └─ GET /ws/agent → WS 代理 → SSH → 容器端口
   │
   ├─ 本地模式: sidecar RPC (stdin/stdout)
   │    vm-agent → Pi SDK session → LLM 中转站
   │    可选 workspace → Agent 直接读写本地文件
   │
-  └─ OpenClaw 模式: WebSocket → 网关 WS 代理 → WireGuard VPN → LXD 容器
+  └─ 协作模式: WebSocket → 网关 WS 代理 → SSH → Docker 容器
        Ed25519 设备认证, JSON framing 协议
 
-jingao (82.156.239.212) ←── WireGuard wg1 ──→ jpdata (185.200.65.233) ←── wg0 ──→ oracle (161.33.28.249)
-  10.0.1.1/24                       10.0.1.254/24                       10.0.1.3/24
-  route 10.20.20.0/24 via wg1      hub (转发 jingao ↔ oracle, ~67ms)   jaconet: 10.20.20.0/24 (LXD)
-  ssh opc@10.0.1.3                  xTom Japan, Tokyo                   LXD 容器群 (tpl-openclaw, ARM)
+jingao (82.156.239.212) ──── SSH ────→ oracle (161.33.28.249)
+  ssh opc@10.0.1.3                    Docker 容器群 (agent-net 网络)
+                                      jacoworks/vm-agent:latest, ARM
 ```
 
 **三层服务**: 官网 (浏览器) + 网关 (桌面端 API) + 共享 PostgreSQL (jingao 本地)
-**双模式**: 本地 `type="chat"` (sidecar RPC) / OpenClaw `type="cowork"` (WebSocket)
-**跨机**: WireGuard VPN 经 jpdata relay 中继连接 jingao ↔ oracle, 网关通过 SSH 管理 LXD, WS 直连容器 IP
+**双模式**: 本地 `type="chat"` (sidecar RPC) / 协作 `type="cowork"` (WebSocket)
+**跨机**: 网关通过 SSH 管理 oracle 上的 Docker 容器, WS 连接容器端口
 
 ## 数据库
 
@@ -127,7 +126,8 @@ make dev-website       # Rust 官网 → localhost:9527
 make dev-agent         # vm-agent 热重载
 make dev-desktop       # Tauri 桌面端 (Vite HMR)
 make check             # 全量 lint + typecheck + test
-make deploy            # SSH jingao 远程 git pull + 编译 + 重启
+make deploy            # 部署 gateway + website 到 jingao
+make deploy-agent      # 构建 ARM64 镜像 → 部署到 oracle
 ```
 
 ### 日常工作流
@@ -138,7 +138,8 @@ make deploy            # SSH jingao 远程 git pull + 编译 + 重启
 3. make dev-website    # 终端 2
 4. make dev-desktop    # 终端 3
 5. make check          # 提交前检查
-6. make deploy         # 手动部署
+6. make deploy         # 部署 gateway + website
+7. make deploy-agent   # 部署 vm-agent 到 oracle (需要时)
 ```
 
 ## 开发规范与约束
@@ -148,14 +149,13 @@ make deploy            # SSH jingao 远程 git pull + 编译 + 重启
 **关键约束**:
 - **本地 Agent 优先**: 对话走 sidecar RPC，不经网关
 - **网关仅管控面**: 认证、会话 CRUD、LLM 配置下发、WS 代理
+- **技能本地内置**: `vm-agent/skills/` 跟随代码版本, sidecar 通过 `SKILLS_PATHS` 传入, 不从网关拉取
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session 和记忆
-- **OpenClaw 前端解耦**: `openclaw/` 不复用本地组件，仅共享 auth/config/transport
+- **协作前端解耦**: `cowork/` 不复用本地组件，仅共享 auth/config/transport
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，网关启动加载 + 热重载，无本地 fallback
 
 ## 待完成
 
-- [ ] 飞书 SSO 端到端验证 (桌面端发起 → 回调 → 登录成功)
-- [ ] 飞书 Bot 联调 (飞书开放平台事件订阅 + 权限审批)
 - [ ] Apple 公证 (notarization) 端到端验证
 - [ ] 移动端 / 语音 / 文件上传
 - [ ] 桌面端接入 tauri-plugin-updater (运行时自动检查更新)

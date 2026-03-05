@@ -38,12 +38,12 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。
 | Go 网关 | jingao 82.156.239.212 | :8847, OpenResty 反代 jacoapi.jingao.club |
 | PostgreSQL | jingao 本地 | 127.0.0.1:5432/jacoworks |
 | WireGuard | jingao ↔ jpdata ↔ oracle | wg1: 10.0.1.1 ↔ 10.0.1.254 ↔ 10.0.1.3 |
-| LXD 容器 | oracle 161.33.28.249 | jaconet 10.20.20.0/24, tpl-openclaw (ARM) |
+| Docker 容器 | oracle 161.33.28.249 | agent-net 网络, jacoworks/vm-agent:latest (ARM) |
 | LLM 中转站 | 67.230.182.59 | :8317 |
 
 ## 部署
 
 - **gateway / website**: `make deploy` → SSH jingao → git pull → 本地编译 → 重启
+- **vm-agent (oracle)**: `make deploy-agent` → 本地 cross-build ARM64 镜像 → docker save → scp via jingao → docker load → 重启容器
 - **desktop macOS**: 本地构建 + 签名 + 手动公证 → 上传 jingao + GitHub Release
 - **desktop Windows**: 本地 VM (win-build) 构建 → 上传 jingao + GitHub Release
-- **vm-agent**: bun build --compile 打包进 desktop sidecar, 不独立部署
