@@ -1,28 +1,30 @@
 # Multi-stage build for ARM64 (Oracle Cloud free tier)
 #
-# NOTE: bun's --target=bun-linux-arm64 cross-compilation from macOS may not work
-# for all native dependencies. For reliable ARM64 builds, use:
-#   docker buildx build --platform linux/arm64 -t jacoworks/vm-agent:latest .
-# This runs the build inside an ARM64 emulated container via QEMU.
+# Uses Bun runtime directly (no --compile) to avoid glibc/musl mismatch.
+# For reliable ARM64 builds on ARM64 host:
+#   docker build -t jacoworks/vm-agent:latest .
 
-# ── Stage 1: Build ──
-FROM oven/bun:1-alpine AS builder
+# ── Stage 1: Install dependencies ──
+FROM oven/bun:1-slim AS builder
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 COPY src/ ./src/
 COPY tsconfig.json ./
-RUN bun build --compile --target=bun-linux-arm64 src/server.ts --outfile dist/vm-agent-server
 
 # ── Stage 2: Runtime ──
-FROM alpine:3.20
-RUN apk add --no-cache tini curl git
+FROM oven/bun:1-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini curl git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create non-root agent user
-RUN addgroup -g 1000 agent && adduser -u 1000 -G agent -D -h /home/agent agent
+RUN groupadd -g 1000 agent && useradd -u 1000 -g agent -m -d /home/agent agent
 
-WORKDIR /home/agent
-COPY --from=builder /app/dist/vm-agent-server /usr/local/bin/vm-agent-server
+WORKDIR /home/agent/app
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/package.json /app/tsconfig.json ./
 COPY skills/ /app/skills/
 
 # Default environment for server mode
@@ -45,4 +47,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -sf http://localhost:18789/health || exit 1
 
 ENTRYPOINT ["tini", "--"]
-CMD ["vm-agent-server"]
+CMD ["bun", "run", "src/server.ts"]
