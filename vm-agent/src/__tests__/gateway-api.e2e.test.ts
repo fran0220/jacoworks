@@ -841,8 +841,8 @@ describe("9. 管理员 API", () => {
     expect([200, 503]).toContain(res.status);
     if (res.status === 200) {
       const body = await json<unknown>(res);
-      // 应该是数组或对象
-      expect(body).toBeTruthy();
+      // 可能是数组、对象或 null (无容器时)
+      expect(body === null || typeof body === "object").toBe(true);
     }
   });
 
