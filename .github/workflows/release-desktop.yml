@@ -50,7 +50,7 @@ jobs:
             label: macOS-arm64
             platform: darwin-aarch64
             sidecar: vm-agent-aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             label: macOS-x64
             platform: darwin-x86_64
