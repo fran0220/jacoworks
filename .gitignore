@@ -43,6 +43,9 @@ desktop/src-tauri/resources/doc-packages.tar.gz
 desktop/src-tauri/resources/win-bash/
 desktop/src-tauri/resources/win-bin/
 
+# === Release artifacts ===
+dist-release/
+
 # === Vite ===
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*

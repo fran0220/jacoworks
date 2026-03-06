@@ -9,7 +9,8 @@
         check check-gateway check-website check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
         db-reset db-migrate clean \
-        docker-build-agent docker-run-agent
+        docker-build-agent docker-run-agent \
+        release release-build release-upload release-bump
 
 # ─── 配置 ───
 JINGAO_HOST   ?= jingao
@@ -182,6 +183,26 @@ docker-build-agent: ## 构建 vm-agent Docker 镜像 (ARM64)
 
 docker-run-agent: ## 本地启动 vm-agent Docker 容器
 	cd vm-agent && docker compose up -d
+
+# ═══════════════════════════════════════════
+#  发布 Desktop (本地构建 + 上传 COS)
+# ═══════════════════════════════════════════
+
+release: ## 完整发布 (构建 macOS + 上传 COS + 注册 DB) — make release V=1.5.0
+	@test -n "$(V)" || (echo "❌ 用法: make release V=1.5.0" && exit 1)
+	bash deploy/release.sh "$(V)"
+
+release-build: ## 仅构建 — make release-build V=1.5.0
+	@test -n "$(V)" || (echo "❌ 用法: make release-build V=1.5.0" && exit 1)
+	bash deploy/release.sh "$(V)" build
+
+release-upload: ## 仅上传 + 注册 — make release-upload V=1.5.0
+	@test -n "$(V)" || (echo "❌ 用法: make release-upload V=1.5.0" && exit 1)
+	bash deploy/release.sh "$(V)" upload
+
+release-bump: ## 仅更新版本号 — make release-bump V=1.5.0
+	@test -n "$(V)" || (echo "❌ 用法: make release-bump V=1.5.0" && exit 1)
+	bash deploy/release.sh "$(V)" bump
 
 deploy-agent: docker-build-agent ## 构建并部署 vm-agent 到 oracle
 	@echo "📦 导出 ARM64 镜像..."

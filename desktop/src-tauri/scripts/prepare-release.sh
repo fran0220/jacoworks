@@ -44,6 +44,8 @@ SIDECAR_DEST="$BINARIES_DIR/$SIDECAR_NAME"
 if [[ -n "$SIDECAR_FROM" ]]; then
   echo "📦 Copying sidecar from: $SIDECAR_FROM"
   cp "$SIDECAR_FROM" "$SIDECAR_DEST"
+elif [[ -f "$SIDECAR_DEST" ]] && [[ $(stat -f%z "$SIDECAR_DEST" 2>/dev/null || stat -c%s "$SIDECAR_DEST" 2>/dev/null || echo 0) -gt 1024 ]]; then
+  echo "📦 Sidecar already exists, skipping compilation"
 else
   echo "📦 Compiling sidecar for current platform..."
   (cd "$REPO_ROOT/vm-agent" && bun build --compile src/index.ts --outfile "$SIDECAR_DEST")

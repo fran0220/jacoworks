@@ -77,10 +77,10 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~
 |--------|------|------|
 | `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job |
 | `issue-autofix.yml` | issue opened/labeled | AI 分诊 (GPT-5.4) → mini-swe-agent (GPT-5.3 Codex) → PR |
-| `release-desktop.yml` | git tag `v*` | Tauri 跨平台构建 → COS 上传 → DB 注册 → GitHub Draft Release |
+| `release-desktop.yml` | git tag `v*` | Tauri 跨平台构建 → distribute-desktop 上传 |
+| `distribute-desktop.yml` | workflow_call / workflow_dispatch | SSH jingao → gh 下载产物 → coscli 上传 COS → psql 注册 DB |
 
-**发布流程**: `make check` → 更新版本号 + changelog → commit → `git tag v* && git push --tags` → CI 自动: 构建 → 上传 COS → 写入 DB (is_latest=true)
-**部署**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板) → 本地编译 → 重启。详见 `deploy/AGENTS.md`。
+**Desktop 发布 (本地)**: `make release V=1.5.0` → 本地 M4 Mac 构建 macOS arm64+x86_64 → coscli 直传 COS → psql 注册 DB → git tag。Windows 在 win-build VM 单独构建。详见 `deploy/AGENTS.md`。
 
 ### Windows 构建 VM (win-build)
 
@@ -161,6 +161,7 @@ make deploy-agent      # 构建 ARM64 镜像 → 部署到 oracle
 - **协作前端解耦**: 云端模式 (cowork) 通过 `CloudAgentWS` 连接 `/ws/agent` 透明代理，与本地模式共享同一 vm-agent RPC 协议和 `processStream` 事件处理；入口在任务面板
 - **记忆同步可选**: 本地↔云端记忆同步默认关闭，用户在设置中开启
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，网关启动加载 + 热重载，无本地 fallback
+- **新增配置项四层联动**: 新增 `system_settings` 项必须同时改: ① SQL 迁移 ② 网关 Go ③ 网站 Rust 表单 ④ 线上 DB 执行迁移 (详见 `gateway/AGENTS.md` checklist)
 
 ## 待完成
 

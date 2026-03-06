@@ -14,6 +14,7 @@
 | `sql/006_add_host_port.sql` | containers 表增加 host_port 字段 |
 | `sql/007_frozen_to_paused.sql` | containers status 值迁移 |
 | `sql/008_cron_jobs.sql` | cron_jobs 表 (云端定时任务调度) |
+| `sql/009_posthog_settings.sql` | PostHog 配置项 (错误追踪 + 分析) |
 | `sql/002_seed_test_data.sql` | 测试数据 (admin 用户 + 激活码) |
 
 ## 测试账号
@@ -49,4 +50,27 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。
 
 - **gateway / website**: `make deploy` → SSH jingao → git pull → 本地编译 → 重启
 - **vm-agent (oracle)**: `make deploy-agent` → 本地 cross-build ARM64 镜像 → docker save → scp via jingao → docker load → 重启容器
-- **desktop**: git tag `v*` → CI 自动: 跨平台构建 → 上传 COS → 注册 DB (is_latest=true) → GitHub Draft Release
+- **desktop (CI)**: git tag `v*` → CI 构建 → SSH jingao → gh 下载产物 → coscli 上传 COS → psql 注册 DB
+- **desktop (本地)**: `make release V=1.5.0` → 本地构建 + 直传 COS (备用方案)
+
+## Desktop 发布 (本地)
+
+```bash
+# 0. 首次: 配置凭据
+cp deploy/.env.release.example deploy/.env.release
+# 填入 COS_SECRET_ID/KEY, DB_PASSWORD, TAURI_SIGNING_*, APPLE_*
+
+# 1. 完整发布 (bump + macOS 构建 + 上传 COS + 注册 DB)
+make release V=1.5.0
+
+# 2. 分步执行
+make release-bump V=1.5.0     # 仅更新版本号
+make release-build V=1.5.0    # 构建 macOS arm64 + x86_64
+make release-upload V=1.5.0   # 上传 COS + 注册 DB
+
+# 3. Windows 包: 在 win-build VM (192.168.122.98) 上构建后
+#    复制到 dist-release/<version>/windows-x86_64/
+#    再运行 make release-upload V=1.5.0
+```
+
+产物目录: `dist-release/<version>/{darwin-aarch64,darwin-x86_64,windows-x86_64}/`
