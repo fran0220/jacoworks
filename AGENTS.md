@@ -77,8 +77,9 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~
 |--------|------|------|
 | `ci.yml` | PR / push main | 按模块变更检测, 只构建有改动的 job |
 | `issue-autofix.yml` | issue opened/labeled | AI 分诊 (GPT-5.4) → mini-swe-agent (GPT-5.3 Codex) → PR |
-| `release-desktop.yml` | git tag `v*` | (CI 付费暂停) Tauri 构建 → GitHub Release |
+| `release-desktop.yml` | git tag `v*` | Tauri 跨平台构建 → COS 上传 → DB 注册 → GitHub Draft Release |
 
+**发布流程**: `make check` → 更新版本号 + changelog → commit → `git tag v* && git push --tags` → CI 自动: 构建 → 上传 COS → 写入 DB (is_latest=true)
 **部署**: `make deploy` → SSH jingao → git pull (经 jpdata SSH 跳板) → 本地编译 → 重启。详见 `deploy/AGENTS.md`。
 
 ### Windows 构建 VM (win-build)
@@ -96,6 +97,8 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。Schema: `deploy/sql/001~
 | Secret | 说明 |
 |--------|------|
 | `JINGAO_HOST` / `JINGAO_SSH_KEY` / `JINGAO_SSH_USER` | jingao SSH |
+| `COS_SECRET_ID` / `COS_SECRET_KEY` | 腾讯云 COS (release 安装包存储) |
+| `DB_PASSWORD` | PostgreSQL 密码 (CI 注册 release) |
 | `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_KEY_PASSWORD` | Tauri updater 签名 |
 | `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` | .p12 |
 | `APPLE_SIGNING_IDENTITY` | Developer ID Application: fan Z (9UUWCMKMDH) |

@@ -69,6 +69,8 @@ description = "企业 AI 协同办公平台"
 base_url = "https://jaco.jingao.club"
 ```
 
+**安装包分发**: 下载 URL 存储在 DB `release_assets.download_url`，指向腾讯云 COS (`jingao-1350796151.cos.ap-beijing.myqcloud.com`)。Website 不再托管静态安装包文件。
+
 ## 测试
 
 ```bash

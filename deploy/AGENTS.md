@@ -40,6 +40,7 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。
 | Rust 官网 | jingao 82.156.239.212 | :9527, OpenResty 反代 jaco.jingao.club |
 | Go 网关 | jingao 82.156.239.212 | :8847, OpenResty 反代 jacoapi.jingao.club |
 | PostgreSQL | jingao 本地 | 127.0.0.1:5432/jacoworks |
+| 腾讯云 COS | ap-beijing | jingao-1350796151, release 安装包存储 |
 | WireGuard | jingao ↔ jpdata ↔ oracle | wg1: 10.0.1.1 ↔ 10.0.1.254 ↔ 10.0.1.3 |
 | Docker 容器 | oracle 161.33.28.249 | agent-net 网络, jacoworks/vm-agent:latest (ARM) |
 | LLM 中转站 | 67.230.182.59 | :8317 |
@@ -48,5 +49,4 @@ PostgreSQL (jingao 本地 `127.0.0.1:5432/jacoworks`)。
 
 - **gateway / website**: `make deploy` → SSH jingao → git pull → 本地编译 → 重启
 - **vm-agent (oracle)**: `make deploy-agent` → 本地 cross-build ARM64 镜像 → docker save → scp via jingao → docker load → 重启容器
-- **desktop macOS**: 本地构建 + 签名 + 手动公证 → 上传 jingao + GitHub Release
-- **desktop Windows**: 本地 VM (win-build) 构建 → 上传 jingao + GitHub Release
+- **desktop**: git tag `v*` → CI 自动: 跨平台构建 → 上传 COS → 注册 DB (is_latest=true) → GitHub Draft Release
