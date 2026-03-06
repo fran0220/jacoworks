@@ -66,8 +66,9 @@ const FILE_EXT_MAP: Record<string, { typeLabel: string; kind: string }> = {
 
 function getFileInfo(text: string): { name: string; ext: string; typeLabel: string; kind: string } | null {
   if (!text.includes(".")) return null;
-  if (!text.includes("/") && !text.includes("\\")) return null;
-  const name = text.split("/").pop() || text.split("\\").pop() || text;
+  // Allow both full paths and bare filenames with known extensions
+  const hasPath = text.includes("/") || text.includes("\\");
+  const name = hasPath ? (text.split(/[\\/]/).pop() || text) : text;
   const lowerName = name.toLowerCase();
 
   for (const item of FILE_SUFFIX_MAP) {
@@ -125,46 +126,10 @@ renderer.codespan = ({ text }) => {
     return `<code>${text}</code>`;
   }
   const escaped = decoded.replace(/"/g, "&quot;");
-  const escapedName = fileInfo.name.replace(/"/g, "&quot;");
-  const iconInner = fileInfo.kind === "image"
-    ? `<img class="file-card-thumb" data-file-path="${escaped}" alt="${escapedName}" loading="lazy" decoding="async" />`
-    : "";
-
-  return `<div class="file-card${fileInfo.kind === "image" ? " has-thumb" : ""}" data-file-path="${escaped}" data-kind="${fileInfo.kind}">
-    <div class="file-card-icon${fileInfo.kind === "image" ? " image-icon" : ""}" data-ext="${fileInfo.ext}">
-      ${iconInner}
-    </div>
-    <div class="file-card-info">
-      <span class="file-card-name">${fileInfo.name}</span>
-      <span class="file-card-type">${fileInfo.typeLabel}</span>
-    </div>
-    <div class="file-card-actions">
-      <button class="file-card-btn preview-btn" data-file-path="${escaped}">预览</button>
-      <button class="file-card-btn reveal-btn" data-file-path="${escaped}">目录</button>
-      <button class="file-card-btn open-file-btn" data-file-path="${escaped}">打开</button>
-    </div>
-  </div>`;
+  return `<code class="file-ref" data-file-path="${escaped}" title="${fileInfo.typeLabel}">${text}</code>`;
 };
 
 marked.use({ renderer });
-
-async function openFileDefault(path: string, workspace?: string) {
-  console.log("[file-card] openFileDefault →", { path, workspace });
-  try {
-    await invoke("open_file_default", { path, workspace: workspace || null });
-  } catch (err) {
-    console.error("[file-card] open failed:", err);
-  }
-}
-
-async function revealInFinder(path: string, workspace?: string) {
-  console.log("[file-card] revealInFinder →", { path, workspace });
-  try {
-    await invoke("reveal_in_finder", { path, workspace: workspace || null });
-  } catch (err) {
-    console.error("[file-card] reveal failed:", err);
-  }
-}
 
 export default function Markdown({
   content,
@@ -187,77 +152,6 @@ export default function Markdown({
       }),
     [content],
   );
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-
-    const thumbs = Array.from(
-      root.querySelectorAll<HTMLImageElement>(".file-card-thumb[data-file-path]"),
-    );
-    if (!thumbs.length) return;
-
-    let disposed = false;
-
-    const loadThumb = async (node: HTMLImageElement) => {
-      if (disposed || node.dataset.thumbLoaded === "1") return;
-
-      const filePath = node.getAttribute("data-file-path");
-      if (!filePath) return;
-
-      node.dataset.thumbLoaded = "1";
-
-      let assetUrl = thumbUrlCacheRef.current.get(filePath);
-      if (!assetUrl) {
-        try {
-          assetUrl = await invoke<string>("read_file_base64", {
-            path: filePath,
-            workspace: workspacePath || null,
-          });
-          thumbUrlCacheRef.current.set(filePath, assetUrl);
-        } catch {
-          node.classList.add("thumb-failed");
-          return;
-        }
-      }
-
-      if (disposed) return;
-      node.onload = () => node.classList.add("ready");
-      node.onerror = () => node.classList.add("thumb-failed");
-      node.src = assetUrl;
-    };
-
-    if ("IntersectionObserver" in window) {
-      const observer = new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries) {
-            if (!entry.isIntersecting) continue;
-            const node = entry.target as HTMLImageElement;
-            observer.unobserve(node);
-            void loadThumb(node);
-          }
-        },
-        { rootMargin: "120px 0px" },
-      );
-
-      for (const thumb of thumbs) {
-        observer.observe(thumb);
-      }
-
-      return () => {
-        disposed = true;
-        observer.disconnect();
-      };
-    }
-
-    for (const thumb of thumbs) {
-      void loadThumb(thumb);
-    }
-
-    return () => {
-      disposed = true;
-    };
-  }, [html, workspacePath]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -308,9 +202,8 @@ export default function Markdown({
 
   const onClick: MouseEventHandler<HTMLDivElement> = (event) => {
     const target = event.target as HTMLElement;
-    console.log("[file-card] click →", target.tagName, target.className, target.getAttribute("data-file-path"));
 
-    // Copy code button (existing)
+    // Copy code button
     if (target.classList.contains("copy-btn")) {
       const codeId = target.getAttribute("data-code-id");
       if (!codeId) return;
@@ -324,38 +217,10 @@ export default function Markdown({
       return;
     }
 
-    // File card: preview
-    const previewBtn = target.closest(".preview-btn") as HTMLElement | null;
-    if (previewBtn) {
-      const filePath = previewBtn.getAttribute("data-file-path");
-      if (filePath) {
-        window.dispatchEvent(
-          new CustomEvent("preview-file", { detail: { path: filePath } }),
-        );
-      }
-      return;
-    }
-
-    // File card: reveal in folder
-    const revealBtn = target.closest(".reveal-btn") as HTMLElement | null;
-    if (revealBtn) {
-      const filePath = revealBtn.getAttribute("data-file-path");
-      if (filePath) revealInFinder(filePath, workspacePath);
-      return;
-    }
-
-    // File card: open file
-    const openBtn = target.closest(".open-file-btn") as HTMLElement | null;
-    if (openBtn) {
-      const filePath = openBtn.getAttribute("data-file-path");
-      if (filePath) openFileDefault(filePath, workspacePath);
-      return;
-    }
-
-    // File card body click → trigger preview (click anywhere on the card)
-    const fileCard = target.closest(".file-card") as HTMLElement | null;
-    if (fileCard) {
-      const filePath = fileCard.getAttribute("data-file-path");
+    // Lightweight file-ref click → trigger preview
+    const fileRef = target.closest(".file-ref") as HTMLElement | null;
+    if (fileRef) {
+      const filePath = fileRef.getAttribute("data-file-path");
       if (filePath) {
         window.dispatchEvent(
           new CustomEvent("preview-file", { detail: { path: filePath } }),

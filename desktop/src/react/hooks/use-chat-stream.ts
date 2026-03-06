@@ -427,6 +427,35 @@ export function useChatStream({
                     const raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2);
                     block.result = raw.length > 4000 ? `${raw.slice(0, 4000)}\n…[截断]` : raw;
                   }
+                  // Extract filePath for file card rendering (independent of result presence)
+                  if (!event.isError) {
+                    const toolName = block.name;
+                    if (toolName === "generate_image" || toolName === "read_document") {
+                      try {
+                        const parsed = typeof event.result === "string" ? JSON.parse(event.result) : event.result;
+                        const p = parsed?.details?.path || parsed?.path;
+                        if (p) block.filePath = p;
+                      } catch {
+                        const raw = typeof event.result === "string" ? event.result : "";
+                        const m = raw.match(/(?:Image saved|saved):\s*(.+?)\s*\(/i);
+                        if (m) block.filePath = m[1];
+                      }
+                    } else if (toolName === "edit" || toolName === "write" || toolName === "write_file" ||
+                               toolName === "read" || toolName === "read_file") {
+                      try {
+                        const parsedArgs = block.args ? JSON.parse(block.args) : null;
+                        if (parsedArgs?.path) block.filePath = parsedArgs.path;
+                      } catch { /* ignore */ }
+                    }
+                    if (block.filePath) {
+                      const ext = block.filePath.split(".").pop()?.toLowerCase() || "";
+                      const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"];
+                      const DOC_EXTS = ["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv"];
+                      if (IMAGE_EXTS.includes(ext)) block.fileKind = "image";
+                      else if (DOC_EXTS.includes(ext)) block.fileKind = "document";
+                      else block.fileKind = "file";
+                    }
+                  }
                   break;
                 }
               }

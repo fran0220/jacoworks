@@ -45,7 +45,7 @@ export interface ChatSession {
 export type StreamBlock =
   | { type: "thinking"; content: string }
   | { type: "text"; content: string }
-  | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error"; args?: string; result?: string }
+  | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error"; args?: string; result?: string; filePath?: string; fileKind?: string }
   | { type: "status"; text: string };
 
 export interface FilePreview {

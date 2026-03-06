@@ -766,13 +766,4 @@
   margin-top: var(--space-4);
 }
 
-/* ===== File Card Preview Button ===== */
 
-.markdown-body .file-card-btn.preview-btn {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.markdown-body .file-card-btn.preview-btn:hover {
-  background: var(--accent-light);
-}

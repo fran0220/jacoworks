@@ -102,14 +102,28 @@ select:focus-visible {
   border-radius: var(--radius);
 }
 
-/* ===== File Card ===== */
+/* ===== File Reference (inline, lightweight) ===== */
 
-.markdown-body .file-card {
+.markdown-body .file-ref {
+  cursor: pointer;
+  color: var(--accent);
+  background: var(--accent-light, rgba(var(--accent-rgb, 200, 120, 60), 0.1));
+  border-bottom: 1px dashed var(--accent);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.markdown-body .file-ref:hover {
+  background: var(--accent-light, rgba(var(--accent-rgb, 200, 120, 60), 0.18));
+}
+
+/* ===== Tool File Card (rendered from tool results) ===== */
+
+.tool-file-card {
   display: flex;
   align-items: center;
   gap: var(--space-6);
   padding: var(--space-6) var(--space-8);
-  margin: var(--space-4) 0;
+  margin: var(--space-4) var(--space-8) var(--space-2);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -119,12 +133,12 @@ select:focus-visible {
     border-color var(--duration-fast) var(--ease-standard);
 }
 
-.markdown-body .file-card:hover {
+.tool-file-card:hover {
   box-shadow: var(--shadow-md);
   border-color: var(--accent);
 }
 
-.markdown-body .file-card-icon {
+.tool-file-card-icon {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -135,33 +149,21 @@ select:focus-visible {
   flex-shrink: 0;
 }
 
-.markdown-body .file-card.has-thumb .file-card-icon {
-  width: calc(var(--space-13) + var(--space-4) + var(--space-4));
-  height: calc(var(--space-13) + var(--space-4) + var(--space-4));
-  position: relative;
+.tool-file-card-icon.image-icon {
+  width: calc(var(--space-13) + var(--space-8));
+  height: calc(var(--space-13) + var(--space-8));
   overflow: hidden;
+  border-radius: var(--radius);
 }
 
-
-
-.markdown-body .file-card-thumb {
+.tool-file-card-thumb {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0;
-  transition: opacity var(--duration-fast) var(--ease-standard);
+  border-radius: var(--radius);
 }
 
-.markdown-body .file-card-thumb.ready {
-  opacity: 1;
-}
-
-.markdown-body .file-card-thumb.thumb-failed {
-  display: none;
-}
-
-.markdown-body .file-card-icon::before {
-  content: attr(data-ext);
+.tool-file-card-ext {
   font-size: var(--text-2xs);
   font-weight: var(--font-bold);
   text-transform: uppercase;
@@ -169,11 +171,7 @@ select:focus-visible {
   letter-spacing: 0.5px;
 }
 
-.markdown-body .file-card.has-thumb .file-card-icon::before {
-  content: "";
-}
-
-.markdown-body .file-card-info {
+.tool-file-card-info {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -181,7 +179,7 @@ select:focus-visible {
   min-width: 0;
 }
 
-.markdown-body .file-card-name {
+.tool-file-card-name {
   font-size: var(--text-base);
   font-weight: var(--font-medium);
   color: var(--text-primary);
@@ -190,22 +188,21 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.markdown-body .file-card-type {
+.tool-file-card-type {
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
-.markdown-body .file-card-actions {
+.tool-file-card-actions {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex-shrink: 0;
 }
 
-.markdown-body .file-card-btn {
+.tool-file-card-btn {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
   padding: var(--space-3) var(--space-5);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -217,21 +214,21 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.markdown-body .file-card-btn:hover {
+.tool-file-card-btn:hover {
   background: var(--bg-hover);
 }
 
-.markdown-body .file-card-btn.open-file-btn {
+.tool-file-card-btn.accent {
   color: var(--accent);
   border-color: var(--accent);
 }
 
-.markdown-body .file-card-btn.open-file-btn:hover {
+.tool-file-card-btn.accent:hover {
   background: var(--accent-light);
 }
 
 @media (max-width: 900px) {
-  .markdown-body .file-card.has-thumb .file-card-icon {
+  .tool-file-card-icon.image-icon {
     width: var(--space-13);
     height: var(--space-13);
   }

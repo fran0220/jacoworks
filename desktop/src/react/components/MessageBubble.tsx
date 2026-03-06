@@ -1,6 +1,7 @@
 import { FileText } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import hljs from "../lib/hljs-setup";
-import { Suspense, lazy, memo, useState } from "react";
+import { Suspense, lazy, memo, useEffect, useState } from "react";
 import { formatSize } from "../lib/file-utils";
 import { toolArgsSummary } from "../lib/tool-utils";
 import type { ChatMessage, FileRef, MessageContent, StreamBlock } from "../types";
@@ -188,7 +189,56 @@ function ToolResultView({ toolName, args, result }: { toolName: string; args?: s
   );
 }
 
-function AssistantBlocks({ blocks }: { blocks: StreamBlock[] }) {
+/* ---- File card from tool result ---- */
+function ToolFileCard({ filePath, fileKind, workspacePath }: { filePath: string; fileKind?: string; workspacePath?: string }) {
+  const name = filePath.split(/[\\/]/).pop() || filePath;
+  const ext = name.split(".").pop()?.toUpperCase() || "";
+  const isImage = fileKind === "image";
+
+  const [thumbSrc, setThumbSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isImage) return;
+    let cancelled = false;
+    invoke<string>("read_file_base64", { path: filePath, workspace: workspacePath || null })
+      .then((url) => { if (!cancelled) setThumbSrc(url); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [filePath, isImage, workspacePath]);
+
+  const handlePreview = () => {
+    window.dispatchEvent(new CustomEvent("preview-file", { detail: { path: filePath } }));
+  };
+  const handleOpen = () => {
+    invoke("open_file_default", { path: filePath, workspace: workspacePath || null }).catch(() => {});
+  };
+  const handleReveal = () => {
+    invoke("reveal_in_finder", { path: filePath, workspace: workspacePath || null }).catch(() => {});
+  };
+
+  return (
+    <div className={`tool-file-card${isImage ? " has-thumb" : ""}`} onClick={handlePreview}>
+      <div className={`tool-file-card-icon${isImage ? " image-icon" : ""}`}>
+        {isImage && thumbSrc ? (
+          <img className="tool-file-card-thumb" src={thumbSrc} alt={name} />
+        ) : (
+          <span className="tool-file-card-ext">{ext}</span>
+        )}
+      </div>
+      <div className="tool-file-card-info">
+        <span className="tool-file-card-name">{name}</span>
+        <span className="tool-file-card-type">{fileKind === "image" ? `Image · ${ext}` : fileKind === "document" ? `Document · ${ext}` : `File · ${ext}`}</span>
+      </div>
+      <div className="tool-file-card-actions">
+        <button className="tool-file-card-btn" onClick={(e) => { e.stopPropagation(); handlePreview(); }}>预览</button>
+        <button className="tool-file-card-btn" onClick={(e) => { e.stopPropagation(); handleReveal(); }}>目录</button>
+        <button className="tool-file-card-btn accent" onClick={(e) => { e.stopPropagation(); handleOpen(); }}>打开</button>
+      </div>
+    </div>
+  );
+}
+
+function AssistantBlocks({ blocks, workspacePath }: { blocks: StreamBlock[]; workspacePath?: string }) {
   const thinkingBlocks = blocks.filter((b): b is Extract<StreamBlock, { type: "thinking" }> => b.type === "thinking");
   const toolBlocks = blocks.filter((b): b is Extract<StreamBlock, { type: "tool" }> => b.type === "tool");
 
@@ -234,6 +284,9 @@ function AssistantBlocks({ blocks }: { blocks: StreamBlock[] }) {
                 </div>
               )}
             </div>
+            {block.filePath && (
+              <ToolFileCard filePath={block.filePath} fileKind={block.fileKind} workspacePath={workspacePath} />
+            )}
           </div>
         );
       })}
@@ -271,7 +324,7 @@ const MessageBubble = memo(function MessageBubble({
           </>
         ) : (
           <>
-            <AssistantBlocks blocks={blocks} />
+            <AssistantBlocks blocks={blocks} workspacePath={workspacePath} />
             {text.trim() && (
               <Suspense fallback={<pre className="assistant-plain-text">{text}</pre>}>
                 <Markdown content={text} workspacePath={workspacePath} />
