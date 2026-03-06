@@ -13,29 +13,56 @@ jobs:
       - name: Create test file
         run: dd if=/dev/urandom of=/tmp/test-upload.bin bs=1M count=5
 
-      - name: Install coscli
-        run: |
-          curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli
-          chmod +x /usr/local/bin/coscli
-          coscli --version
-
-      - name: Upload directly to COS
+      - name: Setup SSH
         env:
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload via jingao relay (internal network)
+        env:
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         run: |
-          # Write coscli config (printf avoids heredoc indentation issues)
-          printf 'cos:\n  base:\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      alias: cos\n      endpoint: cos.%s.myqcloud.com\n' \
-            "$COS_SECRET_ID" "$COS_SECRET_KEY" "$COS_BUCKET" "$COS_REGION" > /tmp/.cos.yaml
+          SSH="ssh -i ~/.ssh/deploy_key"
+          SCP="scp -i ~/.ssh/deploy_key"
+          HOST="${SSH_USER}@${SSH_HOST}"
 
-          echo "📦 Uploading 5MB test file..."
-          time coscli cp -c /tmp/.cos.yaml /tmp/test-upload.bin "cos://${COS_BUCKET}/test/cos-upload-test.bin"
+          echo "📤 SCP 5MB test file to jingao..."
+          time $SCP /tmp/test-upload.bin "${HOST}:/tmp/test-upload.bin"
+          echo "✅ SCP done"
+
+          echo ""
+          echo "📦 coscli upload from jingao (internal network)..."
+          $SSH "$HOST" bash -s -- "$COS_SECRET_ID" "$COS_SECRET_KEY" "$COS_BUCKET" "$COS_REGION" <<'REMOTE'
+          set -euo pipefail
+          COS_SID="$1"; COS_SKEY="$2"; BUCKET="$3"; REGION="$4"
+
+          if ! command -v coscli &>/dev/null; then
+            echo "📥 Installing coscli..."
+            sudo curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli
+            sudo chmod +x /usr/local/bin/coscli
+          fi
+          coscli --version
+
+          printf 'cos:\n  base:\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      alias: cos\n      endpoint: cos.%s.myqcloud.com\n' \
+            "$COS_SID" "$COS_SKEY" "$BUCKET" "$REGION" > /tmp/.cos-test.yaml
+
+          echo "⬆️  Uploading..."
+          time coscli cp -c /tmp/.cos-test.yaml /tmp/test-upload.bin "cos://${BUCKET}/test/cos-upload-test.bin"
           echo "✅ Upload done"
 
           echo "📋 Listing..."
-          coscli ls -c /tmp/.cos.yaml "cos://${COS_BUCKET}/test/"
+          coscli ls -c /tmp/.cos-test.yaml "cos://${BUCKET}/test/"
 
           echo "🧹 Cleanup..."
-          coscli rm -c /tmp/.cos.yaml "cos://${COS_BUCKET}/test/cos-upload-test.bin" || true
-          rm -f /tmp/.cos.yaml
+          coscli rm -c /tmp/.cos-test.yaml "cos://${BUCKET}/test/cos-upload-test.bin" || true
+          rm -f /tmp/.cos-test.yaml /tmp/test-upload.bin
           echo "✅ All done"
+          REMOTE
