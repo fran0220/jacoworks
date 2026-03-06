@@ -4,7 +4,7 @@
 
 .PHONY: help dev dev-gateway dev-website dev-agent dev-desktop \
         build build-gateway build-website build-agent build-desktop \
-        bundle-doc-packages compile-agent prepare-win-deps \
+        compile-agent prepare-win-deps \
         deploy deploy-gateway deploy-website deploy-agent push-skills \
         check check-gateway check-website check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
@@ -69,25 +69,10 @@ build-agent: ## 构建 vm-agent
 	cd vm-agent && npm run build
 	@echo "✅ vm-agent/dist/"
 
-bundle-doc-packages: ## 打包文档处理 npm 包 (mammoth, docx, exceljs, pdf-lib, ...)
-	@echo "📦 Bundling document processing packages..."
-	@rm -rf /tmp/jacoworks-doc-packages
-	@mkdir -p /tmp/jacoworks-doc-packages
-	@echo '{"private":true,"dependencies":{"mammoth":"^1.11.0","docx":"^9.6.0","exceljs":"^4.4.0","pdf-lib":"^1.17.1","@pdf-lib/fontkit":"^1.1.1","pdf-parse":"^2.4.5","csv-parse":"^6.1.0"}}' > /tmp/jacoworks-doc-packages/package.json
-	@cd /tmp/jacoworks-doc-packages && npm install --production --no-optional --ignore-scripts --no-audit --no-fund --silent 2>/dev/null
-	@find /tmp/jacoworks-doc-packages/node_modules -name "*.node" -delete 2>/dev/null || true
-	@mkdir -p desktop/src-tauri/resources
-	@tar -czf desktop/src-tauri/resources/doc-packages.tar.gz -C /tmp/jacoworks-doc-packages node_modules
-	@rm -rf /tmp/jacoworks-doc-packages
-	@echo "✅ doc-packages.tar.gz → desktop/src-tauri/resources/"
-
-compile-agent: bundle-doc-packages ## 编译 vm-agent 为单二进制 (bun compile, 当前平台)
-	cd vm-agent && npm run compile
-	@mkdir -p desktop/src-tauri/binaries
-	@cp vm-agent/dist/vm-agent desktop/src-tauri/binaries/vm-agent-$$(rustc -vV | grep host | cut -d' ' -f2)
-	@tar -czf desktop/src-tauri/resources/skills.tar.gz -C vm-agent/skills .
-	@echo "✅ Sidecar binary → desktop/src-tauri/binaries/"
-	@echo "✅ Skills archive → desktop/src-tauri/resources/skills.tar.gz"
+compile-agent: ## 编译 vm-agent + 打包所有 release 资源 (sidecar + doc-packages + validation)
+	@TARGET=$$(rustc -vV | grep host | cut -d' ' -f2) && \
+	echo "🔧 Building for target: $$TARGET" && \
+	bash desktop/src-tauri/scripts/prepare-release.sh "$$TARGET"
 
 prepare-win-deps: ## 下载 Windows 构建依赖 (bash + bun, 用于交叉编译)
 	bash desktop/src-tauri/scripts/prepare-win-deps.sh

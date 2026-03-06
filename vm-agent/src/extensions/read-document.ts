@@ -122,7 +122,7 @@ async function readPdf(filePath: string, _pages?: string): Promise<{ text: strin
 
 // ─── OCR via Gemini Flash ───────────────────────────
 
-async function ocrWithVision(
+export async function ocrWithVision(
   proxyUrl: string,
   proxyKey: string,
   filePath: string,

@@ -427,10 +427,18 @@ export function useChatStream({
                     const raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2);
                     block.result = raw.length > 4000 ? `${raw.slice(0, 4000)}\n…[截断]` : raw;
                   }
-                  // Extract filePath for file card rendering (independent of result presence)
+                  // Extract filePath for file card rendering
+                  // Only show cards for ARTIFACTS (generated/written outputs), not for reads or edits.
+                  // Artifacts: generate_image output, write/write_file of images/documents.
                   if (!event.isError) {
                     const toolName = block.name;
-                    if (toolName === "generate_image" || toolName === "read_document") {
+                    const ARTIFACT_EXTS = new Set([
+                      "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp",  // images
+                      "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv",  // documents
+                      "mp4", "mp3", "wav", "mov",  // media
+                      "html", "zip",  // packaged outputs
+                    ]);
+                    if (toolName === "generate_image") {
                       try {
                         const parsed = typeof event.result === "string" ? JSON.parse(event.result) : event.result;
                         const p = parsed?.details?.path || parsed?.path;
@@ -440,11 +448,13 @@ export function useChatStream({
                         const m = raw.match(/(?:Image saved|saved):\s*(.+?)\s*\(/i);
                         if (m) block.filePath = m[1];
                       }
-                    } else if (toolName === "edit" || toolName === "write" || toolName === "write_file" ||
-                               toolName === "read" || toolName === "read_file") {
+                    } else if (toolName === "write" || toolName === "write_file") {
                       try {
                         const parsedArgs = block.args ? JSON.parse(block.args) : null;
-                        if (parsedArgs?.path) block.filePath = parsedArgs.path;
+                        if (parsedArgs?.path) {
+                          const ext = parsedArgs.path.split(".").pop()?.toLowerCase() || "";
+                          if (ARTIFACT_EXTS.has(ext)) block.filePath = parsedArgs.path;
+                        }
                       } catch { /* ignore */ }
                     }
                     if (block.filePath) {

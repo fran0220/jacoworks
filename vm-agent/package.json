@@ -28,7 +28,7 @@
     "compile:all": "npm run compile:darwin-arm64 && npm run compile:darwin-x64 && npm run compile:linux-x64 && npm run compile:windows-x64"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.55.4",
+    "@mariozechner/pi-coding-agent": "^0.56.2",
     "@pdf-lib/fontkit": "^1.1.1",
     "@sinclair/typebox": "^0.34.0",
     "cheerio": "^1.2.0",

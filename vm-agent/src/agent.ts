@@ -18,7 +18,7 @@ import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
 import { createImageGenExtension } from "./extensions/image-gen.js";
-import { createReadDocumentExtension } from "./extensions/read-document.js";
+import { createReadDocumentExtension, ocrWithVision } from "./extensions/read-document.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
@@ -424,8 +424,11 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     );
   }
 
-  // Redirect read tool on binary documents to read_document
+  // Redirect read tool on binary documents and images to read_document
+  // Images: avoid base64 bloating the context (each image can be ~4.5MB base64),
+  // use OCR via read_document instead to keep only text descriptions in context.
   const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
+  const IMAGE_EXTS_RE = /\.(png|jpg|jpeg|gif|webp|bmp|tiff|tif)$/i;
   extensionFactories.push((pi) => {
     pi.on("tool_call", async (event) => {
       if (event.toolName === "read" && typeof event.input?.path === "string") {
@@ -434,6 +437,23 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
             block: true,
             reason: `Cannot read binary file "${event.input.path}" with the read tool. Use the read_document tool instead.`,
           };
+        }
+        if (IMAGE_EXTS_RE.test(event.input.path) && config.proxyKey) {
+          const filePath = resolve(workspace, event.input.path);
+          if (existsSync(filePath)) {
+            try {
+              const text = await ocrWithVision(config.proxyUrl, config.proxyKey, filePath);
+              return {
+                block: true,
+                reason: `[Image analyzed via OCR: ${event.input.path}]\n\n${text}`,
+              };
+            } catch (err) {
+              return {
+                block: true,
+                reason: `Image OCR failed for "${event.input.path}": ${(err as Error).message}. Try read_document tool instead.`,
+              };
+            }
+          }
         }
       }
     });

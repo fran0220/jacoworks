@@ -13,50 +13,37 @@ jobs:
       - name: Create test file
         run: dd if=/dev/urandom of=/tmp/test-upload.bin bs=1M count=5
 
-      - name: Upload via jingao relay
+      - name: Install coscli
+        run: |
+          curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli
+          chmod +x /usr/local/bin/coscli
+          coscli --version
+
+      - name: Upload directly to COS
         env:
-          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
-          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
-          SSH_HOST: ${{ secrets.JINGAO_HOST }}
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          SSH="ssh -i ~/.ssh/deploy_key ${SSH_USER}@${SSH_HOST}"
-          SCP="scp -i ~/.ssh/deploy_key -C"
+          cat > /tmp/.cos.yaml <<EOF
+          coscli:
+            base:
+              mode: SecretKey
+              secretid: ${COS_SECRET_ID}
+              secretkey: ${COS_SECRET_KEY}
+            buckets:
+              - name: ${COS_BUCKET}
+                endpoint: cos.${COS_REGION}.myqcloud.com
+                alias: cos
+          EOF
 
-          # Ensure coscli on jingao
-          $SSH 'test -x /tmp/coscli || (curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /tmp/coscli && chmod +x /tmp/coscli)'
-
-          # Write config
-          $SSH "cat > /tmp/.cos-test.yaml" <<EOF
-coscli:
-  base:
-    mode: SecretKey
-    secretid: ${COS_SECRET_ID}
-    secretkey: ${COS_SECRET_KEY}
-  buckets:
-    - name: ${COS_BUCKET}
-      endpoint: cos.${COS_REGION}.myqcloud.com
-      alias: cos
-EOF
-
-          # SCP to jingao
-          echo "📦 SCP 5MB → jingao..."
-          time $SCP /tmp/test-upload.bin "${SSH_USER}@${SSH_HOST}:/tmp/test-upload.bin"
-
-          # jingao → COS (same region)
-          echo "📤 jingao → COS..."
-          time $SSH '/tmp/coscli cp -c /tmp/.cos-test.yaml /tmp/test-upload.bin "cos://jingao-1350796151/test/cos-upload-test.bin"'
+          echo "📦 Uploading 5MB test file..."
+          time coscli cp -c /tmp/.cos.yaml /tmp/test-upload.bin "cos://${COS_BUCKET}/test/cos-upload-test.bin"
           echo "✅ Upload done"
 
-          # Verify
-          $SSH '/tmp/coscli ls -c /tmp/.cos-test.yaml "cos://jingao-1350796151/test/"'
+          echo "📋 Listing..."
+          coscli ls -c /tmp/.cos.yaml "cos://${COS_BUCKET}/test/"
 
-          # Cleanup
-          $SSH '/tmp/coscli rm -c /tmp/.cos-test.yaml "cos://jingao-1350796151/test/cos-upload-test.bin"' || true
-          $SSH 'rm -f /tmp/test-upload.bin /tmp/.cos-test.yaml'
+          echo "🧹 Cleanup..."
+          coscli rm -c /tmp/.cos.yaml "cos://${COS_BUCKET}/test/cos-upload-test.bin" || true
+          rm -f /tmp/.cos.yaml
           echo "✅ All done"

@@ -9,20 +9,24 @@ permissions:
   contents: write
 
 jobs:
-  # ── 用 bun 交叉编译 vm-agent sidecar (所有平台) ──
+  # ── Version consistency check ──
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check versions match tag
+        run: bash desktop/src-tauri/scripts/check-versions.sh
+
+  # ── Cross-compile vm-agent sidecar (all platforms, bun) ──
   build-sidecar:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: vm-agent/package-lock.json
-      - run: npm ci
+      - run: bun install --frozen-lockfile
         working-directory: vm-agent
       - name: Cross-compile all targets
         working-directory: vm-agent
@@ -38,7 +42,7 @@ jobs:
           name: vm-agent-sidecar
           path: vm-agent/dist/vm-agent-*
 
-  # ── 跨平台构建 Tauri 安装包 ──
+  # ── Cross-platform Tauri build ──
   build-desktop:
     needs: build-sidecar
     strategy:
@@ -62,7 +66,7 @@ jobs:
             label: Windows-x64
             platform: windows-x86_64
             sidecar: vm-agent-x86_64-pc-windows-msvc.exe
-            bundles: nsis
+            bundles: nsis,updater
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
@@ -82,55 +86,25 @@ jobs:
         with:
           workspaces: desktop/src-tauri
 
-      # 下载 sidecar 二进制
+      # Download pre-built sidecar
       - uses: actions/download-artifact@v4
         with:
           name: vm-agent-sidecar
           path: sidecar-bin/
 
-      # 放置 sidecar 到 Tauri externalBin 位置 + 打包 skills + 构建资源
-      - name: Prepare sidecar and resources
+      # Unified resource preparation (sidecar + doc-packages + validation)
+      - name: Prepare release resources
         shell: bash
         run: |
-          mkdir -p desktop/src-tauri/binaries
-          cp sidecar-bin/${{ matrix.sidecar }} desktop/src-tauri/binaries/${{ matrix.sidecar }}
-          chmod +x desktop/src-tauri/binaries/${{ matrix.sidecar }} || true
+          bash desktop/src-tauri/scripts/prepare-release.sh \
+            "${{ matrix.target }}" \
+            --sidecar-from "sidecar-bin/${{ matrix.sidecar }}"
 
-          # Pack skills archive
-          mkdir -p desktop/src-tauri/resources
-          tar -czf desktop/src-tauri/resources/skills.tar.gz -C vm-agent/skills .
-
-          # Bundle doc-packages (npm packages for document processing)
-          # Use --ignore-scripts --no-optional to avoid native binaries that break Apple notarization
-          TMPD=$(mktemp -d)
-          echo '{"private":true,"dependencies":{"mammoth":"^1.11.0","docx":"^9.6.0","exceljs":"^4.4.0","pdf-lib":"^1.17.1","@pdf-lib/fontkit":"^1.1.1","pdf-parse":"^2.4.5","csv-parse":"^6.1.0"}}' > "$TMPD/package.json"
-          (cd "$TMPD" && npm install --production --no-optional --ignore-scripts --no-audit --no-fund --silent 2>/dev/null)
-          # Remove any .node native binaries that may have slipped through
-          find "$TMPD/node_modules" -name "*.node" -delete 2>/dev/null || true
-          tar -czf desktop/src-tauri/resources/doc-packages.tar.gz -C "$TMPD" node_modules
-          rm -rf "$TMPD"
-
-          echo "📦 Sidecar binary:"
-          ls -lh desktop/src-tauri/binaries/
-          echo "📦 Resources:"
-          ls -lh desktop/src-tauri/resources/
-
-          # Verify sidecar is real (>= 1KB)
-          SIDECAR_SIZE=$(stat -f%z "desktop/src-tauri/binaries/${{ matrix.sidecar }}" 2>/dev/null || stat -c%s "desktop/src-tauri/binaries/${{ matrix.sidecar }}" 2>/dev/null || echo 0)
-          if [ "$SIDECAR_SIZE" -lt 1024 ]; then
-            echo "❌ Sidecar binary too small ($SIDECAR_SIZE bytes), likely a placeholder"
-            exit 1
-          fi
-          echo "✅ Sidecar size: $SIDECAR_SIZE bytes"
-
-      # Windows: prepare bundled bash + bun
+      # Windows: bundled bash + bun
       - name: Prepare Windows dependencies
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          # On Windows CI, use the script to download deps
-          # 7z is pre-installed on windows-latest
-          bash desktop/src-tauri/scripts/prepare-win-deps.sh
+        run: bash desktop/src-tauri/scripts/prepare-win-deps.sh
 
       - run: npm ci
         working-directory: desktop
@@ -141,7 +115,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
-          # Apple code signing & notarization (macOS only, ignored on other platforms)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -157,30 +130,31 @@ jobs:
           prerelease: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      # 收集构建产物用于后续上传到 jingao
+      # Collect build artifacts + write platform manifest
       - name: Collect artifacts
         id: collect
         shell: bash
         run: |
           mkdir -p dist-upload
           VERSION="${GITHUB_REF_NAME}"
-          TARGET="${{ matrix.target }}"
           PLATFORM="${{ matrix.platform }}"
+          BUNDLE_DIR="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
 
-          # 查找 Tauri 输出的安装包
-          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle"
-
+          # macOS
           if [ -d "${BUNDLE_DIR}/dmg" ]; then
             cp ${BUNDLE_DIR}/dmg/*.dmg dist-upload/ 2>/dev/null || true
           fi
           if [ -d "${BUNDLE_DIR}/macos" ]; then
-            # .app.tar.gz for updater
             find ${BUNDLE_DIR}/macos -name '*.tar.gz' -exec cp {} dist-upload/ \; 2>/dev/null || true
           fi
+
+          # Windows (installer + updater artifact)
           if [ -d "${BUNDLE_DIR}/nsis" ]; then
             cp ${BUNDLE_DIR}/nsis/*.exe dist-upload/ 2>/dev/null || true
+            cp ${BUNDLE_DIR}/nsis/*.nsis.zip dist-upload/ 2>/dev/null || true
           fi
-          # MSI 不收集，仅提供 NSIS EXE 安装包
+
+          # Linux
           if [ -d "${BUNDLE_DIR}/deb" ]; then
             cp ${BUNDLE_DIR}/deb/*.deb dist-upload/ 2>/dev/null || true
           fi
@@ -188,18 +162,21 @@ jobs:
             cp ${BUNDLE_DIR}/appimage/*.AppImage dist-upload/ 2>/dev/null || true
           fi
 
-          # 收集签名文件 (for updater)
+          # Signatures (for updater)
           find ${BUNDLE_DIR} -name '*.sig' -exec cp {} dist-upload/ \; 2>/dev/null || true
 
+          # Write platform manifest (eliminates filename-based guessing in distribute)
+          echo "${PLATFORM}" > dist-upload/.platform
+
+          echo "📦 Artifacts for ${PLATFORM}:"
           ls -la dist-upload/
-          echo "platform=${PLATFORM}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}
           path: dist-upload/
 
-  # ── 上传到腾讯云 COS 分发 ──
+  # ── Upload to COS + register in DB ──
   distribute:
     needs: build-desktop
     runs-on: ubuntu-latest
@@ -213,30 +190,22 @@ jobs:
           path: all-artifacts
           pattern: desktop-*
 
-      - name: Upload to COS via jingao relay
+      # coscli runs directly on GitHub runner — no SSH relay needed
+      - name: Install coscli
+        run: |
+          curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli
+          chmod +x /usr/local/bin/coscli
+          coscli --version
+
+      - name: Upload to COS
         env:
-          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
-          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
-          SSH_HOST: ${{ secrets.JINGAO_HOST }}
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
 
-          # Setup SSH
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          SSH="ssh -i ~/.ssh/deploy_key ${SSH_USER}@${SSH_HOST}"
-          SCP="scp -i ~/.ssh/deploy_key -C"
-
-          # Ensure coscli is installed on jingao
-          $SSH 'test -x /usr/local/bin/coscli || (curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli && chmod +x /usr/local/bin/coscli)' || \
-          $SSH 'test -x /tmp/coscli || (curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /tmp/coscli && chmod +x /tmp/coscli)'
-
-          # Write COS config on jingao
-          $SSH "cat > /tmp/.cos-release.yaml" <<EOF
+          # Write coscli config
+          cat > /tmp/.cos.yaml <<EOF
           coscli:
             base:
               mode: SecretKey
@@ -248,28 +217,48 @@ jobs:
                 alias: cos
           EOF
 
-          # SCP artifacts to jingao, then upload to COS (same-region, fast)
-          $SSH "mkdir -p /tmp/release-${VERSION}"
+          UPLOADED=0
+          FAILED=0
+
           for dir in all-artifacts/desktop-*/; do
             [ -d "$dir" ] || continue
-            echo "📦 Uploading from $dir"
+            PLATFORM_DIR=$(basename "$dir")
+            echo "📦 Uploading ${PLATFORM_DIR}..."
+
             for file in "${dir}"*; do
               [ -f "$file" ] || continue
               FILENAME=$(basename "$file")
+              [ "$FILENAME" = ".platform" ] && continue
+
               FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
-              echo "  ⬆️  SCP ${FILENAME} ($(numfmt --to=iec $FILESIZE)) → jingao"
-              $SCP "$file" "${SSH_USER}@${SSH_HOST}:/tmp/release-${VERSION}/${FILENAME}"
-              echo "  📤 jingao → COS"
-              COSCLI=$($SSH 'test -x /usr/local/bin/coscli && echo /usr/local/bin/coscli || echo /tmp/coscli')
-              $SSH "${COSCLI} cp -c /tmp/.cos-release.yaml /tmp/release-${VERSION}/${FILENAME} cos://${COS_BUCKET}/releases/${VERSION}/${FILENAME}"
-              echo "  ✅ ${FILENAME}"
+              COS_PATH="cos://${COS_BUCKET}/releases/${VERSION}/${FILENAME}"
+
+              echo "  ⬆️  ${FILENAME} ($(numfmt --to=iec $FILESIZE))"
+              if coscli cp -c /tmp/.cos.yaml "$file" "$COS_PATH"; then
+                echo "  ✅ ${FILENAME}"
+                UPLOADED=$((UPLOADED + 1))
+              else
+                echo "  ❌ ${FILENAME} upload failed!"
+                FAILED=$((FAILED + 1))
+              fi
             done
           done
 
-          # Cleanup
-          $SSH "rm -rf /tmp/release-${VERSION} /tmp/.cos-release.yaml"
-          echo "✅ All artifacts uploaded to COS: https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/"
+          rm -f /tmp/.cos.yaml
 
+          echo ""
+          echo "📊 Upload summary: ${UPLOADED} succeeded, ${FAILED} failed"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "❌ Some uploads failed!"
+            exit 1
+          fi
+          if [ "$UPLOADED" -eq 0 ]; then
+            echo "❌ No files were uploaded!"
+            exit 1
+          fi
+          echo "✅ All artifacts at: https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/"
+
+      # SSH only for DB registration (psql on jingao)
       - name: Register release in database
         env:
           SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
@@ -288,11 +277,10 @@ jobs:
           HOST="${SSH_USER}@${SSH_HOST}"
           SSH="ssh -i ~/.ssh/deploy_key"
 
-          # 生成 SQL 脚本 (本地构建，远程执行，避免复杂引号转义)
+          # Build SQL from platform manifests
           SQL_FILE=$(mktemp)
           cat > "$SQL_FILE" <<'HEADER'
           BEGIN;
-          -- Mark all existing releases as not latest
           UPDATE releases SET is_latest = false WHERE is_latest = true;
           HEADER
 
@@ -300,29 +288,18 @@ jobs:
             VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), true)
             ON CONFLICT (version) DO UPDATE SET is_latest = true, notes = EXCLUDED.notes;" >> "$SQL_FILE"
 
-          # Collect assets from local artifacts
           for dir in all-artifacts/desktop-*/; do
             [ -d "$dir" ] || continue
+            PLATFORM=""
+            if [ -f "${dir}.platform" ]; then
+              PLATFORM=$(cat "${dir}.platform" | tr -d '[:space:]')
+            fi
+            [ -z "$PLATFORM" ] && continue
+
             for file in "${dir}"*; do
               [ -f "$file" ] || continue
               FILENAME=$(basename "$file")
-              case "$FILENAME" in *.sig) continue;; esac
-
-              PLATFORM=''
-              case "$FILENAME" in
-                *aarch64*.dmg|*arm64*.dmg) PLATFORM='darwin-aarch64' ;;
-                *x64*.dmg|*x86_64*.dmg)   PLATFORM='darwin-x86_64' ;;
-                *.dmg)                     PLATFORM='darwin-aarch64' ;;
-                *.exe)                     PLATFORM='windows-x86_64' ;;
-                *.tar.gz)
-                  if echo "$FILENAME" | grep -qi 'aarch64\|arm64'; then
-                    PLATFORM='darwin-aarch64'
-                  elif echo "$FILENAME" | grep -qi 'x86_64\|x64'; then
-                    PLATFORM='darwin-x86_64'
-                  fi
-                  ;;
-              esac
-              [ -z "$PLATFORM" ] && continue
+              case "$FILENAME" in *.sig|.platform) continue;; esac
 
               FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
               DOWNLOAD_URL="${BASE_URL}/${FILENAME}"
@@ -337,13 +314,12 @@ jobs:
                 FROM releases r WHERE r.version = '${VERSION}'
                 ON CONFLICT DO NOTHING;" >> "$SQL_FILE"
 
-              echo "  📦 ${PLATFORM} → ${DOWNLOAD_URL} (${FILESIZE} bytes)"
+              echo "  📦 ${PLATFORM} → ${FILENAME} (${FILESIZE} bytes)"
             done
           done
 
           echo "COMMIT;" >> "$SQL_FILE"
 
-          # Execute SQL on jingao via SSH
           $SSH "$HOST" "PGPASSWORD='${DB_PASSWORD}' psql -h 127.0.0.1 -U postgres -d jacoworks -v ON_ERROR_STOP=1" < "$SQL_FILE"
           rm -f "$SQL_FILE"
           echo "✅ Release registered in database (is_latest=true)"

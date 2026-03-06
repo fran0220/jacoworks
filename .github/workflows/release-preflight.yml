@@ -1,0 +1,159 @@
+name: Release Preflight
+
+# Manual trigger: run before tagging to verify the full build works
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to validate (e.g. 1.5.0)'
+        required: false
+        type: string
+
+concurrency:
+  group: release-preflight
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Version & resource validation ──
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check versions
+        run: bash desktop/src-tauri/scripts/check-versions.sh
+
+      - name: Validate skills directory
+        run: |
+          COUNT=$(find vm-agent/skills -name "*.md" -type f | wc -l)
+          echo "Skills: $COUNT .md files"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "❌ No skill files found"
+            exit 1
+          fi
+          echo "✅ Skills OK"
+
+      - name: Validate required resources
+        run: |
+          for f in desktop/src-tauri/resources/pi-meta/package.json \
+                   desktop/src-tauri/resources/fonts/NotoSansSC-Regular.otf; do
+            if [ -f "$f" ]; then
+              echo "✅ $f"
+            else
+              echo "⚠️  Missing: $f"
+            fi
+          done
+
+  # ── Cross-compile sidecar (same as release) ──
+  build-sidecar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+        working-directory: vm-agent
+      - name: Cross-compile all targets
+        working-directory: vm-agent
+        run: |
+          mkdir -p dist
+          bun build --compile --target=bun-darwin-arm64  src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin
+          bun build --compile --target=bun-darwin-x64    src/index.ts --outfile dist/vm-agent-x86_64-apple-darwin
+          bun build --compile --target=bun-windows-x64   src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
+          echo "📦 Sidecar binaries:"
+          ls -lh dist/vm-agent-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vm-agent-sidecar
+          path: vm-agent/dist/vm-agent-*
+
+  # ── Build Tauri installers (same matrix as release, no signing/upload) ──
+  build-desktop:
+    needs: [validate, build-sidecar]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-arm64
+            platform: darwin-aarch64
+            sidecar: vm-agent-aarch64-apple-darwin
+            bundles: dmg,updater
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS-x64
+            platform: darwin-x86_64
+            sidecar: vm-agent-x86_64-apple-darwin
+            bundles: dmg,updater
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+            platform: windows-x86_64
+            sidecar: vm-agent-x86_64-pc-windows-msvc.exe
+            bundles: nsis,updater
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: vm-agent-sidecar
+          path: sidecar-bin/
+
+      - name: Prepare release resources
+        shell: bash
+        run: |
+          bash desktop/src-tauri/scripts/prepare-release.sh \
+            "${{ matrix.target }}" \
+            --sidecar-from "sidecar-bin/${{ matrix.sidecar }}"
+
+      - name: Prepare Windows dependencies
+        if: runner.os == 'Windows'
+        shell: bash
+        run: bash desktop/src-tauri/scripts/prepare-win-deps.sh
+
+      - run: npm ci
+        working-directory: desktop
+
+      - name: Build Tauri (no signing)
+        working-directory: desktop
+        run: |
+          npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          BUNDLE_DIR="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          echo "📦 Build artifacts:"
+          find "$BUNDLE_DIR" -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.tar.gz" -o -name "*.nsis.zip" \) | while read f; do
+            SIZE=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)
+            echo "  ✅ $(basename "$f") ($SIZE bytes)"
+          done
+
+          # Verify at least one installer exists
+          INSTALLER_COUNT=$(find "$BUNDLE_DIR" -type f \( -name "*.dmg" -o -name "*.exe" \) | wc -l | tr -d ' ')
+          if [ "$INSTALLER_COUNT" -lt 1 ]; then
+            echo "❌ No installer artifacts found!"
+            exit 1
+          fi
+          echo "✅ Preflight build successful for ${{ matrix.platform }}"

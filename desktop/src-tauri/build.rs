@@ -40,5 +40,13 @@ fn main() {
     std::fs::create_dir_all("resources/win-bash/usr/bin").ok();
     std::fs::create_dir_all("resources/win-bin").ok();
 
+    // Dev placeholder for doc-packages (real archive created by prepare-release.sh)
+    let doc_pkg = "resources/doc-packages.tar.gz";
+    if !std::path::Path::new(doc_pkg).exists() {
+        // Minimal valid gzip so Tauri doesn't complain about missing resource.
+        // Runtime extraction will find it empty and fall back to npm install.
+        std::fs::write(doc_pkg, include_bytes!("resources/doc-packages-placeholder.gz")).ok();
+    }
+
     tauri_build::build()
 }
