@@ -322,6 +322,7 @@ fn asset_view(a: &release::ReleaseAsset) -> AssetView {
 fn platform_label(p: &str) -> &'static str {
     match p {
         "darwin-aarch64" => "macOS (Apple Silicon)",
+        "darwin-x86_64" => "macOS (Intel)",
         "windows-x86_64" => "Windows (64-bit)",
         "linux-x86_64" => "Linux (x86_64)",
         _ => "Other",
