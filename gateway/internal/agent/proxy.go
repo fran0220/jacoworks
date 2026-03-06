@@ -32,6 +32,7 @@ type Proxy struct {
 	agentPort        int
 	dockerHostIP     string // Docker host WireGuard IP (e.g. "10.0.1.3")
 	token            string // GATEWAY_TOKEN for upstream auth
+	containerEnvVars map[string]string
 	onContainerReady func(userID, containerName string)
 }
 
@@ -44,6 +45,11 @@ func NewProxy(s *store.Store, backend ContainerBackend, freezer Freezer, agentPo
 		dockerHostIP: dockerHostIP,
 		token:        token,
 	}
+}
+
+// SetContainerEnvVars sets the env vars used when reprovisioning destroyed containers.
+func (p *Proxy) SetContainerEnvVars(envVars map[string]string) {
+	p.containerEnvVars = envVars
 }
 
 // SetOnContainerReady sets a callback for when a container becomes ready after unfreeze/start.
@@ -247,6 +253,7 @@ func (p *Proxy) forward(downstream, upstream *websocket.Conn, userID, containerN
 }
 
 // ensureRunning checks and starts/unfreezes the container if needed.
+// If the container is destroyed (not_found), it will be automatically reprovisioned.
 func (p *Proxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, userID string) error {
 	if p.backend == nil {
 		return nil
@@ -288,6 +295,22 @@ func (p *Proxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, us
 			go p.onContainerReady(userID, info.ContainerName)
 		}
 		return p.backend.WaitForHealth(info.ContainerName, info.ContainerIP)
+	case "not_found":
+		if p.containerEnvVars == nil {
+			return fmt.Errorf("container destroyed and no env vars configured for reprovision")
+		}
+		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("container not found, reprovisioning")
+		ip, err := p.backend.Reprovision(info.ContainerName, info.ContainerToken, p.containerEnvVars, info.HostPort)
+		if err != nil {
+			return fmt.Errorf("reprovision: %w", err)
+		}
+		if err := p.store.UpdateContainerIP(ctx, userID, ip); err != nil {
+			return fmt.Errorf("update IP after reprovision: %w", err)
+		}
+		if p.onContainerReady != nil {
+			go p.onContainerReady(userID, info.ContainerName)
+		}
+		return nil
 	default:
 		return fmt.Errorf("container in unexpected state: %s", status)
 	}

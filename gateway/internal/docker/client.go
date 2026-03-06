@@ -193,6 +193,7 @@ type dockerPSJSON struct {
 }
 
 // Status returns the status of a specific container.
+// Returns ContainerInfo with Status="not_found" if the container does not exist.
 func (c *Client) Status(name string) (*ContainerInfo, error) {
 	out, err := c.docker("ps", "-a", "--filter", "name=^/"+name+"$", "--format", "json")
 	if err != nil {
@@ -200,7 +201,7 @@ func (c *Client) Status(name string) (*ContainerInfo, error) {
 	}
 	out = strings.TrimSpace(out)
 	if out == "" {
-		return nil, fmt.Errorf("container %s not found", name)
+		return &ContainerInfo{Name: name, Status: "not_found"}, nil
 	}
 
 	// docker ps --format json outputs one JSON object per line

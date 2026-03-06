@@ -37,3 +37,7 @@ func (a *BackendAdapter) WaitForHealth(name, ip string) error {
 	}
 	return a.client.WaitForHealth(ip, 30*time.Second)
 }
+
+func (a *BackendAdapter) Reprovision(name, token string, envVars map[string]string, hostPort int) (string, error) {
+	return a.client.ProvisionContainer(name, token, envVars, hostPort)
+}

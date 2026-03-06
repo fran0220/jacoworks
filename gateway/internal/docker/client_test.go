@@ -208,12 +208,15 @@ func TestStatusNotFound(t *testing.T) {
 
 	m.On("docker ps", "", nil)
 
-	_, err := c.Status("agent-nonexist")
-	if err == nil {
-		t.Fatal("expected error for missing container")
+	info, err := c.Status("agent-nonexist")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error = %q, want 'not found'", err.Error())
+	if info.Status != "not_found" {
+		t.Errorf("status = %q, want 'not_found'", info.Status)
+	}
+	if info.Name != "agent-nonexist" {
+		t.Errorf("name = %q, want 'agent-nonexist'", info.Name)
 	}
 }
 

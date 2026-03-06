@@ -27,6 +27,7 @@ type Handler struct {
 	agentPort      int
 	chatAgentURL   string
 	chatAgentToken string
+	containerEnvVars map[string]string
 }
 
 func NewHandler(s *store.Store, dockerClient *dockerpkg.Client, freezer *dockerpkg.Freezer, agentPort int, chatAgentURL, chatAgentToken string) *Handler {
@@ -38,6 +39,11 @@ func NewHandler(s *store.Store, dockerClient *dockerpkg.Client, freezer *dockerp
 		chatAgentURL:   chatAgentURL,
 		chatAgentToken: chatAgentToken,
 	}
+}
+
+// SetContainerEnvVars sets env vars used when reprovisioning destroyed containers.
+func (h *Handler) SetContainerEnvVars(envVars map[string]string) {
+	h.containerEnvVars = envVars
 }
 
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +225,20 @@ func (h *Handler) ensureRunning(ctx context.Context, containerName, userID strin
 		ip, err := h.dockerClient.GetIP(containerName)
 		if err != nil {
 			return err
+		}
+		return h.store.UpdateContainerIP(ctx, userID, ip)
+	case "not_found":
+		if h.containerEnvVars == nil {
+			return fmt.Errorf("container destroyed and no env vars for reprovision")
+		}
+		cInfo, err := h.store.GetContainerInfo(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("get container info for reprovision: %w", err)
+		}
+		log.Info().Str("container", containerName).Str("user_id", userID).Msg("container not found, reprovisioning")
+		ip, err := h.dockerClient.ProvisionContainer(containerName, cInfo.ContainerToken, h.containerEnvVars, cInfo.HostPort)
+		if err != nil {
+			return fmt.Errorf("reprovision: %w", err)
 		}
 		return h.store.UpdateContainerIP(ctx, userID, ip)
 	default:

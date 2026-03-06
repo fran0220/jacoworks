@@ -13,6 +13,9 @@ type ContainerBackend interface {
 	Unfreeze(name string) error
 	Status(name string) (string, error)
 	WaitForHealth(name, ip string) error
+	// Reprovision recreates a container that was destroyed.
+	// Returns the new IP address.
+	Reprovision(name, token string, envVars map[string]string, hostPort int) (string, error)
 }
 
 // Freezer interface abstracts idle container management.

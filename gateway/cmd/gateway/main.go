@@ -165,6 +165,12 @@ func main() {
 	proxyHandler := proxy.NewHandler(s, dockerClient, freezer, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
 	backendAdapter := dockerpkg.NewBackendAdapter(dockerClient)
 	agentProxy := agent.NewProxy(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
+
+	// Inject container env vars for auto-reprovision of destroyed containers
+	envVars := containerEnvVars(cfg)
+	proxyHandler.SetContainerEnvVars(envVars)
+	agentProxy.SetContainerEnvVars(envVars)
+
 	channelPool := agent.NewChannelPool(agentProxy, 5*time.Minute, 1024)
 	defer channelPool.Close()
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
