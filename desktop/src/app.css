@@ -150,6 +150,7 @@
 	--z-titlebar: 100;
 	--z-overlay: 150;
 	--z-dropdown: 200;
+	--z-tooltip: 300;
 
 	/* ===== Transitions ===== */
 	--duration-fast: 0.12s;
@@ -223,4 +224,40 @@ textarea {
 a {
 	color: var(--accent);
 	text-decoration: none;
+}
+
+/* ===== Global Tooltip (data-tip) ===== */
+
+[data-tip] {
+	position: relative;
+}
+
+[data-tip]::after {
+	content: attr(data-tip);
+	position: absolute;
+	bottom: calc(100% + 8px);
+	left: 50%;
+	transform: translateX(-50%) translateY(4px);
+	padding: var(--space-3) var(--space-4);
+	border-radius: var(--radius);
+	background: var(--bg-secondary);
+	color: var(--text-secondary);
+	font-size: var(--text-2xs);
+	letter-spacing: 0.01em;
+	white-space: nowrap;
+	pointer-events: none;
+	opacity: 0;
+	box-shadow: var(--shadow-md), 0 0 0 1px var(--border-light);
+	transition:
+		opacity var(--duration-normal) var(--ease-standard),
+		transform var(--duration-normal) var(--ease-standard);
+	z-index: var(--z-tooltip);
+	max-width: 240px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+[data-tip]:hover::after {
+	opacity: 1;
+	transform: translateX(-50%) translateY(0);
 }

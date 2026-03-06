@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checkContainerStatus, provisionContainer } from "../cowork/lib/api";
-import { CoworkWS } from "../cowork/lib/ws";
-import type { OcEvent, OcRes } from "../cowork/types";
+import { CloudAgentWS } from "../lib/cloud-agent-ws";
+import type { AgentRpcEvent } from "../lib/agent";
 
 export type OcConnectionPhase =
   | "idle"
@@ -22,30 +22,16 @@ function sleep(ms: number) {
   });
 }
 
-/** Check if an OcEvent represents a new agent response starting */
-function isNewResponseEvent(event: OcEvent): boolean {
-  if (event.event !== "agent") return false;
-  const payload = event.payload as Record<string, unknown> | undefined;
-  if (!payload) return false;
-  const stream = typeof payload.stream === "string" ? payload.stream : "";
-  if (stream !== "lifecycle") return false;
-  const data = payload.data as Record<string, unknown> | undefined;
-  return data?.phase === "start";
-}
-
 export function useCoworkConnection() {
   const [phase, setPhase] = useState<OcConnectionPhase>("idle");
   const [statusText, setStatusText] = useState("");
   const [containerName, setContainerName] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [unreadCount, setUnreadCount] = useState(0);
 
-  const sseRef = useRef<CoworkWS | null>(null);
+  const wsRef = useRef<CloudAgentWS | null>(null);
   const phaseRef = useRef<OcConnectionPhase>("idle");
   const cancelTokenRef = useRef(0);
-  const drawerOpenRef = useRef(false);
-  const eventHandlerRef = useRef<((event: OcEvent) => void) | null>(null);
-  const responseHandlerRef = useRef<((response: OcRes) => void) | null>(null);
+  const messageHandlerRef = useRef<((packet: AgentRpcEvent) => void) | null>(null);
 
   const setPhaseSync = useCallback((p: OcConnectionPhase) => {
     phaseRef.current = p;
@@ -111,7 +97,7 @@ export function useCoworkConnection() {
             reject(new Error("连接协作环境超时"));
           }, CONNECT_TIMEOUT_MS);
 
-          const sse = new CoworkWS({
+          const ws = new CloudAgentWS({
             onReady: () => {
               firstReady = true;
               setPhaseSync("ready");
@@ -122,14 +108,8 @@ export function useCoworkConnection() {
               window.clearTimeout(timeout);
               resolve();
             },
-            onEvent: (event) => {
-              eventHandlerRef.current?.(event);
-              if (!drawerOpenRef.current && isNewResponseEvent(event)) {
-                setUnreadCount((c) => c + 1);
-              }
-            },
-            onResponse: (response) => {
-              responseHandlerRef.current?.(response);
+            onMessage: (packet) => {
+              messageHandlerRef.current?.(packet);
             },
             onDisconnect: (reason) => {
               if (!firstReady && !settled) {
@@ -157,8 +137,8 @@ export function useCoworkConnection() {
             },
           });
 
-          sseRef.current = sse;
-          sse.connect();
+          wsRef.current = ws;
+          ws.connect();
         });
       } catch (error) {
         if (cancelled()) return;
@@ -188,8 +168,8 @@ export function useCoworkConnection() {
   }, [doBootstrap]);
 
   const retry = useCallback(() => {
-    sseRef.current?.close();
-    sseRef.current = null;
+    wsRef.current?.close();
+    wsRef.current = null;
 
     const token = Date.now();
     cancelTokenRef.current = token;
@@ -200,35 +180,36 @@ export function useCoworkConnection() {
   useEffect(() => {
     return () => {
       cancelTokenRef.current = -1;
-      sseRef.current?.close();
-      sseRef.current = null;
+      wsRef.current?.close();
+      wsRef.current = null;
     };
   }, []);
 
-  const setEventHandler = useCallback((handler: ((event: OcEvent) => void) | null) => {
-    eventHandlerRef.current = handler;
-  }, []);
+  const setMessageHandler = useCallback(
+    (handler: ((packet: AgentRpcEvent) => void) | null) => {
+      messageHandlerRef.current = handler;
+    },
+    [],
+  );
 
-  const setResponseHandler = useCallback((handler: ((response: OcRes) => void) | null) => {
-    responseHandlerRef.current = handler;
-  }, []);
-
-  const setDrawerOpen = useCallback((open: boolean) => {
-    drawerOpenRef.current = open;
-    if (open) setUnreadCount(0);
-  }, []);
+  const disconnect = useCallback(() => {
+    cancelTokenRef.current = -1;
+    wsRef.current?.close();
+    wsRef.current = null;
+    setPhaseSync("idle");
+    setStatusText("");
+    setErrorText(null);
+  }, [setPhaseSync]);
 
   return {
     phase,
     statusText,
     containerName,
     errorText,
-    unreadCount,
-    sseRef,
+    wsRef,
     connect,
     retry,
-    setEventHandler,
-    setResponseHandler,
-    setDrawerOpen,
+    disconnect,
+    setMessageHandler,
   };
 }

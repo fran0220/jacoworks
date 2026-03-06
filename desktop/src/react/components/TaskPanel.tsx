@@ -21,16 +21,14 @@ function formatRelativeDate(timestamp: number): string {
 }
 
 export default function TaskPanel({
-  containerName,
   results,
   onClearResults,
-  onOpenCowork,
+  onNewCoworkSession,
   onClose,
 }: {
-  containerName: string;
   results: CronResultItem[];
   onClearResults: () => void;
-  onOpenCowork?: () => void;
+  onNewCoworkSession: () => void;
   onClose: () => void;
 }) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
@@ -51,12 +49,10 @@ export default function TaskPanel({
 
       {/* Action pills */}
       <div className="tp-actions">
-        {onOpenCowork && (
-          <button type="button" className="tp-pill tp-pill--cloud" onClick={onOpenCowork}>
-            <Cloud size={13} />
-            云端对话
-          </button>
-        )}
+        <button type="button" className="tp-pill tp-pill--cloud" onClick={onNewCoworkSession}>
+          <Cloud size={13} />
+          新建云端对话
+        </button>
         <button type="button" className="tp-pill tp-pill--cron" onClick={() => {}}>
           <Plus size={13} />
           新建定时任务

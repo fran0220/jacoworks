@@ -13,9 +13,9 @@ internal/
   store/{pg,users,sessions,containers,invites,settings,memory,skills,games,cron}.go  PostgreSQL (pgx/v5)
   proxy/handler.go             ReverseProxy (ChatAgent 代理)
   cowork/handler.go            文件操作 (upload/download/changes)
-  agent/ws_proxy.go            WebSocket 代理 (Ed25519 设备密钥)
-  agent/ws_handler.go          WS 传输 (ticket auth + 容器健康管理)
-  agent/ws_ticket.go           WS ticket 签发/验证 (HMAC-SHA256, 30s TTL)
+  agent/proxy.go               WebSocket 透明代理 (Bearer/query token auth, 桌面端云端模式)
+  agent/ws_handler.go          WS 传输 (ticket auth, 飞书 Bot 用)
+  agent/ws_ticket.go           WS ticket 签发/验证 (HMAC-SHA256, 30s TTL, 飞书 Bot 用)
   github/client.go             GitHub API 客户端 (Issue 创建 + 图片上传到 feedback-assets 分支)
   docker/{client,freezer,adapter}.go  Docker 容器生命周期 + 记忆推拉 + 健康检查 + 端口映射
   feishubot/{client,handler}.go  飞书 Bot webhook + 消息路由到容器
@@ -37,7 +37,7 @@ internal/
 | POST | `/v1/chat/completions` | ChatAgent HTTP 代理 |
 | GET | `/api/cowork/container-status` | 容器状态 |
 | POST | `/api/cowork/provision` | 自助分配 Docker 容器 |
-| GET | `/ws/agent` | WebSocket 代理 → 容器 :18789 |
+| GET | `/ws/agent` | WebSocket 透明代理 → 容器 vm-agent (桌面端云端模式, Bearer/query token) |
 | POST | `/api/cowork/{sid}/upload` | 上传项目 |
 | POST | `/api/memory/sync` | 记忆双向同步 (manifest + push/pull) |
 | POST | `/api/skills/upload` | 用户技能上传 (供 OpenClaw 容器) |

@@ -1,12 +1,12 @@
 /**
- * JAcoworks System Prompt — 企业 AI 协同办公平台
+ * JAcoworks System Prompt
  *
- * 3-layer architecture following OpenClaw pattern:
- *   Layer 1 (code): Compact runtime-only sections — tooling, safety, runtime info
- *   Layer 2 (files): Bootstrap files from agentHomeDir — SOUL.md, AGENTS.md, USER.md, TOOLS.md
- *   Layer 3 (optional): Project-level SOUL.md overlay from cwd
+ * 3-layer architecture:
+ *   Layer 1 (code): Immutable operating contract — interaction rules, safety, runtime info
+ *   Layer 2 (files): User-editable preferences from agentHomeDir — SOUL.md (style), AGENTS.md (workflow), USER.md (preferences), TOOLS.md (notes)
+ *   Layer 3 (optional): Project-level overlay from workspace SOUL.md
  *
- * 注入方式: DefaultResourceLoader.appendSystemPrompt
+ * No identity/persona declarations — the product context is implicit from the app.
  */
 
 import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
@@ -42,13 +42,11 @@ function buildRuntimePrompt(opts: SystemPromptOptions): string {
   const parts: string[] = [];
 
   parts.push(`<runtime>
-<application>JAcoworks — Enterprise AI Collaboration Platform</application>
+<product>JAcoworks</product>
 <environment>${mode}</environment>
 <agent_home>${opts.agentHomeDir}</agent_home>
 <workspace>${opts.workspaceDir}</workspace>
 <datetime>${dateStr} ${timeStr}</datetime>
-<identity_note>You are the JAcoworks AI Assistant ("JAco"). Do NOT refer to yourself as "Pi" or mention the Pi SDK unless asked about technical implementation details.</identity_note>
-<multi_model>You support multiple LLM providers (Claude, GPT, Gemini, Grok). Adapt naturally to model changes without disrupting the conversation.</multi_model>
 </runtime>`);
 
   // Safety invariants — always present regardless of bootstrap files
@@ -57,7 +55,6 @@ function buildRuntimePrompt(opts: SystemPromptOptions): string {
 - Never expose API keys, tokens, passwords, secrets, server IPs, proxy URLs, or internal infrastructure details in responses.
 - Always read files before modifying them. Make minimal, targeted edits.
 - Never execute destructive operations (rm -rf, DROP DATABASE, force push) without explicit user confirmation.
-- Never auto-open files with open/xdg-open/start — present file paths in backticks for desktop file cards.
 - Do not add unnecessary error handling, comments, or abstractions beyond what the task requires.
 </safety_invariants>`);
 
@@ -144,7 +141,7 @@ async function loadProjectSoulMd(workspaceDir: string): Promise<string> {
     const truncated = trimmed.length > MAX_FILE_CHARS
       ? trimmed.slice(0, MAX_FILE_CHARS) + "\n\n[... truncated ...]"
       : trimmed;
-    return `\n\n<project_personality>\nThe following instructions are provided by the project workspace and take precedence for behavior in this project:\n\n${truncated}\n</project_personality>`;
+    return `\n\n<project_overlay>\nProject-specific conventions for this workspace:\n\n${truncated}\n</project_overlay>`;
   } catch {
     return "";
   }
@@ -163,7 +160,7 @@ async function seedFile(agentHomeDir: string, filename: string): Promise<void> {
     await copyFile(seedSource, target);
   } else {
     // Minimal fallback if seed file is missing from bundle
-    await writeFile(target, `# ${filename.replace(".md", "")}\n\n<!-- Edit this file to customize JAco's behavior -->\n`, "utf-8");
+    await writeFile(target, `# ${filename.replace(".md", "")}\n\n<!-- Optional: customize here -->\n`, "utf-8");
   }
 }
 

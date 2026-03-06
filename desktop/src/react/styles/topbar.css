@@ -70,18 +70,23 @@
 .btn-cowork {
   position: relative;
   height: var(--size-btn);
-  width: var(--size-btn);
   border-radius: var(--radius-full);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  padding: 0 var(--space-5) 0 var(--space-4);
   color: var(--text-secondary);
   overflow: hidden;
   white-space: nowrap;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
+}
+
+.btn-cowork-label {
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
 }
 
 .btn-cowork:hover {
@@ -95,78 +100,72 @@
   color: var(--accent);
 }
 
-/* Expanded state: show inline status text */
-.btn-cowork.expanded {
-  width: auto;
-  padding: 0 var(--space-5) 0 var(--space-4);
+/* Phase-based color variants */
+.btn-cowork.phase-idle {
+  color: var(--text-muted);
+}
+
+.btn-cowork.phase-busy {
   background: var(--bg-tertiary);
 }
 
-.btn-cowork.expanded:hover {
-  background: var(--bg-hover);
-}
-
-/* Ready flash: accent pill */
-.btn-cowork.ready-flash {
+.btn-cowork.phase-ready {
   background: var(--accent-light);
   color: var(--accent);
 }
 
-/* Error state */
-.btn-cowork.error {
+.btn-cowork.phase-error {
   color: var(--danger);
-  background: rgba(217, 64, 64, 0.08);
+  background: var(--bg-error);
 }
 
-.btn-cowork.error:hover {
-  background: rgba(217, 64, 64, 0.14);
+.btn-cowork.phase-error:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
-/* Status text inside expanded pill */
-.oc-status-text {
-  font-size: var(--text-xs);
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.btn-cowork:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
-/* Green dot when connected (compact state) */
-.btn-cowork .oc-dot {
-  position: absolute;
-  top: 5px;
-  right: 5px;
+/* ─── Phase badge (dot + text) ─── */
+
+.oc-phase-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border-light);
+  margin-left: var(--space-1);
+}
+
+.oc-phase-dot {
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
-  background: var(--accent);
-  pointer-events: none;
+  flex-shrink: 0;
 }
 
-/* Unread message badge */
-.btn-cowork .oc-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-full);
+.oc-phase-dot.idle {
+  background: var(--text-muted);
+}
+
+.oc-phase-dot.busy {
+  background: var(--accent-thinking);
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.oc-phase-dot.ready {
+  background: var(--accent);
+}
+
+.oc-phase-dot.error {
   background: var(--danger);
-  color: var(--text-on-accent);
-  font-size: 10px;
-  font-weight: var(--font-bold);
-  line-height: 14px;
-  text-align: center;
-  pointer-events: none;
-  animation: fade-in var(--duration-fast) var(--ease-standard);
 }
 
 @media (max-width: 1023px) {
   .topbar {
     padding: 0 var(--space-6);
-  }
-
-  .oc-status-text {
-    max-width: 120px;
   }
 }

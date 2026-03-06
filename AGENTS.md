@@ -36,8 +36,8 @@
   │    可选 workspace → Agent 直接读写本地文件
   │    cron_manage 工具自动代理到 Gateway (云端执行)
   │
-  └─ 协作模式: 任务面板入口 → WebSocket → 网关 WS 代理 → SSH → Docker 容器
-       Ed25519 设备认证, JSON framing 协议
+  └─ 云端模式: 任务面板入口 → CloudAgentWS → wss://.../ws/agent?token= → 网关透明代理 → Docker 容器
+       同一 vm-agent RPC 协议 (prompt/abort/done/session_event), 复用本地模式事件处理
 
 jingao (82.156.239.212) ──── SSH ────→ oracle (161.33.28.249)
   ssh opc@10.0.1.3                    Docker 容器群 (agent-net 网络)
@@ -45,7 +45,7 @@ jingao (82.156.239.212) ──── SSH ────→ oracle (161.33.28.249)
 ```
 
 **三层服务**: 官网 (浏览器) + 网关 (桌面端 API) + 共享 PostgreSQL (jingao 本地)
-**双模式**: 本地 `type="chat"` (sidecar RPC) / 协作 `type="cowork"` (WebSocket)
+**双模式**: 本地 `type="chat"` (sidecar RPC) / 云端 `type="cowork"` (WebSocket → /ws/agent 透明代理), 共享同一 vm-agent RPC 协议
 **跨机**: 网关通过 SSH 管理 oracle 上的 Docker 容器, WS 连接容器端口
 
 ## 数据库
@@ -155,7 +155,7 @@ make deploy-agent      # 构建 ARM64 镜像 → 部署到 oracle
 - **网关仅管控面**: 认证、会话 CRUD、LLM 配置下发、WS 代理、云端定时任务调度
 - **技能本地内置**: `vm-agent/skills/` 跟随代码版本, sidecar 通过 `SKILLS_PATHS` 传入, 不从网关拉取
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session 和记忆
-- **协作前端解耦**: `cowork/` 不复用本地组件，仅共享 auth/config/transport；入口在任务面板
+- **协作前端解耦**: 云端模式 (cowork) 通过 `CloudAgentWS` 连接 `/ws/agent` 透明代理，与本地模式共享同一 vm-agent RPC 协议和 `processStream` 事件处理；入口在任务面板
 - **记忆同步可选**: 本地↔云端记忆同步默认关闭，用户在设置中开启
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，网关启动加载 + 热重载，无本地 fallback
 

@@ -1,9 +1,32 @@
-import { AlertCircle, Bug, CheckCircle, ChevronDown, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
-import ClawIcon from "./ClawIcon";
-import { useEffect, useRef, useState } from "react";
+import { AlertCircle, Bug, ChevronDown, Cloud, LoaderCircle, LogOut, PanelLeft, Settings, Unplug, UserCircle2 } from "lucide-react";
+import { useRef, useState } from "react";
 import type { OcConnectionPhase } from "../hooks/use-cowork-connection";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { getUser, logout } from "../lib/auth";
+
+function phaseLabel(phase: OcConnectionPhase): string {
+  switch (phase) {
+    case "idle": return "未连接";
+    case "checking": return "检查容器";
+    case "provisioning": return "分配容器";
+    case "connecting": return "连接中";
+    case "ready": return "已连接";
+    case "reconnecting": return "重连中";
+    case "error": return "连接失败";
+  }
+}
+
+function phaseColor(phase: OcConnectionPhase): string {
+  switch (phase) {
+    case "idle": return "idle";
+    case "checking":
+    case "provisioning":
+    case "connecting":
+    case "reconnecting": return "busy";
+    case "ready": return "ready";
+    case "error": return "error";
+  }
+}
 
 export default function TopBar({
   title,
@@ -11,11 +34,8 @@ export default function TopBar({
   onToggleSidebar,
   onOpenSettings,
   ocPhase,
-  ocStatusText,
-  ocUnreadCount,
   coworkOpen,
-  onCoworkChat,
-  onCloseCowork,
+  onToggleCloud,
   debugEnabled,
   showRpcLog,
   onToggleRpcLog,
@@ -25,59 +45,31 @@ export default function TopBar({
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
   ocPhase: OcConnectionPhase;
-  ocStatusText: string;
-  ocUnreadCount: number;
   coworkOpen: boolean;
-  onCoworkChat: () => void;
-  onCloseCowork: () => void;
+  onToggleCloud: () => void;
   debugEnabled: boolean;
   showRpcLog: boolean;
   onToggleRpcLog: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [showReadyFlash, setShowReadyFlash] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const prevPhaseRef = useRef<OcConnectionPhase>(ocPhase);
   const user = getUser();
 
   const isBusy = ocPhase === "checking" || ocPhase === "provisioning" || ocPhase === "connecting" || ocPhase === "reconnecting";
-  const isError = ocPhase === "error";
-  const isReady = ocPhase === "ready";
-
-  // Flash "已连接" for 2s when transitioning to ready
-  useEffect(() => {
-    if (ocPhase === "ready" && prevPhaseRef.current !== "ready" && prevPhaseRef.current !== "idle") {
-      setShowReadyFlash(true);
-      const timer = window.setTimeout(() => setShowReadyFlash(false), 2000);
-      prevPhaseRef.current = ocPhase;
-      return () => window.clearTimeout(timer);
-    }
-    prevPhaseRef.current = ocPhase;
-  }, [ocPhase]);
-
-  const showExpandedText = isBusy || isError || showReadyFlash;
-
-  let displayText = "";
-  if (showReadyFlash) displayText = "已连接";
-  else if (isError) displayText = "连接失败";
-  else if (isBusy) displayText = ocStatusText;
+  const isConnected = ocPhase === "ready";
 
   useClickOutside(menuRef, () => setMenuOpen(false), menuOpen);
 
-  // Button icon based on phase
   let icon: React.ReactNode;
   if (isBusy) icon = <LoaderCircle size={14} className="spinning" />;
-  else if (isError) icon = <AlertCircle size={14} />;
-  else if (showReadyFlash) icon = <CheckCircle size={14} />;
-  else icon = <ClawIcon size={14} />;
+  else if (ocPhase === "error") icon = <AlertCircle size={14} />;
+  else if (isConnected) icon = <Unplug size={14} />;
+  else icon = <Cloud size={14} />;
 
   const btnClass = [
     "btn-cowork",
     coworkOpen && "active",
-    showExpandedText && "expanded",
-    isReady && !showReadyFlash && "has-dot",
-    showReadyFlash && "ready-flash",
-    isError && "error",
+    `phase-${phaseColor(ocPhase)}`,
   ].filter(Boolean).join(" ");
 
   return (
@@ -109,22 +101,16 @@ export default function TopBar({
         <button
           type="button"
           className={btnClass}
-          title="协作"
-          onClick={() => {
-            if (coworkOpen) {
-              onCloseCowork();
-            } else {
-              onCoworkChat();
-            }
-          }}
+          title={isConnected ? "断开云端" : "连接云端"}
+          onClick={onToggleCloud}
+          disabled={isBusy}
         >
           {icon}
-          {showExpandedText && <span className="oc-status-text">{displayText}</span>}
-          {isReady && !showReadyFlash && !coworkOpen && ocUnreadCount > 0 ? (
-            <span className="oc-badge">{ocUnreadCount > 99 ? "99+" : ocUnreadCount}</span>
-          ) : (
-            isReady && !showReadyFlash && <span className="oc-dot" />
-          )}
+          <span className="btn-cowork-label">{isConnected ? "断开云端" : "云端模式"}</span>
+          <span className={`oc-phase-badge ${phaseColor(ocPhase)}`}>
+            <span className={`oc-phase-dot ${phaseColor(ocPhase)}`} />
+            {phaseLabel(ocPhase)}
+          </span>
         </button>
 
         <div className="user-menu-wrapper" ref={menuRef}>

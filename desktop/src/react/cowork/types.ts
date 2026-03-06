@@ -1,5 +1,3 @@
-export type OcRole = "system" | "user" | "assistant";
-
 export interface OcProxyReadyFrame {
   type: "proxy.ready";
 }
@@ -57,26 +55,6 @@ export interface OcChatSendParams {
 }
 
 export interface OcChatAbortParams {
-  sessionKey: string;
-}
-
-export interface OcMessage {
-  id: string;
-  role: OcRole;
-  content: string;
-  createdAt: number;
-  status?: "streaming" | "final" | "error";
-}
-
-export interface OcSession {
-  id: string;
-  title: string;
-  messages: OcMessage[];
-  createdAt: number;
-  updatedAt: number;
-  type: "cowork";
-  model: string;
-  workspacePath: string;
   sessionKey: string;
 }
 

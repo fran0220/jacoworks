@@ -36,7 +36,7 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
-  type: string;
+  type: "chat" | "cowork";
   workspacePath: string;
   model: string;
   anonymous?: boolean;

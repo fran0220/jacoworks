@@ -7,19 +7,18 @@ import {
   Paperclip,
   Plus,
   SendHorizontal,
-  Sparkles,
   Square,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEventHandler } from "react";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { MODEL_OPTIONS } from "../lib/config";
 import CustomSelect from "./CustomSelect";
+import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
 import { importFiles, formatSize, type ImportedFile } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
-import { useSkills } from "../lib/skills";
 import type { AttachedFile } from "../types";
 
 function ElapsedTime({ startedAt }: { startedAt: number }) {
@@ -39,6 +38,7 @@ export default function Composer({
   streamingStartedAt,
   workspacePath,
   model,
+  disabled,
   onWorkspaceChange,
   onModelChange,
   onSend,
@@ -48,6 +48,7 @@ export default function Composer({
   streamingStartedAt?: number | null;
   workspacePath: string;
   model: string;
+  disabled?: boolean;
   onWorkspaceChange: (workspacePath: string) => void;
   onModelChange: (model: string) => void;
   onSend: (text: string, files: AttachedFile[]) => void;
@@ -58,16 +59,6 @@ export default function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
-  const skills = useSkills();
-  const grouped = useMemo(() => {
-    const map = new Map<string, typeof skills>();
-    for (const s of skills) {
-      const g = s.group || "";
-      if (!map.has(g)) map.set(g, []);
-      map.get(g)!.push(s);
-    }
-    return map;
-  }, [skills]);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [recentFolders, setRecentFolders] = useState<string[]>(getRecentFolders);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -75,7 +66,7 @@ export default function Composer({
   const plusMenuRef = useRef<HTMLDivElement | null>(null);
   const folderMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const sendDisabled = isStreaming || (!text.trim() && files.length === 0);
+  const sendDisabled = disabled || isStreaming || (!text.trim() && files.length === 0);
 
   useClickOutside(plusMenuRef, () => setPlusMenuOpen(false), plusMenuOpen);
   useClickOutside(folderMenuRef, () => setFolderMenuOpen(false), folderMenuOpen);
@@ -210,8 +201,8 @@ export default function Composer({
             onSendClick();
           }
         }}
-        disabled={isStreaming}
-        placeholder="回复..."
+        disabled={disabled || isStreaming}
+        placeholder={disabled ? "等待云端连接..." : "回复..."}
       />
 
       <div className="composer-toolbar">
@@ -285,52 +276,7 @@ export default function Composer({
                   <Paperclip size={18} />
                   <span>附加文件或图片</span>
                 </button>
-                <div className="ns-menu-item-hover">
-                  <div className="ns-menu-item ns-menu-item-sub">
-                    <Sparkles size={18} />
-                    <span>功能</span>
-                    <ChevronDown size={14} className="ns-sub-arrow" />
-                  </div>
-                  <div className="ns-skills-submenu">
-                    <div className="ns-skills-submenu-content">
-                      {Array.from(grouped.entries()).map(([group, items]) =>
-                        group ? (
-                          <div key={group} className="ns-group-hover">
-                            <div className="ns-group-trigger">
-                              <span>{group}</span>
-                              <ChevronDown size={14} className="ns-sub-arrow" />
-                            </div>
-                            <div className="ns-group-skills">
-                              <div className="ns-group-skills-content">
-                                {items.map((skill) => (
-                                  <button
-                                    key={skill.id}
-                                    className="ns-skill-item"
-                                    onClick={() => handleSkillInsert(skill.id)}
-                                  >
-                                    <span className="ns-skill-name">/{skill.id}</span>
-                                    <span className="ns-skill-desc">{skill.description}</span>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          items.map((skill) => (
-                            <button
-                              key={skill.id}
-                              className="ns-skill-item"
-                              onClick={() => handleSkillInsert(skill.id)}
-                            >
-                              <span className="ns-skill-name">/{skill.id}</span>
-                              <span className="ns-skill-desc">{skill.description}</span>
-                            </button>
-                          ))
-                        )
-                      )}
-                    </div>
-                  </div>
-                </div>
+                <SkillMenu onSelect={handleSkillInsert} />
               </div>
             )}
           </div>

@@ -20,15 +20,13 @@ src/
                                ToolStatus NewSessionPanel SettingsModal
                                TaskPanel (时间线 UI + 云端对话入口) RpcLogPanel
     hooks/                     use-agent-bootstrap use-chat-stream
-                               use-responsive-sidebar use-session-state
-                               use-cron-results
-    lib/                       auth sessions agent transport config
-                               cowork recentFolders session-persistence skills
+                               use-cowork-connection use-responsive-sidebar
+                               use-session-state use-cron-results
+    lib/                       auth sessions agent cloud-agent-ws transport config
+                               recentFolders session-persistence skills
                                skill-sync memory-sync (记忆双向同步)
-    cowork/                    完全独立模块 (不复用本地模式组件)
-      CoworkApp.tsx            容器分配 → WS 对话 (入口在任务面板)
-      lib/{api,sessions,ws}.ts
-      components/              OcChatView OcComposer OcMarkdown Provision...
+    cowork/                    容器 API (api.ts) + 遗留类型 (types.ts)
+      lib/api.ts               容器状态检查 + 自助分配
     styles/                    按组件拆分 CSS (chat composer layout sidebar task-panel...)
     types.ts                   ChatMessage ChatSession StreamBlock
 ```
@@ -63,7 +61,8 @@ npm test
 - **React 18 纯 CSS 变量** (无 CSS-in-JS, 无 Tailwind)
 - **CSS 模块化**: 样式拆分到 `react/styles/` 按组件分文件
 - **本地对话优先**: NewSessionPanel 无模式切换，对话永远本地 sidecar
-- **协作入口在任务面板**: TaskPanel 提供「启动云端对话」按钮，打开 CoworkApp
+- **云端模式统一协议**: 云端 (cowork) 会话通过 `CloudAgentWS` 连接 `/ws/agent?token=`，使用与本地模式相同的 vm-agent RPC 协议 (prompt/abort/session_event/done)，`use-chat-stream` 共享同一 `processStream` 事件处理循环
+- **协作入口在任务面板**: TaskPanel 提供「启动云端对话」按钮
 - **视觉区分**: 云端对话 (oc-drawer) 蓝灰背景色调；Sidebar 云端会话有蓝灰左边框和图标色
 - **记忆同步**: `memorySyncEnabled` 设置 (默认关)，开启后 syncMemory() 在登录和对话结束后自动执行 (30s 防抖)
 - 开发: `make dev-desktop` (Vite HMR + Tauri)

@@ -1,4 +1,4 @@
-import { AlertTriangle, Bug, LoaderCircle } from "lucide-react";
+import { AlertTriangle, Bug, Cloud, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChatView from "./react/components/ChatView";
 import LoginPanel from "./react/components/LoginPanel";
@@ -7,7 +7,7 @@ import Sidebar from "./react/components/Sidebar";
 import TopBar from "./react/components/TopBar";
 import PreviewDrawer from "./react/components/PreviewDrawer";
 import TaskPanel from "./react/components/TaskPanel";
-import CoworkApp from "./react/cowork/CoworkApp";
+import Provision from "./react/cowork/components/Provision";
 import { useAgentBootstrap } from "./react/hooks/use-agent-bootstrap";
 import { useCoworkConnection } from "./react/hooks/use-cowork-connection";
 import { useCronResults } from "./react/hooks/use-cron-results";
@@ -67,6 +67,7 @@ export default function App() {
     selectSession,
     createNewSession,
     handleSessionCreated,
+    ensureCoworkSession,
     deleteSessionById,
   } = useSessionState(authenticated);
 
@@ -75,11 +76,9 @@ export default function App() {
   useEffect(
     () =>
       subscribeAuth(() => {
-        const nextAuthenticated = isAuthenticated();
-        setAuthenticated(nextAuthenticated);
-        if (!nextAuthenticated) {
-          setCoworkOpen(false);
-        }
+        const next = isAuthenticated();
+        setAuthenticated(next);
+        if (!next) setCoworkOpen(false);
       }),
     [],
   );
@@ -90,10 +89,12 @@ export default function App() {
     return () => window.removeEventListener("auth-expired", handler);
   }, []);
 
-  // Sync drawer open state with connection hook for unread tracking
+  // Auto-connect when user selects a cowork session from Sidebar
   useEffect(() => {
-    ocConnection.setDrawerOpen(coworkOpen);
-  }, [coworkOpen, ocConnection.setDrawerOpen]);
+    if (currentSession?.type === "cowork") {
+      ocConnection.connect();
+    }
+  }, [currentSession?.id, currentSession?.type, ocConnection.connect]);
 
   useEffect(() => {
     handleOAuthCallback().catch(() => {});
@@ -236,13 +237,17 @@ export default function App() {
           onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
           onOpenSettings={() => setShowSettings(true)}
           ocPhase={ocConnection.phase}
-          ocStatusText={ocConnection.statusText}
-          ocUnreadCount={ocConnection.unreadCount}
           coworkOpen={coworkOpen}
-          onCoworkChat={() => {
-            setCoworkOpen(true);
+          onToggleCloud={() => {
+            if (ocConnection.phase === "idle" || ocConnection.phase === "error") {
+              setCoworkOpen(true);
+              ocConnection.connect();
+            } else if (ocConnection.phase === "ready" || ocConnection.phase === "reconnecting") {
+              setCoworkOpen((v) => !v);
+            } else {
+              setCoworkOpen((v) => !v);
+            }
           }}
-          onCloseCowork={() => setCoworkOpen(false)}
           debugEnabled={debugEnabled}
           showRpcLog={showRpcLog}
           onToggleRpcLog={() => setShowRpcLog(v => !v)}
@@ -264,6 +269,9 @@ export default function App() {
                 pendingFiles={pendingFiles}
                 clearPending={() => { setPendingMessage(null); setPendingFiles([]); }}
                 onSessionUpdate={refreshSessions}
+                cloudWsRef={ocConnection.wsRef}
+                cloudReady={ocConnection.phase === "ready"}
+                setCloudMessageHandler={ocConnection.setMessageHandler}
               />
             ) : (
               <NewSessionPanel
@@ -283,29 +291,49 @@ export default function App() {
           <div className={`oc-drawer${coworkOpen ? " open" : ""}`}>
             <div className="oc-drawer-inner">
               {coworkOpen && (
-                ocConnection.phase !== "idle" ? (
-                  <CoworkApp
-                    phase={ocConnection.phase}
-                    statusText={ocConnection.statusText}
-                    containerName={ocConnection.containerName}
-                    errorText={ocConnection.errorText}
-                    sseRef={ocConnection.sseRef}
-                    onRetry={ocConnection.connect}
-                    setEventHandler={ocConnection.setEventHandler}
-                    setResponseHandler={ocConnection.setResponseHandler}
-                    onClose={() => setCoworkOpen(false)}
-                  />
-                ) : (
-                  <TaskPanel
-                    containerName={ocConnection.containerName}
-                    results={cronResults.results}
-                    onClearResults={cronResults.clearResults}
-                    onOpenCowork={() => {
-                      ocConnection.connect();
-                    }}
-                    onClose={() => setCoworkOpen(false)}
-                  />
-                )
+                <>
+                  {(ocConnection.phase === "checking" || ocConnection.phase === "provisioning" || ocConnection.phase === "connecting") && (
+                    <Provision
+                      phase={ocConnection.phase}
+                      message={ocConnection.statusText}
+                      detail={ocConnection.containerName ? `容器: ${ocConnection.containerName}` : undefined}
+                      onClose={() => setCoworkOpen(false)}
+                    />
+                  )}
+                  {ocConnection.phase === "error" && (
+                    <div className="oc-app-layout">
+                      <div className="oc-status-strip">
+                        <span className="oc-connection-badge error">
+                          <Cloud size={12} />
+                          连接失败
+                        </span>
+                        <button type="button" className="oc-drawer-close" onClick={() => setCoworkOpen(false)} title="关闭">
+                          <X size={14} />
+                        </button>
+                      </div>
+                      <div className="oc-provision">
+                        <div className="oc-provision-card error">
+                          <h2 className="oc-provision-title">协作启动失败</h2>
+                          <p className="oc-provision-message">{ocConnection.errorText || "未知错误"}</p>
+                          <div className="oc-error-actions">
+                            <button type="button" className="oc-action-btn primary" onClick={ocConnection.retry}>
+                              <RefreshCw size={14} />
+                              重试
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {(ocConnection.phase === "idle" || ocConnection.phase === "ready" || ocConnection.phase === "reconnecting") && (
+                    <TaskPanel
+                      results={cronResults.results}
+                      onClearResults={cronResults.clearResults}
+                      onNewCoworkSession={ensureCoworkSession}
+                      onClose={() => setCoworkOpen(false)}
+                    />
+                  )}
+                </>
               )}
             </div>
           </div>

@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   abortNativeSession,
+  abortCloudSession,
   requestTitleGeneration,
+  requestCloudTitleGeneration,
   startNativeStream,
+  startCloudStream,
 } from "../lib/agent";
+import type { AgentRpcEvent } from "../lib/agent";
+import type { CloudAgentWS } from "../lib/cloud-agent-ws";
 import { getUser } from "../lib/auth";
 import { getSettings } from "../lib/config";
 import {
@@ -78,6 +83,10 @@ interface UseChatStreamOptions {
   pendingFiles: AttachedFile[];
   clearPending: () => void;
   onSessionUpdate: () => Promise<void>;
+  // Cloud transport
+  cloudWsRef?: React.MutableRefObject<CloudAgentWS | null>;
+  cloudReady?: boolean;
+  setCloudMessageHandler?: (handler: ((packet: AgentRpcEvent) => void) | null) => void;
 }
 
 export function useChatStream({
@@ -86,6 +95,9 @@ export function useChatStream({
   pendingFiles,
   clearPending,
   onSessionUpdate,
+  cloudWsRef,
+  cloudReady,
+  setCloudMessageHandler,
 }: UseChatStreamOptions) {
   const [localSession, setLocalSession] = useState(session);
   const [streaming, setStreaming] = useState(false);
@@ -229,7 +241,17 @@ export function useChatStream({
       const targetSessionId = localSessionRef.current.id;
       const titleRequestVersion = titleRequestVersionRef.current;
 
-      requestTitleGeneration(userMessage, assistantText).then(async (aiTitle) => {
+      const titlePromise = (localSessionRef.current.type === "cowork")
+        ? (() => {
+            const ws = cloudWsRef?.current;
+            if (ws?.isReady && setCloudMessageHandler) {
+              return requestCloudTitleGeneration(ws, userMessage, assistantText, setCloudMessageHandler);
+            }
+            return Promise.resolve(null);
+          })()
+        : requestTitleGeneration(userMessage, assistantText);
+
+      titlePromise.then(async (aiTitle) => {
         if (!aiTitle) return;
 
         if (titleRequestVersionRef.current !== titleRequestVersion) return;
@@ -248,7 +270,7 @@ export function useChatStream({
         console.warn("[title] AI title generation failed:", err);
       });
     }
-  }, [onSessionUpdate, persistSession]);
+  }, [onSessionUpdate, persistSession, cloudWsRef, setCloudMessageHandler]);
 
   const sendMessage = useCallback(
     async (text: string, files: AttachedFile[]) => {
@@ -279,11 +301,205 @@ export function useChatStream({
       stoppedByUserRef.current = false;
       stickToBottomRef.current = true;
 
-      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
-      try {
+      // Shared stream processing for both local and cloud modes
+      const processStream = async (response: { stream: AsyncGenerator<AgentRpcEvent>; cancel: () => void }) => {
+        streamCancelRef.current = response.cancel;
+        let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+
+        try {
+          inactivityTimer = window.setTimeout(() => {
+            if (!abortedRef.current) {
+              abortedRef.current = true;
+              response.cancel();
+              setErrorText("响应超时，模型长时间未返回数据");
+            }
+          }, 45_000);
+          const resetInactivityTimer = () => {
+            if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
+            inactivityTimer = window.setTimeout(() => {
+              if (!abortedRef.current) {
+                abortedRef.current = true;
+                response.cancel();
+                setErrorText("响应超时，模型长时间未返回数据");
+              }
+            }, 45_000);
+          };
+
+          for await (const packet of response.stream) {
+            if (abortedRef.current) break;
+            resetInactivityTimer();
+
+            if (packet.type === "response") {
+              if (packet.success === false) {
+                throw new Error(String(packet.error || "请求失败"));
+              }
+              continue;
+            }
+
+            if (packet.type === "error") {
+              throw new Error(String(packet.error || "请求失败"));
+            }
+
+            if (packet.type === "done") break;
+            if (packet.type !== "session_event" || !packet.event) continue;
+            if ((packet.event as { type?: string }).type === "keepalive") continue;
+
+            const event = packet.event as {
+              type: string;
+              assistantMessageEvent?: { type?: string; delta?: string };
+              toolCallId?: unknown;
+              toolName?: unknown;
+              args?: unknown;
+              result?: unknown;
+              isError?: unknown;
+              reason?: unknown;
+              attempt?: unknown;
+              maxAttempts?: unknown;
+            };
+
+            if (event.type === "message_update") {
+              const assistantEvent = event.assistantMessageEvent;
+              if (assistantEvent?.type === "thinking_delta" || assistantEvent?.type === "thinking_start" || assistantEvent?.type === "thinking_end") {
+                console.log("[thinking-ui]", assistantEvent.type, assistantEvent.delta?.slice?.(0, 50));
+              }
+              if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
+                const last = blocksRef.current[blocksRef.current.length - 1];
+                if (last?.type === "text") {
+                  last.content += assistantEvent.delta;
+                } else {
+                  blocksRef.current.push({ type: "text", content: assistantEvent.delta });
+                }
+                scheduleBlocksRender();
+              } else if (assistantEvent?.type === "thinking_delta" && assistantEvent.delta) {
+                const last = blocksRef.current[blocksRef.current.length - 1];
+                if (last?.type === "thinking") {
+                  last.content += assistantEvent.delta;
+                } else {
+                  blocksRef.current.push({ type: "thinking", content: assistantEvent.delta });
+                }
+                scheduleBlocksRender();
+              } else if (assistantEvent?.type === "toolcall_start") {
+                const partial = (assistantEvent as { partial?: { content?: Array<{ type: string; id?: string; name?: string }> }; contentIndex?: number }).partial;
+                const idx = (assistantEvent as { contentIndex?: number }).contentIndex;
+                const toolBlock = idx != null ? partial?.content?.[idx] : undefined;
+                const toolName = toolBlock?.name || "tool";
+                const toolId = toolBlock?.id || `tool-${Date.now()}`;
+                blocksRef.current.push({
+                  type: "tool",
+                  id: toolId,
+                  name: toolName,
+                  status: "running",
+                });
+                scheduleBlocksRender();
+              }
+            }
+
+            if (event.type === "tool_execution_start") {
+              const execId = String(event.toolCallId || "");
+              const existing = execId
+                ? blocksRef.current.find((b) => b.type === "tool" && b.id === execId)
+                : undefined;
+              if (existing && existing.type === "tool") {
+                existing.args = event.args ? JSON.stringify(event.args, null, 2) : undefined;
+              } else {
+                const argsStr = event.args ? JSON.stringify(event.args, null, 2) : undefined;
+                blocksRef.current.push({
+                  type: "tool",
+                  id: String(event.toolCallId || `tool-${Date.now()}`),
+                  name: String(event.toolName || "tool"),
+                  status: "running",
+                  args: argsStr,
+                });
+              }
+              scheduleBlocksRender();
+            }
+
+            if (event.type === "tool_execution_end") {
+              const endId = String(event.toolCallId || "");
+              for (let i = blocksRef.current.length - 1; i >= 0; i -= 1) {
+                const block = blocksRef.current[i];
+                if (
+                  block.type === "tool" &&
+                  (endId ? block.id === endId : block.name === String(event.toolName) && block.status === "running")
+                ) {
+                  block.status = event.isError ? "error" : "completed";
+                  if (event.result !== undefined) {
+                    const raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2);
+                    block.result = raw.length > 4000 ? `${raw.slice(0, 4000)}\n…[截断]` : raw;
+                  }
+                  break;
+                }
+              }
+              scheduleBlocksRender();
+            }
+
+            if (event.type === "auto_compaction_start") {
+              blocksRef.current.push({
+                type: "status",
+                text: `上下文压缩中 (${String(event.reason || "auto")})`,
+              });
+              scheduleBlocksRender();
+            }
+
+            if (event.type === "auto_retry_start") {
+              blocksRef.current.push({
+                type: "status",
+                text: `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
+              });
+              scheduleBlocksRender();
+            }
+          }
+
+          if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
+
+          if (!abortedRef.current) {
+            await finalizeStream();
+          } else if (!stoppedByUserRef.current) {
+            const hasPartialText = blocksRef.current.some(
+              (b) => b.type === "text" && b.content.trim(),
+            );
+            if (hasPartialText) {
+              await finalizeStream();
+            }
+          }
+        } catch (error) {
+          if (!abortedRef.current) {
+            const msg = error instanceof Error ? error.message : "请求失败";
+            setErrorText(msg);
+            const errorMessages = [...streamBaseRef.current, {
+              role: "assistant" as const,
+              content: `⚠️ ${msg}`,
+            }];
+            await persistSession(errorMessages).catch(() => {});
+          }
+        } finally {
+          if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
+          streamCancelRef.current = null;
+          sendLockRef.current = false;
+          setStreaming(false);
+          setStreamingStartedAt(null);
+          window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: localSessionRef.current.id, streaming: false } }));
+          cancelRenderFrame();
+          setBlocks([]);
+          blocksRef.current = [];
+          debouncedSyncMemory().catch(() => {});
+        }
+      };
+
+      // Cloud mode
+      if (sessionSnapshot.type === "cowork") {
+        const ws = cloudWsRef?.current;
+        if (!ws || !ws.isReady) {
+          sendLockRef.current = false;
+          setStreaming(false);
+          setStreamingStartedAt(null);
+          setErrorText("云端连接尚未就绪");
+          return;
+        }
+
         const currentUser = getUser();
         const appSettings = getSettings();
-        const response = await startNativeStream({
+        const response = await startCloudStream(ws, {
           session_id: sessionSnapshot.id,
           user_id: currentUser?.id || undefined,
           model: sessionSnapshot.model,
@@ -292,193 +508,27 @@ export function useChatStream({
           restricted: false,
           thinking_level: appSettings.thinkingLevel || undefined,
           anonymous: sessionSnapshot.anonymous || undefined,
-        });
-        streamCancelRef.current = response.cancel;
-
-        // Inactivity timeout: if no data arrives for 45s, abort
-        inactivityTimer = window.setTimeout(() => {
-          if (!abortedRef.current) {
-            abortedRef.current = true;
-            response.cancel();
-            setErrorText("响应超时，模型长时间未返回数据");
-          }
-        }, 45_000);
-        const resetInactivityTimer = () => {
-          if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
-          inactivityTimer = window.setTimeout(() => {
-            if (!abortedRef.current) {
-              abortedRef.current = true;
-              response.cancel();
-              setErrorText("响应超时，模型长时间未返回数据");
-            }
-          }, 45_000);
-        };
-
-        for await (const packet of response.stream) {
-          if (abortedRef.current) break;
-          resetInactivityTimer();
-
-          if (packet.type === "response") {
-            if (packet.success === false) {
-              throw new Error(String(packet.error || "请求失败"));
-            }
-            continue;
-          }
-
-          if (packet.type === "error") {
-            throw new Error(String(packet.error || "请求失败"));
-          }
-
-          if (packet.type === "done") break;
-          if (packet.type !== "session_event" || !packet.event) continue;
-          if ((packet.event as { type?: string }).type === "keepalive") continue;
-
-          const event = packet.event as {
-            type: string;
-            assistantMessageEvent?: { type?: string; delta?: string };
-            toolCallId?: unknown;
-            toolName?: unknown;
-            args?: unknown;
-            result?: unknown;
-            isError?: unknown;
-            reason?: unknown;
-            attempt?: unknown;
-            maxAttempts?: unknown;
-          };
-
-          if (event.type === "message_update") {
-            const assistantEvent = event.assistantMessageEvent;
-            if (assistantEvent?.type === "thinking_delta" || assistantEvent?.type === "thinking_start" || assistantEvent?.type === "thinking_end") {
-              console.log("[thinking-ui]", assistantEvent.type, assistantEvent.delta?.slice?.(0, 50));
-            }
-            if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
-              const last = blocksRef.current[blocksRef.current.length - 1];
-              if (last?.type === "text") {
-                last.content += assistantEvent.delta;
-              } else {
-                blocksRef.current.push({ type: "text", content: assistantEvent.delta });
-              }
-              scheduleBlocksRender();
-            } else if (assistantEvent?.type === "thinking_delta" && assistantEvent.delta) {
-              const last = blocksRef.current[blocksRef.current.length - 1];
-              if (last?.type === "thinking") {
-                last.content += assistantEvent.delta;
-              } else {
-                blocksRef.current.push({ type: "thinking", content: assistantEvent.delta });
-              }
-              scheduleBlocksRender();
-            } else if (assistantEvent?.type === "toolcall_start") {
-              // LLM started generating a tool call — show tool status immediately
-              // Extract tool name from the partial content at contentIndex
-              const partial = (assistantEvent as { partial?: { content?: Array<{ type: string; id?: string; name?: string }> }; contentIndex?: number }).partial;
-              const idx = (assistantEvent as { contentIndex?: number }).contentIndex;
-              const toolBlock = idx != null ? partial?.content?.[idx] : undefined;
-              const toolName = toolBlock?.name || "tool";
-              const toolId = toolBlock?.id || `tool-${Date.now()}`;
-              blocksRef.current.push({
-                type: "tool",
-                id: toolId,
-                name: toolName,
-                status: "running",
-              });
-              scheduleBlocksRender();
-            }
-          }
-
-          if (event.type === "tool_execution_start") {
-            // Update existing block (created by toolcall_start) or create new one
-            const execId = String(event.toolCallId || "");
-            const existing = execId
-              ? blocksRef.current.find((b) => b.type === "tool" && b.id === execId)
-              : undefined;
-            if (existing && existing.type === "tool") {
-              existing.args = event.args ? JSON.stringify(event.args, null, 2) : undefined;
-            } else {
-              const argsStr = event.args ? JSON.stringify(event.args, null, 2) : undefined;
-              blocksRef.current.push({
-                type: "tool",
-                id: String(event.toolCallId || `tool-${Date.now()}`),
-                name: String(event.toolName || "tool"),
-                status: "running",
-                args: argsStr,
-              });
-            }
-            scheduleBlocksRender();
-          }
-
-          if (event.type === "tool_execution_end") {
-            const endId = String(event.toolCallId || "");
-            for (let i = blocksRef.current.length - 1; i >= 0; i -= 1) {
-              const block = blocksRef.current[i];
-              if (
-                block.type === "tool" &&
-                (endId ? block.id === endId : block.name === String(event.toolName) && block.status === "running")
-              ) {
-                block.status = event.isError ? "error" : "completed";
-                if (event.result !== undefined) {
-                  const raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2);
-                  block.result = raw.length > 4000 ? `${raw.slice(0, 4000)}\n…[截断]` : raw;
-                }
-                break;
-              }
-            }
-            scheduleBlocksRender();
-          }
-
-          if (event.type === "auto_compaction_start") {
-            blocksRef.current.push({
-              type: "status",
-              text: `上下文压缩中 (${String(event.reason || "auto")})`,
-            });
-            scheduleBlocksRender();
-          }
-
-          if (event.type === "auto_retry_start") {
-            blocksRef.current.push({
-              type: "status",
-              text: `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
-            });
-            scheduleBlocksRender();
-          }
-        }
-
-        if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
-
-        if (!abortedRef.current) {
-          await finalizeStream();
-        } else if (!stoppedByUserRef.current) {
-          const hasPartialText = blocksRef.current.some(
-            (b) => b.type === "text" && b.content.trim(),
-          );
-          if (hasPartialText) {
-            await finalizeStream();
-          }
-        }
-      } catch (error) {
-        if (!abortedRef.current) {
-          const msg = error instanceof Error ? error.message : "请求失败";
-          setErrorText(msg);
-          // Persist a visible error indicator in the conversation
-          const errorMessages = [...streamBaseRef.current, {
-            role: "assistant" as const,
-            content: `⚠️ ${msg}`,
-          }];
-          await persistSession(errorMessages).catch(() => {});
-        }
-      } finally {
-        if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
-        streamCancelRef.current = null;
-        sendLockRef.current = false;
-        setStreaming(false);
-        setStreamingStartedAt(null);
-        window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: localSessionRef.current.id, streaming: false } }));
-        cancelRenderFrame();
-        setBlocks([]);
-        blocksRef.current = [];
-        debouncedSyncMemory().catch(() => {});
+        }, setCloudMessageHandler!);
+        await processStream(response);
+        return;
       }
+
+      // Local mode
+      const currentUser = getUser();
+      const appSettings = getSettings();
+      const response = await startNativeStream({
+        session_id: sessionSnapshot.id,
+        user_id: currentUser?.id || undefined,
+        model: sessionSnapshot.model,
+        message: buildPrompt(text, files),
+        workspace: sessionSnapshot.workspacePath || undefined,
+        restricted: false,
+        thinking_level: appSettings.thinkingLevel || undefined,
+        anonymous: sessionSnapshot.anonymous || undefined,
+      });
+      await processStream(response);
     },
-    [cancelRenderFrame, finalizeStream, persistSession, scheduleBlocksRender],
+    [cancelRenderFrame, finalizeStream, persistSession, scheduleBlocksRender, cloudWsRef, setCloudMessageHandler],
   );
 
   const stopStreaming = useCallback(async () => {
@@ -488,7 +538,14 @@ export function useChatStream({
     streamCancelRef.current = null;
 
     const sessionId = localSessionRef.current.id;
-    await abortNativeSession(sessionId).catch(() => {});
+
+    // Branch: cloud vs local abort
+    if (localSessionRef.current.type === "cowork") {
+      const ws = cloudWsRef?.current;
+      if (ws?.isReady) abortCloudSession(ws, sessionId);
+    } else {
+      await abortNativeSession(sessionId).catch(() => {});
+    }
 
     const assistantText = blocksRef.current
       .filter((block): block is Extract<StreamBlock, { type: "text" }> => block.type === "text")
@@ -555,6 +612,7 @@ export function useChatStream({
     errorText,
     messagesRef,
     isAtBottom,
+    cloudReady: session.type === "cowork" ? (cloudReady ?? false) : true,
     scrollToBottom,
     sendMessage,
     stopStreaming,

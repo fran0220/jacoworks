@@ -2,25 +2,25 @@ import {
   AlertCircle,
   ArrowRight,
   ChevronDown,
-  EyeOff,
   FileText,
   FolderOpen,
   Loader2,
   Paperclip,
   Plus,
+  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEventHandler } from "react";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
 import CustomSelect from "./CustomSelect";
+import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
 import { importFiles, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { createSession } from "../lib/sessions";
-import { useSkills } from "../lib/skills";
 import type { AttachedFile, ChatSession } from "../types";
 
 export default function NewSessionPanel({
@@ -41,16 +41,6 @@ export default function NewSessionPanel({
   const [anonymous, setAnonymous] = useState(false);
   const [loading, setLoading] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
-  const skills = useSkills();
-  const grouped = useMemo(() => {
-    const map = new Map<string, typeof skills>();
-    for (const s of skills) {
-      const g = s.group || "";
-      if (!map.has(g)) map.set(g, []);
-      map.get(g)!.push(s);
-    }
-    return map;
-  }, [skills]);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [recentFolders, setRecentFolders] = useState<string[]>(getRecentFolders);
   const plusMenuRef = useRef<HTMLDivElement>(null);
@@ -237,13 +227,17 @@ export default function NewSessionPanel({
                 className="ns-btn-folder"
                 onClick={() => setFolderMenuOpen((v) => !v)}
                 disabled={loading}
-                title={workspacePath || "选择工作目录"}
+                data-tip="选择工作文件夹"
               >
                 <FolderOpen size={14} />
-                <span className="ns-folder-label">
-                  {workspacePath ? folderName(workspacePath) : "文件夹"}
-                </span>
-                <ChevronDown size={12} />
+                {workspacePath && workspacePath !== getSettings().defaultWorkspace && (
+                  <>
+                    <span className="ns-folder-label">
+                      {folderName(workspacePath)}
+                    </span>
+                    <ChevronDown size={12} />
+                  </>
+                )}
               </button>
 
               {folderMenuOpen && (
@@ -277,85 +271,36 @@ export default function NewSessionPanel({
               )}
             </div>
 
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="*/*"
+              onChange={handleFileChange}
+              style={{ display: "none" }}
+            />
             <button
-              className={`ns-btn-anon${anonymous ? " active" : ""}`}
-              onClick={() => setAnonymous((v) => !v)}
+              className="ns-btn-icon"
               disabled={loading}
-              title={anonymous ? "匿名模式 — 对话不保存记忆" : "开启匿名模式"}
+              onClick={handleFileSelect}
+              data-tip="上传文件或图片"
             >
-              <EyeOff size={14} />
+              <Paperclip size={14} />
             </button>
 
-            <div className="ns-plus-wrapper" ref={plusMenuRef}>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="*/*"
-                onChange={handleFileChange}
-                style={{ display: "none" }}
-              />
+            <div className="ns-skills-wrapper" ref={plusMenuRef}>
               <button
-                className="ns-btn-plus"
+                className="ns-btn-icon"
                 disabled={loading}
                 onClick={() => setPlusMenuOpen((v) => !v)}
-                title="添加附件或技能"
+                data-tip="调用技能"
               >
-                <span className="ns-plus-icon">+</span>
+                <Sparkles size={14} />
               </button>
 
               {plusMenuOpen && (
                 <div className="ns-plus-menu">
-                  <button className="ns-menu-item" onClick={handleFileSelect}>
-                    <Paperclip size={18} />
-                    <span>附加文件或图片</span>
-                  </button>
-                  <div className="ns-menu-item-hover">
-                    <div className="ns-menu-item ns-menu-item-sub">
-                      <Sparkles size={18} />
-                      <span>功能</span>
-                      <ChevronDown size={14} className="ns-sub-arrow" />
-                    </div>
-                    <div className="ns-skills-submenu">
-                      <div className="ns-skills-submenu-content">
-                        {Array.from(grouped.entries()).map(([group, items]) =>
-                          group ? (
-                            <div key={group} className="ns-group-hover">
-                              <div className="ns-group-trigger">
-                                <span>{group}</span>
-                                <ChevronDown size={14} className="ns-sub-arrow" />
-                              </div>
-                              <div className="ns-group-skills">
-                                <div className="ns-group-skills-content">
-                                  {items.map((skill) => (
-                                    <button
-                                      key={skill.id}
-                                      className="ns-skill-item"
-                                      onClick={() => handleSkillInsert(skill.id)}
-                                    >
-                                      <span className="ns-skill-name">/{skill.id}</span>
-                                      <span className="ns-skill-desc">{skill.description}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            items.map((skill) => (
-                              <button
-                                key={skill.id}
-                                className="ns-skill-item"
-                                onClick={() => handleSkillInsert(skill.id)}
-                              >
-                                <span className="ns-skill-name">/{skill.id}</span>
-                                <span className="ns-skill-desc">{skill.description}</span>
-                              </button>
-                            ))
-                          )
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  <SkillMenu onSelect={handleSkillInsert} />
                 </div>
               )}
             </div>
@@ -369,6 +314,14 @@ export default function NewSessionPanel({
               disabled={loading}
               position="above"
             />
+            <button
+              className={`ns-btn-privacy${anonymous ? " active" : ""}`}
+              onClick={() => setAnonymous((v) => !v)}
+              disabled={loading}
+              data-tip={anonymous ? "隐私模式已开启 — 对话不保存" : "开启隐私模式"}
+            >
+              <ShieldCheck size={14} />
+            </button>
             <button className="btn-go" disabled={!canSend} onClick={handleSend}>
               开始
               <ArrowRight size={14} />

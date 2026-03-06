@@ -1,7 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { CloudAgentWS } from "./cloud-agent-ws";
 
-interface NativePromptPayload {
+export interface PromptPayload {
   session_id: string;
   user_id?: string;
   model?: string;
@@ -12,6 +13,9 @@ interface NativePromptPayload {
   thinking_level?: string;
   anonymous?: boolean;
 }
+
+type NativePromptPayload = PromptPayload;
+export type CloudPromptPayload = PromptPayload;
 
 export interface AgentRpcEvent {
   id?: string | number;
@@ -179,6 +183,101 @@ export async function requestTitleGeneration(
         user_message: userMessage,
         assistant_message: assistantMessage,
       });
+    } catch {
+      done(null);
+    }
+  });
+}
+
+export async function startCloudStream(
+  ws: CloudAgentWS,
+  payload: CloudPromptPayload,
+  onMessage: (handler: ((packet: AgentRpcEvent) => void) | null) => void,
+): Promise<{
+  requestId: string;
+  stream: AsyncGenerator<AgentRpcEvent>;
+  cancel: () => void;
+}> {
+  const requestId = nextCommandId("prompt");
+  const queue = new AsyncEventQueue<AgentRpcEvent>();
+
+  onMessage((packet) => {
+    if (!packet.id && packet.type === "error") {
+      queue.push(packet);
+      queue.close();
+      return;
+    }
+    if (String(packet.id ?? "") !== requestId) return;
+    queue.push(packet);
+    if (packet.type === "done" || packet.type === "error") {
+      queue.close();
+    }
+  });
+
+  try {
+    ws.send({ id: requestId, type: "prompt", ...payload });
+  } catch (err) {
+    onMessage(null);
+    throw err;
+  }
+
+  const cancel = () => {
+    queue.close();
+    onMessage(null);
+  };
+
+  const stream = (async function* () {
+    try {
+      while (true) {
+        const next = await queue.next();
+        if (next.done) break;
+        yield next.value;
+      }
+    } finally {
+      onMessage(null);
+    }
+  })();
+
+  return { requestId, stream, cancel };
+}
+
+export function abortCloudSession(ws: CloudAgentWS, sessionId: string): void {
+  const id = nextCommandId("abort");
+  ws.send({ id, type: "abort", session_id: sessionId });
+}
+
+export async function requestCloudTitleGeneration(
+  ws: CloudAgentWS,
+  userMessage: string,
+  assistantMessage: string,
+  onMessage: (handler: ((packet: AgentRpcEvent) => void) | null) => void,
+): Promise<string | null> {
+  const id = nextCommandId("title");
+  return new Promise<string | null>((resolve) => {
+    let resolved = false;
+    const done = (value: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      onMessage(null);
+      resolve(value);
+    };
+
+    const timeout = setTimeout(() => done(null), 15_000);
+
+    onMessage((packet) => {
+      if (String(packet.id ?? "") !== id) return;
+      if (packet.type === "response") {
+        if (packet.success && (packet.data as { title?: string })?.title) {
+          done((packet.data as { title: string }).title);
+        } else {
+          done(null);
+        }
+      }
+    });
+
+    try {
+      ws.send({ id, type: "generate_title", user_message: userMessage, assistant_message: assistantMessage });
     } catch {
       done(null);
     }

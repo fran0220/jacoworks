@@ -222,7 +222,7 @@ async fn render_settings_page(
             label: "Opus 4.6".into(),
         },
         ModelView {
-            id: "claude-haiku-4-5-20251001".into(),
+            id: "claude-haiku-4-5".into(),
             provider: "Claude".into(),
             label: "Haiku 4.5".into(),
         },

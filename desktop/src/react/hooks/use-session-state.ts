@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { isAuthenticated } from "../lib/auth";
-import { deleteSession, getSession, listSessions } from "../lib/sessions";
+import { createSession, deleteSession, getSession, listSessions } from "../lib/sessions";
 import type { AttachedFile, ChatSession } from "../types";
 
 export function useSessionState(authenticated: boolean) {
@@ -88,6 +88,13 @@ export function useSessionState(authenticated: boolean) {
     setPendingFiles(files);
   }, []);
 
+  const ensureCoworkSession = useCallback(async () => {
+    const session = await createSession({ type: "cowork" });
+    setSessions((prev) => [session, ...prev]);
+    setCurrentSession(session);
+    setCurrentSessionId(session.id);
+  }, []);
+
   const deleteSessionById = useCallback(
     async (sessionId: string) => {
       const isAnon = sessions.find((s) => s.id === sessionId)?.anonymous;
@@ -115,6 +122,7 @@ export function useSessionState(authenticated: boolean) {
     selectSession,
     createNewSession,
     handleSessionCreated,
+    ensureCoworkSession,
     deleteSessionById,
   };
 }

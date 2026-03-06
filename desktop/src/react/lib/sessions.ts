@@ -83,9 +83,9 @@ function toSession(session: ServerSession): ChatSession {
   };
 }
 
-export async function createSession(options?: { workspacePath?: string; model?: string }) {
+export async function createSession(options?: { workspacePath?: string; model?: string; type?: "chat" | "cowork" }) {
   const payload: Record<string, string> = {
-    type: "chat",
+    type: options?.type || "chat",
     workspace_path: options?.workspacePath || "",
   };
   const model = options?.model?.trim();

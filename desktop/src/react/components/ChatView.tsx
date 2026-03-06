@@ -26,12 +26,18 @@ export default function ChatView({
   pendingFiles,
   clearPending,
   onSessionUpdate,
+  cloudWsRef,
+  cloudReady,
+  setCloudMessageHandler,
 }: {
   session: ChatSession;
   pendingMessage: string | null;
   pendingFiles: AttachedFile[];
   clearPending: () => void;
   onSessionUpdate: () => Promise<void>;
+  cloudWsRef?: React.MutableRefObject<import("../lib/cloud-agent-ws").CloudAgentWS | null>;
+  cloudReady?: boolean;
+  setCloudMessageHandler?: (handler: ((packet: import("../lib/agent").AgentRpcEvent) => void) | null) => void;
 }) {
   const {
     localSession,
@@ -48,12 +54,16 @@ export default function ChatView({
     handleMessagesScroll,
     updateWorkspacePath,
     updateModel,
+    cloudReady: isCloudReady,
   } = useChatStream({
     session,
     pendingMessage,
     pendingFiles,
     clearPending,
     onSessionUpdate,
+    cloudWsRef,
+    cloudReady,
+    setCloudMessageHandler,
   });
 
   const lastUserMessage = visibleMessages.filter(m => m.role === "user").pop();
@@ -74,11 +84,7 @@ export default function ChatView({
         {streaming && blocks.length === 0 && (
           <div className="bubble-row assistant">
             <div className="bubble assistant-bubble">
-              <div className="typing-indicator">
-                <span className="typing-dot" />
-                <span className="typing-dot" />
-                <span className="typing-dot" />
-              </div>
+              <StreamingCursor />
             </div>
           </div>
         )}
@@ -166,6 +172,7 @@ export default function ChatView({
         streamingStartedAt={streamingStartedAt}
         workspacePath={localSession.workspacePath}
         model={localSession.model}
+        disabled={!isCloudReady}
         onWorkspaceChange={updateWorkspacePath}
         onModelChange={updateModel}
         onSend={sendMessage}
