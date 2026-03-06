@@ -221,6 +221,9 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           ENDPOINT="https://cos.${COS_REGION}.myqcloud.com"
 
+          # Force virtual-hosted style addressing (COS requirement)
+          aws configure set default.s3.addressing_style virtual
+
           # Upload all platform artifacts via S3-compatible API (no interactive prompts)
           for dir in all-artifacts/desktop-*/; do
             if [ -d "$dir" ]; then
