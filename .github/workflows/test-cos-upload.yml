@@ -25,8 +25,8 @@ jobs:
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         run: |
           # Write coscli config (printf avoids heredoc indentation issues)
-          printf 'cos:\n  base:\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      alias: cos\n      endpoint: cos.%s.myqcloud.com\n' \
-            "$COS_SECRET_ID" "$COS_SECRET_KEY" "$COS_BUCKET" "$COS_REGION" > /tmp/.cos.yaml
+          printf 'cos:\n  base:\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      alias: cos\n      endpoint: cos.accelerate.myqcloud.com\n' \
+            "$COS_SECRET_ID" "$COS_SECRET_KEY" "$COS_BUCKET" > /tmp/.cos.yaml
 
           echo "📦 Uploading 5MB test file..."
           time coscli cp -c /tmp/.cos.yaml /tmp/test-upload.bin "cos://${COS_BUCKET}/test/cos-upload-test.bin"
