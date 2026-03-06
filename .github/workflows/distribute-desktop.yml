@@ -85,7 +85,7 @@ jobs:
           VERSION="${{ inputs.version }}"
 
           # Write coscli config (printf avoids heredoc indentation issues)
-          printf 'coscli:\n  base:\n    mode: SecretKey\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      endpoint: cos.%s.myqcloud.com\n      alias: cos\n' \
+          printf 'cos:\n  base:\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      alias: cos\n      endpoint: cos.%s.myqcloud.com\n' \
             "$COS_SECRET_ID" "$COS_SECRET_KEY" "$COS_BUCKET" "$COS_REGION" > /tmp/.cos.yaml
 
           UPLOADED=0
