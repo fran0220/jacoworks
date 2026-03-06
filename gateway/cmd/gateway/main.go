@@ -808,6 +808,8 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"admin_token":          true,
 		"github_token":         true,
 		"github_repo":          true,
+		"primary_model":        true,
+		"primary_provider":     true,
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -860,6 +862,12 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		}
 		if v, ok := req.Settings["jimeng_api_key"]; ok {
 			llm.JimengAPIKey = v
+		}
+		if v, ok := req.Settings["primary_model"]; ok {
+			llm.PrimaryModel = v
+		}
+		if v, ok := req.Settings["primary_provider"]; ok {
+			llm.PrimaryProvider = v
 		}
 		cfg.UpdateLLM(llm)
 
