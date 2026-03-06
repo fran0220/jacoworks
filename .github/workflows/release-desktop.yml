@@ -257,19 +257,26 @@ jobs:
           HOST="${SSH_USER}@${SSH_HOST}"
           SSH="ssh -i ~/.ssh/deploy_key"
 
-          # 收集本地文件信息，通过 SSH 写入数据库
-          FILES_JSON="["
-          FIRST=true
+          # 生成 SQL 脚本 (本地构建，远程执行，避免复杂引号转义)
+          SQL_FILE=$(mktemp)
+          cat > "$SQL_FILE" <<'HEADER'
+          BEGIN;
+          -- Mark all existing releases as not latest
+          UPDATE releases SET is_latest = false WHERE is_latest = true;
+          HEADER
+
+          echo "INSERT INTO releases (id, version, notes, pub_date, is_latest)
+            VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), true)
+            ON CONFLICT (version) DO UPDATE SET is_latest = true, notes = EXCLUDED.notes;" >> "$SQL_FILE"
+
+          # Collect assets from local artifacts
           for dir in all-artifacts/desktop-*/; do
             [ -d "$dir" ] || continue
             for file in "${dir}"*; do
               [ -f "$file" ] || continue
               FILENAME=$(basename "$file")
-
-              # 跳过签名文件
               case "$FILENAME" in *.sig) continue;; esac
 
-              # 推断平台
               PLATFORM=''
               case "$FILENAME" in
                 *aarch64*.dmg|*arm64*.dmg) PLATFORM='darwin-aarch64' ;;
@@ -289,40 +296,23 @@ jobs:
               FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
               DOWNLOAD_URL="${BASE_URL}/${FILENAME}"
 
-              # 读取签名
               SIG=''
               if [ -f "${file}.sig" ]; then
                 SIG=$(cat "${file}.sig")
               fi
 
-              $FIRST || FILES_JSON+=","
-              FIRST=false
-              FILES_JSON+="{\"p\":\"$PLATFORM\",\"u\":\"$DOWNLOAD_URL\",\"s\":\"$SIG\",\"sz\":$FILESIZE}"
+              echo "INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
+                SELECT gen_random_uuid()::text, r.id, '${PLATFORM}', '${DOWNLOAD_URL}', '${SIG}', ${FILESIZE}
+                FROM releases r WHERE r.version = '${VERSION}'
+                ON CONFLICT DO NOTHING;" >> "$SQL_FILE"
+
+              echo "  📦 ${PLATFORM} → ${DOWNLOAD_URL} (${FILESIZE} bytes)"
             done
           done
-          FILES_JSON+="]"
 
-          $SSH "$HOST" "
-            export PGPASSWORD=\"${DB_PASSWORD}\"
+          echo "COMMIT;" >> "$SQL_FILE"
 
-            RELEASE_ID=\$(psql -h 127.0.0.1 -U postgres -d jacoworks -tAc \"
-              INSERT INTO releases (id, version, notes, pub_date, is_latest)
-              VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), false)
-              ON CONFLICT (version) DO UPDATE SET notes = EXCLUDED.notes
-              RETURNING id;
-            \" | tr -d '[:space:]')
-
-            echo \"Release ID: \$RELEASE_ID\"
-
-            echo '${FILES_JSON}' | python3 -c '
-import json, sys, subprocess
-assets = json.load(sys.stdin)
-for a in assets:
-    sql = f\"\"\"INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
-      VALUES (gen_random_uuid()::text, '\"'\"\$RELEASE_ID\"'\"', '\"'{a[\"p\"]}\"'\"', '\"'{a[\"u\"]}\"'\"', '\"'{a[\"s\"]}\"'\"', {a[\"sz\"]})
-      ON CONFLICT DO NOTHING;\"\"\"
-    subprocess.run([\"psql\", \"-h\", \"127.0.0.1\", \"-U\", \"postgres\", \"-d\", \"jacoworks\", \"-c\", sql])
-    print(f\"  ✅ {a[\"p\"]} → {a[\"u\"]} ({a[\"sz\"]} bytes)\")
-'
-            echo '✅ Release registered in database'
-          "
+          # Execute SQL on jingao via SSH
+          $SSH "$HOST" "PGPASSWORD='${DB_PASSWORD}' psql -h 127.0.0.1 -U postgres -d jacoworks -v ON_ERROR_STOP=1" < "$SQL_FILE"
+          rm -f "$SQL_FILE"
+          echo "✅ Release registered in database (is_latest=true)"
