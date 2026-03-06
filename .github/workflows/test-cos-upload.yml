@@ -62,7 +62,8 @@ jobs:
           coscli ls -c /tmp/.cos-test.yaml "cos://${BUCKET}/test/"
 
           echo "🧹 Cleanup..."
-          coscli rm -c /tmp/.cos-test.yaml "cos://${BUCKET}/test/cos-upload-test.bin" || true
-          rm -f /tmp/.cos-test.yaml /tmp/test-upload.bin
+          coscli rm -f -c /tmp/.cos-test.yaml "cos://${BUCKET}/test/cos-upload-test.bin" || true
+          rm -f /tmp/.cos-test.yaml
+          rm -f /tmp/test-upload.bin
           echo "✅ All done"
           REMOTE
