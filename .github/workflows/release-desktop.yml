@@ -177,10 +177,125 @@ jobs:
           name: desktop-${{ matrix.platform }}
           path: dist-upload/
 
-  # ── Upload to COS + register in DB (separate workflow, can be re-triggered) ──
+  # ── Upload to COS + register in DB (inline, no reusable workflow) ──
   distribute:
     needs: build-desktop
-    uses: ./.github/workflows/distribute-desktop.yml
-    with:
-      version: ${{ github.ref_name }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    env:
+      COS_BUCKET: jingao-1350796151
+      COS_REGION: ap-beijing
+      COS_ACCEL_ENDPOINT: cos.accelerate.myqcloud.com
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: artifacts/
+
+      - name: Upload to COS
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+
+          curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli
+          chmod +x /usr/local/bin/coscli
+
+          printf 'cos:\n  base:\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      alias: cos\n      endpoint: %s\n' \
+            "$COS_SECRET_ID" "$COS_SECRET_KEY" "$COS_BUCKET" "$COS_ACCEL_ENDPOINT" > /tmp/.cos.yaml
+
+          UPLOADED=0
+          FAILED=0
+
+          for dir in artifacts/desktop-*/; do
+            [ -d "$dir" ] || continue
+            echo "📦 $(basename "$dir"):"
+
+            for file in "${dir}"*; do
+              [ -f "$file" ] || continue
+              FILENAME=$(basename "$file")
+              case "$FILENAME" in .platform) continue;; esac
+
+              FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
+              COS_PATH="cos://${COS_BUCKET}/releases/${VERSION}/${FILENAME}"
+              echo "  ⬆️  ${FILENAME} ($(numfmt --to=iec $FILESIZE))"
+
+              if coscli cp -c /tmp/.cos.yaml "$file" "$COS_PATH"; then
+                echo "  ✅ ${FILENAME}"
+                UPLOADED=$((UPLOADED + 1))
+              else
+                echo "  ❌ ${FILENAME} upload failed!"
+                FAILED=$((FAILED + 1))
+              fi
+            done
+          done
+
+          rm -f /tmp/.cos.yaml
+
+          echo ""
+          echo "📊 Upload: ${UPLOADED} succeeded, ${FAILED} failed"
+          if [ "$FAILED" -gt 0 ]; then echo "❌ Some uploads failed!"; exit 1; fi
+          if [ "$UPLOADED" -eq 0 ]; then echo "❌ No files uploaded!"; exit 1; fi
+
+          echo "✅ All at: https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/"
+
+      - name: Setup SSH
+        env:
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Register release in DB
+        env:
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          BASE_URL="https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}"
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o ConnectTimeout=30 ${SSH_USER}@${SSH_HOST}"
+
+          SQL="BEGIN;
+          UPDATE releases SET is_latest = false WHERE is_latest = true;
+          INSERT INTO releases (id, version, notes, pub_date, is_latest)
+            VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), true)
+            ON CONFLICT (version) DO UPDATE SET is_latest = true, notes = EXCLUDED.notes;"
+
+          for dir in artifacts/desktop-*/; do
+            [ -d "$dir" ] || continue
+            PLATFORM=""
+            [ -f "${dir}.platform" ] && PLATFORM=$(cat "${dir}.platform" | tr -d '[:space:]')
+            [ -z "$PLATFORM" ] && continue
+
+            for file in "${dir}"*; do
+              [ -f "$file" ] || continue
+              FILENAME=$(basename "$file")
+              case "$FILENAME" in *.sig|.platform) continue;; esac
+
+              FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
+              DOWNLOAD_URL="${BASE_URL}/${FILENAME}"
+
+              SIG=""
+              [ -f "${file}.sig" ] && SIG=$(cat "${file}.sig")
+
+              SQL="${SQL}
+              INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
+                SELECT gen_random_uuid()::text, r.id, '${PLATFORM}', '${DOWNLOAD_URL}', '${SIG}', ${FILESIZE}
+                FROM releases r WHERE r.version = '${VERSION}'
+                ON CONFLICT DO NOTHING;"
+
+              echo "  📦 ${PLATFORM} → ${FILENAME} (${FILESIZE} bytes)"
+            done
+          done
+
+          SQL="${SQL}
+          COMMIT;"
+
+          echo "$SQL" | $SSH_CMD "PGPASSWORD='${DB_PASSWORD}' psql -h 127.0.0.1 -U postgres -d jacoworks -v ON_ERROR_STOP=1"
+
+          echo "✅ Release ${VERSION} registered (is_latest=true)"
+          echo "🎉 Distribution complete!"
