@@ -64,6 +64,7 @@ fn is_secret_key(key: &str) -> bool {
             | "feishu_client_secret"
             | "admin_token"
             | "github_token"
+            | "posthog_api_key"
     )
 }
 
@@ -91,6 +92,8 @@ pub struct UpdateSettingsForm {
     admin_token: Option<String>,
     github_token: Option<String>,
     github_repo: Option<String>,
+    posthog_api_key: Option<String>,
+    posthog_endpoint: Option<String>,
     primary_model: Option<String>,
     primary_provider: Option<String>,
 }
@@ -140,6 +143,12 @@ pub async fn update(
             settings.insert("github_repo".to_string(), v);
         }
     }
+    if let Some(v) = form.posthog_endpoint {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            settings.insert("posthog_endpoint".to_string(), v);
+        }
+    }
     if let Some(v) = form.primary_model {
         let v = v.trim().to_string();
         settings.insert("primary_model".to_string(), v);
@@ -159,6 +168,7 @@ pub async fn update(
         ("feishu_client_secret", form.feishu_client_secret),
         ("admin_token", form.admin_token),
         ("github_token", form.github_token),
+        ("posthog_api_key", form.posthog_api_key),
     ] {
         if let Some(v) = value {
             let v = v.trim().to_string();
