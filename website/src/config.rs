@@ -16,8 +16,6 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    #[serde(default = "default_releases_dir")]
-    pub releases_dir: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -46,10 +44,6 @@ fn default_host() -> String {
 
 fn default_port() -> u16 {
     9527
-}
-
-fn default_releases_dir() -> String {
-    "/opt/jacoworks/releases".to_string()
 }
 
 impl Config {

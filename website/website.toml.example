@@ -3,8 +3,6 @@ cookie_secret = "0123456789abcdef0123456789abcdef"
 [server]
 host = "0.0.0.0"
 port = 9527
-# CI 上传安装包的目录 (release-desktop.yml SCP → 此目录)
-releases_dir = "/opt/jacoworks/releases"
 
 [database]
 url = "postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/jacoworks"

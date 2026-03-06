@@ -83,8 +83,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/admin", routes::admin::admin_routes())
         // Static files
         .nest_service("/static", ServeDir::new("static"))
-        // Release downloads (populated by CI → SCP → /opt/jacoworks/releases/)
-        .nest_service("/releases", ServeDir::new(&config.server.releases_dir))
         // Layers
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())

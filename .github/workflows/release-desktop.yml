@@ -199,10 +199,13 @@ jobs:
           name: desktop-${{ matrix.platform }}
           path: dist-upload/
 
-  # ── 上传到 jingao 分发 ──
+  # ── 上传到腾讯云 COS 分发 ──
   distribute:
     needs: build-desktop
     runs-on: ubuntu-latest
+    env:
+      COS_BUCKET: jingao-1350796151
+      COS_REGION: ap-beijing
     steps:
       - name: Download all platform artifacts
         uses: actions/download-artifact@v4
@@ -210,39 +213,31 @@ jobs:
           path: all-artifacts
           pattern: desktop-*
 
-      - name: Upload to jingao
+      - name: Upload to COS
         env:
-          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
-          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
-          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          pip install -q coscmd
 
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-
-          HOST="${SSH_USER}@${SSH_HOST}"
-          SSH="ssh -i ~/.ssh/deploy_key"
-          SCP="scp -i ~/.ssh/deploy_key"
-          REMOTE="/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/${VERSION}"
-
-          # 创建版本目录
-          $SSH "$HOST" "mkdir -p ${REMOTE}"
+          coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" \
+            -b "$COS_BUCKET" -r "$COS_REGION"
 
           # 上传所有平台产物
           for dir in all-artifacts/desktop-*/; do
             if [ -d "$dir" ]; then
               echo "📦 Uploading from $dir"
-              $SCP "${dir}"* "$HOST:${REMOTE}/" || true
+              for file in "${dir}"*; do
+                [ -f "$file" ] || continue
+                FILENAME=$(basename "$file")
+                coscmd upload "$file" "releases/${VERSION}/${FILENAME}"
+                echo "  ✅ ${FILENAME}"
+              done
             fi
           done
 
-          # 列出已上传文件
-          $SSH "$HOST" "ls -lh ${REMOTE}/"
-
-          echo "✅ Artifacts uploaded to jingao: https://jaco.jingao.club/releases/${VERSION}/"
+          echo "✅ Artifacts uploaded to COS: https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/"
 
       - name: Register release in database
         env:
@@ -252,7 +247,7 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          BASE_URL="https://jaco.jingao.club/releases/${VERSION}"
+          BASE_URL="https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}"
 
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
@@ -261,13 +256,55 @@ jobs:
 
           HOST="${SSH_USER}@${SSH_HOST}"
           SSH="ssh -i ~/.ssh/deploy_key"
-          REMOTE="/opt/1panel/apps/openresty/openresty/www/sites/jaco.jingao.club/releases/${VERSION}"
 
-          # 在 jingao 上通过 psql 写入 releases 表
+          # 收集本地文件信息，通过 SSH 写入数据库
+          FILES_JSON="["
+          FIRST=true
+          for dir in all-artifacts/desktop-*/; do
+            [ -d "$dir" ] || continue
+            for file in "${dir}"*; do
+              [ -f "$file" ] || continue
+              FILENAME=$(basename "$file")
+
+              # 跳过签名文件
+              case "$FILENAME" in *.sig) continue;; esac
+
+              # 推断平台
+              PLATFORM=''
+              case "$FILENAME" in
+                *aarch64*.dmg|*arm64*.dmg) PLATFORM='darwin-aarch64' ;;
+                *x64*.dmg|*x86_64*.dmg)   PLATFORM='darwin-x86_64' ;;
+                *.dmg)                     PLATFORM='darwin-aarch64' ;;
+                *.exe)                     PLATFORM='windows-x86_64' ;;
+                *.tar.gz)
+                  if echo "$FILENAME" | grep -qi 'aarch64\|arm64'; then
+                    PLATFORM='darwin-aarch64'
+                  elif echo "$FILENAME" | grep -qi 'x86_64\|x64'; then
+                    PLATFORM='darwin-x86_64'
+                  fi
+                  ;;
+              esac
+              [ -z "$PLATFORM" ] && continue
+
+              FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
+              DOWNLOAD_URL="${BASE_URL}/${FILENAME}"
+
+              # 读取签名
+              SIG=''
+              if [ -f "${file}.sig" ]; then
+                SIG=$(cat "${file}.sig")
+              fi
+
+              $FIRST || FILES_JSON+=","
+              FIRST=false
+              FILES_JSON+="{\"p\":\"$PLATFORM\",\"u\":\"$DOWNLOAD_URL\",\"s\":\"$SIG\",\"sz\":$FILESIZE}"
+            done
+          done
+          FILES_JSON+="]"
+
           $SSH "$HOST" "
             export PGPASSWORD=\"${DB_PASSWORD}\"
 
-            # 创建 release 记录 (trim whitespace from psql output)
             RELEASE_ID=\$(psql -h 127.0.0.1 -U postgres -d jacoworks -tAc \"
               INSERT INTO releases (id, version, notes, pub_date, is_latest)
               VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), false)
@@ -277,48 +314,15 @@ jobs:
 
             echo \"Release ID: \$RELEASE_ID\"
 
-            # 扫描上传的文件，注册 assets
-            for file in ${REMOTE}/*; do
-              [ -f \"\$file\" ] || continue
-              FILENAME=\$(basename \"\$file\")
-
-              # 跳过签名文件
-              case \"\$FILENAME\" in *.sig) continue;; esac
-
-              # 推断平台 (DMG: check filename for arch; EXE: windows)
-              PLATFORM=''
-              case \"\$FILENAME\" in
-                *aarch64*.dmg|*arm64*.dmg) PLATFORM='darwin-aarch64' ;;
-                *x64*.dmg|*x86_64*.dmg)   PLATFORM='darwin-x86_64' ;;
-                *.dmg)                     PLATFORM='darwin-aarch64' ;;
-                *.exe)                     PLATFORM='windows-x86_64' ;;
-                *.tar.gz)
-                  if echo \"\$FILENAME\" | grep -qi 'aarch64\|arm64'; then
-                    PLATFORM='darwin-aarch64'
-                  elif echo \"\$FILENAME\" | grep -qi 'x86_64\|x64'; then
-                    PLATFORM='darwin-x86_64'
-                  fi
-                  ;;
-              esac
-
-              [ -z \"\$PLATFORM\" ] && continue
-
-              FILESIZE=\$(stat -c%s \"\$file\" 2>/dev/null || stat -f%z \"\$file\" 2>/dev/null || echo 0)
-              DOWNLOAD_URL=\"${BASE_URL}/\${FILENAME}\"
-
-              # 查找对应签名文件
-              SIG=''
-              if [ -f \"\${file}.sig\" ]; then
-                SIG=\$(cat \"\${file}.sig\")
-              fi
-
-              psql -h 127.0.0.1 -U postgres -d jacoworks -c \"
-                INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
-                VALUES (gen_random_uuid()::text, '\$RELEASE_ID', '\$PLATFORM', '\$DOWNLOAD_URL', '\$SIG', \$FILESIZE)
-                ON CONFLICT DO NOTHING;
-              \"
-              echo \"  ✅ \$PLATFORM → \$DOWNLOAD_URL (\$FILESIZE bytes)\"
-            done
-
+            echo '${FILES_JSON}' | python3 -c '
+import json, sys, subprocess
+assets = json.load(sys.stdin)
+for a in assets:
+    sql = f\"\"\"INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
+      VALUES (gen_random_uuid()::text, '\"'\"\$RELEASE_ID\"'\"', '\"'{a[\"p\"]}\"'\"', '\"'{a[\"u\"]}\"'\"', '\"'{a[\"s\"]}\"'\"', {a[\"sz\"]})
+      ON CONFLICT DO NOTHING;\"\"\"
+    subprocess.run([\"psql\", \"-h\", \"127.0.0.1\", \"-U\", \"postgres\", \"-d\", \"jacoworks\", \"-c\", sql])
+    print(f\"  ✅ {a[\"p\"]} → {a[\"u\"]} ({a[\"sz\"]} bytes)\")
+'
             echo '✅ Release registered in database'
           "
