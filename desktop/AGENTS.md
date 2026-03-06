@@ -17,7 +17,7 @@ src/
   react/
     components/                LoginPanel Sidebar TopBar ChatView Composer
                                MessageBubble Markdown StreamingMarkdown
-                               ToolStatus NewSessionPanel SettingsModal
+                               ToolStatus SkillMenu NewSessionPanel SettingsModal
                                TaskPanel (时间线 UI + 云端对话入口) RpcLogPanel
     hooks/                     use-agent-bootstrap use-chat-stream
                                use-cowork-connection use-responsive-sidebar
