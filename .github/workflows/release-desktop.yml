@@ -213,34 +213,62 @@ jobs:
           path: all-artifacts
           pattern: desktop-*
 
-      - name: Upload to COS
+      - name: Upload to COS via jingao relay
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.COS_SECRET_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.COS_SECRET_KEY }}
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          ENDPOINT="https://cos.${COS_REGION}.myqcloud.com"
 
-          # Force virtual-hosted style addressing (COS requirement)
-          aws configure set default.s3.addressing_style virtual
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          SSH="ssh -i ~/.ssh/deploy_key ${SSH_USER}@${SSH_HOST}"
+          SCP="scp -i ~/.ssh/deploy_key -C"
 
-          # Upload all platform artifacts via S3-compatible API (no interactive prompts)
+          # Ensure coscli is installed on jingao
+          $SSH 'test -x /usr/local/bin/coscli || (curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli && chmod +x /usr/local/bin/coscli)' || \
+          $SSH 'test -x /tmp/coscli || (curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /tmp/coscli && chmod +x /tmp/coscli)'
+
+          # Write COS config on jingao
+          $SSH "cat > /tmp/.cos-release.yaml" <<EOF
+          coscli:
+            base:
+              mode: SecretKey
+              secretid: ${COS_SECRET_ID}
+              secretkey: ${COS_SECRET_KEY}
+            buckets:
+              - name: ${COS_BUCKET}
+                endpoint: cos.${COS_REGION}.myqcloud.com
+                alias: cos
+          EOF
+
+          # SCP artifacts to jingao, then upload to COS (same-region, fast)
+          $SSH "mkdir -p /tmp/release-${VERSION}"
           for dir in all-artifacts/desktop-*/; do
-            if [ -d "$dir" ]; then
-              echo "📦 Uploading from $dir"
-              for file in "${dir}"*; do
-                [ -f "$file" ] || continue
-                FILENAME=$(basename "$file")
-                FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
-                echo "  ⬆️  ${FILENAME} ($(numfmt --to=iec $FILESIZE))"
-                aws s3 cp "$file" "s3://${COS_BUCKET}/releases/${VERSION}/${FILENAME}" \
-                  --endpoint-url "$ENDPOINT" --region "$COS_REGION" --no-progress
-                echo "  ✅ ${FILENAME}"
-              done
-            fi
+            [ -d "$dir" ] || continue
+            echo "📦 Uploading from $dir"
+            for file in "${dir}"*; do
+              [ -f "$file" ] || continue
+              FILENAME=$(basename "$file")
+              FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
+              echo "  ⬆️  SCP ${FILENAME} ($(numfmt --to=iec $FILESIZE)) → jingao"
+              $SCP "$file" "${SSH_USER}@${SSH_HOST}:/tmp/release-${VERSION}/${FILENAME}"
+              echo "  📤 jingao → COS"
+              COSCLI=$($SSH 'test -x /usr/local/bin/coscli && echo /usr/local/bin/coscli || echo /tmp/coscli')
+              $SSH "${COSCLI} cp -c /tmp/.cos-release.yaml /tmp/release-${VERSION}/${FILENAME} cos://${COS_BUCKET}/releases/${VERSION}/${FILENAME}"
+              echo "  ✅ ${FILENAME}"
+            done
           done
 
-          echo "✅ Artifacts uploaded to COS: https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/"
+          # Cleanup
+          $SSH "rm -rf /tmp/release-${VERSION} /tmp/.cos-release.yaml"
+          echo "✅ All artifacts uploaded to COS: https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/"
 
       - name: Register release in database
         env:
