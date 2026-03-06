@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/markbates/goth"
+	posthog "github.com/posthog/posthog-go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	"github.com/fran0220/jacoworks/gateway/internal/games"
 	"github.com/fran0220/jacoworks/gateway/internal/github"
+	"github.com/fran0220/jacoworks/gateway/internal/middleware"
 	"github.com/fran0220/jacoworks/gateway/internal/proxy"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
@@ -42,8 +45,15 @@ func main() {
 	}
 
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).
-		With().Timestamp().Caller().Logger()
+	var logWriter zerolog.LevelWriter
+	if isTerminal() {
+		logWriter = zerolog.MultiLevelWriter(
+			zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
+		)
+	} else {
+		logWriter = zerolog.MultiLevelWriter(os.Stderr)
+	}
+	log.Logger = zerolog.New(logWriter).With().Timestamp().Caller().Logger()
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -101,6 +111,10 @@ func main() {
 				cfg.GitHub.Token = setting.Value
 			case "github_repo":
 				cfg.GitHub.Repo = setting.Value
+			case "posthog_api_key":
+				cfg.PostHog.APIKey = setting.Value
+			case "posthog_endpoint":
+				cfg.PostHog.Endpoint = setting.Value
 			}
 		}
 		cfg.UpdateLLM(llm)
@@ -108,6 +122,10 @@ func main() {
 	}
 
 	auditLogger := audit.NewLogger(s.Pool())
+
+	// Initialize PostHog client (error tracking + analytics, hot-reloadable via admin settings)
+	ph := &postHogHolder{}
+	ph.Reload(cfg.PostHog.APIKey, cfg.PostHog.Endpoint)
 
 	// Initialize Docker client
 	dockerClient := dockerpkg.NewClient(
@@ -272,7 +290,7 @@ func main() {
 
 	// Admin: settings
 	mux.Handle("GET /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(getSettingsHandler(s)))))
-	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger, feishuBotClient, ghClient)))))
+	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger, feishuBotClient, ghClient, ph)))))
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -280,9 +298,18 @@ func main() {
 		fmt.Fprint(w, "ok")
 	})
 
+	// Middleware chain: PanicRecovery → RequestID → RequestLog → CORS → mux
+	handler := middleware.PanicRecovery(
+		middleware.RequestID(
+			middleware.RequestLog(
+				corsMiddleware(mux),
+			),
+		),
+	)
+
 	server := &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           corsMiddleware(mux),
+		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
 		WriteTimeout:      0,
 		IdleTimeout:       120 * time.Second,
@@ -300,6 +327,7 @@ func main() {
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal().Err(err).Msg("server error")
 	}
+	ph.Close()
 }
 
 // --- CORS ---
@@ -787,7 +815,7 @@ func getSettingsHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger, feishuBot *feishubot.Client, ghClient *github.Client) http.HandlerFunc {
+func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger, feishuBot *feishubot.Client, ghClient *github.Client, ph *postHogHolder) http.HandlerFunc {
 	type updateRequest struct {
 		Settings map[string]string `json:"settings"`
 	}
@@ -810,6 +838,8 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"github_repo":          true,
 		"primary_model":        true,
 		"primary_provider":     true,
+		"posthog_api_key":      true,
+		"posthog_endpoint":     true,
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -900,6 +930,17 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 			callbackURL := baseURL + "/api/auth/feishu/callback"
 			goth.UseProviders(feishu.New(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret, callbackURL))
 			log.Info().Str("callback", callbackURL).Msg("feishu SSO provider re-registered")
+		}
+
+		// Hot-reload PostHog client
+		if _, ok := req.Settings["posthog_api_key"]; ok {
+			cfg.PostHog.APIKey = req.Settings["posthog_api_key"]
+		}
+		if v, ok := req.Settings["posthog_endpoint"]; ok {
+			cfg.PostHog.Endpoint = v
+		}
+		if _, ok := req.Settings["posthog_api_key"]; ok {
+			ph.Reload(cfg.PostHog.APIKey, cfg.PostHog.Endpoint)
 		}
 
 		al.Log(admin.ID, "update_settings", "settings", "", r.RemoteAddr)
@@ -1531,4 +1572,57 @@ func allocateHostPort(ctx context.Context, s *store.Store, userID string) int {
 	// Simple approach: deterministic mapping. Collisions are rare with <1000 users.
 	// For production scale, query DB for used ports and find a free one.
 	return port
+}
+
+func isTerminal() bool {
+	fi, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// postHogHolder wraps a PostHog client for hot-reload via admin settings.
+type postHogHolder struct {
+	mu     sync.RWMutex
+	client posthog.Client
+}
+
+func (h *postHogHolder) Reload(apiKey, endpoint string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.client != nil {
+		h.client.Close()
+		h.client = nil
+	}
+	if apiKey == "" {
+		log.Info().Msg("posthog client disabled (no api key)")
+		return
+	}
+	opts := posthog.Config{}
+	if endpoint != "" {
+		opts.Endpoint = endpoint
+	}
+	c, err := posthog.NewWithConfig(apiKey, opts)
+	if err != nil {
+		log.Error().Err(err).Msg("posthog client init failed")
+		return
+	}
+	h.client = c
+	log.Info().Str("endpoint", endpoint).Msg("posthog client initialized")
+}
+
+func (h *postHogHolder) Get() posthog.Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.client
+}
+
+func (h *postHogHolder) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.client != nil {
+		h.client.Close()
+		h.client = nil
+	}
 }

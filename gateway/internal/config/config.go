@@ -19,6 +19,7 @@ type Config struct {
 	Database  DatabaseConfig  `yaml:"database"`
 	GitHub    GitHubConfig    `yaml:"github"`
 	ChatAgent ChatAgentConfig `yaml:"chat_agent"`
+	PostHog   PostHogConfig   `yaml:"posthog"`
 }
 
 type GitHubConfig struct {
@@ -29,6 +30,11 @@ type GitHubConfig struct {
 type ChatAgentConfig struct {
 	URL   string `yaml:"url"`
 	Token string `yaml:"token"`
+}
+
+type PostHogConfig struct {
+	APIKey   string `yaml:"api_key"`
+	Endpoint string `yaml:"endpoint"`
 }
 
 type LLMConfig struct {
@@ -205,6 +211,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_CHAT_AGENT_TOKEN"); v != "" {
 		cfg.ChatAgent.Token = v
+	}
+	if v := os.Getenv("GATEWAY_POSTHOG_API_KEY"); v != "" {
+		cfg.PostHog.APIKey = v
+	}
+	if v := os.Getenv("GATEWAY_POSTHOG_ENDPOINT"); v != "" {
+		cfg.PostHog.Endpoint = v
 	}
 }
 

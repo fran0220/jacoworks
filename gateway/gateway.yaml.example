@@ -34,3 +34,7 @@ docker:
 chat_agent:
   url: "http://127.0.0.1:18790"
   token: ""
+
+posthog:
+  api_key: ""                # PostHog project API key (phc_...)
+  endpoint: "https://us.i.posthog.com"  # PostHog endpoint
