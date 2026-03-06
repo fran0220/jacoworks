@@ -20,6 +20,7 @@ struct SettingView {
 struct ModelView {
     id: String,
     provider: String,
+    provider_id: String,
     label: String,
 }
 
@@ -33,6 +34,8 @@ struct SettingsTemplate {
     app_version: String,
     models: Vec<ModelView>,
     settings: Vec<SettingView>,
+    current_model: String,
+    current_provider: String,
     save_success: bool,
     save_error: Option<String>,
 }
@@ -202,20 +205,30 @@ async fn render_settings_page(
         Ok(settings) => (settings, None),
         Err(err) => (Vec::new(), Some(format!("网关设置读取失败: {err}"))),
     };
+
+    let mut current_model = String::new();
+    let mut current_provider = String::new();
+
     let settings: Vec<SettingView> = raw_settings
         .into_iter()
-        .map(|s| {
-            let is_secret = is_secret_key(&s.key);
-            SettingView {
-                masked_value: if is_secret {
-                    mask_value(&s.value)
-                } else {
-                    s.value.clone()
-                },
-                key: s.key,
-                value: if is_secret { String::new() } else { s.value },
-                description: s.description,
-                is_secret,
+        .filter_map(|s| {
+            match s.key.as_str() {
+                "primary_model" => { current_model = s.value; None }
+                "primary_provider" => { current_provider = s.value; None }
+                _ => {
+                    let is_secret = is_secret_key(&s.key);
+                    Some(SettingView {
+                        masked_value: if is_secret {
+                            mask_value(&s.value)
+                        } else {
+                            s.value.clone()
+                        },
+                        key: s.key,
+                        value: if is_secret { String::new() } else { s.value },
+                        description: s.description,
+                        is_secret,
+                    })
+                }
             }
         })
         .collect();
@@ -224,46 +237,55 @@ async fn render_settings_page(
         ModelView {
             id: "claude-sonnet-4-6".into(),
             provider: "Claude".into(),
+            provider_id: "proxy-claude".into(),
             label: "Sonnet 4.6".into(),
         },
         ModelView {
             id: "claude-opus-4-6".into(),
             provider: "Claude".into(),
+            provider_id: "proxy-claude".into(),
             label: "Opus 4.6".into(),
         },
         ModelView {
             id: "claude-haiku-4-5".into(),
             provider: "Claude".into(),
+            provider_id: "proxy-claude".into(),
             label: "Haiku 4.5".into(),
         },
         ModelView {
             id: "gpt-5.3-codex".into(),
             provider: "GPT".into(),
+            provider_id: "proxy-gpt".into(),
             label: "GPT-5.3 Codex".into(),
         },
         ModelView {
             id: "gpt-5.4".into(),
             provider: "GPT".into(),
+            provider_id: "proxy-gpt".into(),
             label: "GPT-5.4".into(),
         },
         ModelView {
             id: "gemini-3.1-pro-preview".into(),
             provider: "Gemini".into(),
+            provider_id: "proxy-gemini".into(),
             label: "Gemini 3.1 Pro".into(),
         },
         ModelView {
             id: "gemini-3-flash-preview".into(),
             provider: "Gemini".into(),
+            provider_id: "proxy-gemini".into(),
             label: "Gemini 3 Flash".into(),
         },
         ModelView {
             id: "grok-4.20-beta".into(),
             provider: "Grok".into(),
+            provider_id: "proxy-grok".into(),
             label: "Grok 4.20".into(),
         },
         ModelView {
             id: "grok-4.1-fast".into(),
             provider: "Grok".into(),
+            provider_id: "proxy-grok".into(),
             label: "Grok 4.1 Fast".into(),
         },
     ];
@@ -276,6 +298,8 @@ async fn render_settings_page(
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         models,
         settings,
+        current_model,
+        current_provider,
         save_success,
         save_error: save_error.or(gateway_fetch_error),
     })

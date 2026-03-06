@@ -131,9 +131,47 @@
 
 <!-- LLM Models -->
 <div class="bg-white rounded-2xl shadow-sm p-6">
-  <h3 class="text-lg font-semibold text-gray-900 mb-4">LLM 模型列表</h3>
-  <p class="text-sm text-gray-400 mb-4">以下模型通过 LLM 中转站提供，仅供查看。</p>
+  <h3 class="text-lg font-semibold text-gray-900 mb-2">LLM 模型配置</h3>
+  <p class="text-sm text-gray-400 mb-4">选择云端容器的默认模型，保存后新建容器自动生效。</p>
 
+  <form method="post" action="/admin/settings" class="mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-start py-3">
+      <div class="md:col-span-1">
+        <label for="default-model" class="block text-sm font-medium text-gray-700">默认模型</label>
+        <span class="text-xs text-gray-400">云端容器启动时使用</span>
+      </div>
+      <div class="md:col-span-2">
+        <select id="default-model"
+                name="primary_model"
+                onchange="document.getElementById('primary-provider').value = this.selectedOptions[0].dataset.provider || ''"
+                class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-terra/20 focus:border-terra outline-none transition-colors">
+          <option value="">使用默认 (claude-opus-4-6)</option>
+          {% for model in models %}
+          <option value="{{ model.id }}"
+                  data-provider="{{ model.provider_id }}"
+                  {% if current_model == model.id %}selected{% endif %}>
+            {{ model.provider }} / {{ model.label }} ({{ model.id }})
+          </option>
+          {% endfor %}
+        </select>
+        <input type="hidden" id="primary-provider" name="primary_provider"
+               value="{{ current_provider }}">
+      </div>
+      <div class="md:col-span-1 flex items-center gap-2">
+        {% if current_model.is_empty() %}
+        <span class="inline-flex px-2.5 py-0.5 rounded-lg text-xs bg-gray-50 text-gray-500">默认</span>
+        {% else %}
+        <span class="inline-flex px-2.5 py-0.5 rounded-lg text-xs bg-green-50 text-green-600">{{ current_provider }}/{{ current_model }}</span>
+        {% endif %}
+        <button type="submit"
+                class="px-4 py-1.5 bg-terra hover:bg-terra-dark text-white rounded-lg text-xs font-medium transition-colors">
+          保存
+        </button>
+      </div>
+    </div>
+  </form>
+
+  <h4 class="text-sm font-medium text-gray-500 mb-3">可用模型列表</h4>
   {% if models.is_empty() %}
   <p class="text-sm text-gray-400 text-center py-8">暂无模型配置</p>
   {% else %}
