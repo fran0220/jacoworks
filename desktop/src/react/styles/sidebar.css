@@ -5,7 +5,7 @@
   min-width: 0;
   height: 100vh;
   background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+  border-right: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -155,11 +155,11 @@
 }
 
 .session-item.cowork {
-  border-left: 2px solid var(--accent-thinking);
+  border-left: 2px solid var(--accent-cloud);
 }
 
 .session-item.cowork .session-type-icon {
-  color: var(--accent-thinking);
+  color: var(--accent-cloud);
 }
 
 @keyframes pulse-dot {

@@ -2,6 +2,10 @@
   background: var(--bg-anonymous);
 }
 
+.chat-view.cloud {
+  background: var(--bg-cloud);
+}
+
 /* ===== Chat View ===== */
 
 .chat-view {

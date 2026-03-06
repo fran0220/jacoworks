@@ -14,7 +14,7 @@
   align-items: center;
   justify-content: space-between;
   padding: var(--space-5) var(--space-6);
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   flex-shrink: 0;
 }
 
@@ -48,7 +48,7 @@
   display: flex;
   gap: var(--space-3);
   padding: var(--space-5) var(--space-6);
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   flex-shrink: 0;
 }
 
@@ -79,7 +79,6 @@
 .tp-pill--cron {
   color: var(--accent);
   background: var(--accent-light);
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .tp-pill--cron:hover {
@@ -178,8 +177,9 @@
 
 .tp-card {
   background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  border: none;
   border-left: 3px solid var(--accent);
+  box-shadow: var(--shadow-sm);
   border-radius: var(--radius);
   padding: var(--space-4) var(--space-5);
   cursor: pointer;
@@ -341,4 +341,165 @@
 
 .tp-clear-all:hover {
   color: var(--danger);
+}
+
+/* ─── Cron Create Form ─── */
+
+.tp-form-wrapper {
+  padding: var(--space-5) var(--space-6);
+  border-bottom: none;
+  flex-shrink: 0;
+}
+
+.tp-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tp-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tp-form-label {
+  font-size: var(--text-2xs);
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+}
+
+.tp-form-input {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: var(--radius);
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  transition: box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.tp-form-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.tp-form-input::placeholder {
+  color: var(--text-muted);
+}
+
+.tp-form-textarea {
+  resize: vertical;
+  min-height: 56px;
+  max-height: 120px;
+  line-height: var(--leading-relaxed);
+}
+
+.tp-form-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  padding-right: var(--space-8);
+}
+
+.tp-form-hint {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+}
+
+.tp-form-actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+.tp-form-btn {
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-form-btn--cancel {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.tp-form-btn--cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tp-form-btn--submit {
+  color: var(--text-on-accent);
+  background: var(--accent);
+}
+
+.tp-form-btn--submit:hover {
+  background: var(--accent-hover);
+}
+
+.tp-form-btn--submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tp-form-error {
+  font-size: var(--text-2xs);
+  color: var(--danger);
+  line-height: var(--leading-normal);
+}
+
+/* ─── Frequency preset grid ─── */
+
+.tp-freq-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+}
+
+.tp-freq-btn {
+  padding: var(--space-3) var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-2xs);
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.tp-freq-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tp-freq-btn.active {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+/* ─── Custom schedule row ─── */
+
+.tp-custom-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.tp-custom-kind {
+  width: 80px;
+  flex-shrink: 0;
+}
+
+.tp-custom-expr {
+  flex: 1;
 }

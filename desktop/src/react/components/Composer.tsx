@@ -7,6 +7,7 @@ import {
   Paperclip,
   Plus,
   SendHorizontal,
+  Sparkles,
   Square,
   X,
 } from "lucide-react";
@@ -39,6 +40,8 @@ export default function Composer({
   workspacePath,
   model,
   disabled,
+  isCloud,
+  isAnonymous,
   onWorkspaceChange,
   onModelChange,
   onSend,
@@ -49,6 +52,8 @@ export default function Composer({
   workspacePath: string;
   model: string;
   disabled?: boolean;
+  isCloud?: boolean;
+  isAnonymous?: boolean;
   onWorkspaceChange: (workspacePath: string) => void;
   onModelChange: (model: string) => void;
   onSend: (text: string, files: AttachedFile[]) => void;
@@ -143,7 +148,7 @@ export default function Composer({
   const hasAttachments = files.length > 0 || readingCount > 0;
 
   return (
-    <div className="composer-card">
+    <div className={`composer-card${isAnonymous ? " anonymous" : ""}${isCloud ? " cloud" : ""}`}>
       {/* Warnings toast */}
       {warnings.length > 0 && (
         <div className="composer-warnings">
@@ -207,6 +212,7 @@ export default function Composer({
 
       <div className="composer-toolbar">
         <div className="composer-toolbar-left">
+          {!isCloud && (
           <div className="ns-folder-wrapper" ref={folderMenuRef}>
             <button
               className="ns-btn-folder"
@@ -251,31 +257,37 @@ export default function Composer({
               </div>
             )}
           </div>
+          )}
 
-          <div className="ns-plus-wrapper" ref={plusMenuRef}>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="*/*"
-              onChange={onFileChange}
-              style={{ display: "none" }}
-            />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="*/*"
+            onChange={onFileChange}
+            style={{ display: "none" }}
+          />
+          <button
+            className="ns-btn-icon"
+            disabled={isStreaming}
+            onClick={handleFileSelect}
+            data-tip="上传文件或图片"
+          >
+            <Paperclip size={14} />
+          </button>
+
+          <div className="ns-skills-wrapper" ref={plusMenuRef}>
             <button
-              className="ns-btn-plus"
+              className="ns-btn-icon"
               disabled={isStreaming}
               onClick={() => setPlusMenuOpen((v) => !v)}
-              title="添加附件或技能"
+              data-tip="调用技能"
             >
-              <span className="ns-plus-icon">+</span>
+              <Sparkles size={14} />
             </button>
 
             {plusMenuOpen && (
               <div className="ns-plus-menu">
-                <button className="ns-menu-item" onClick={handleFileSelect}>
-                  <Paperclip size={18} />
-                  <span>附加文件或图片</span>
-                </button>
                 <SkillMenu onSelect={handleSkillInsert} />
               </div>
             )}

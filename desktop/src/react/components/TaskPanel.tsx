@@ -1,6 +1,121 @@
-import { AlertCircle, ChevronDown, ChevronUp, Cloud, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ChevronUp, Cloud, Clock, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import type { CronResultItem } from "../hooks/use-cron-results";
+
+const FREQ_PRESETS = [
+  { label: "每30分钟", kind: "every", expr: "30m" },
+  { label: "每小时", kind: "every", expr: "1h" },
+  { label: "每天", kind: "every", expr: "24h" },
+  { label: "自定义", kind: "", expr: "" },
+] as const;
+
+const CUSTOM_KINDS = [
+  { value: "every", label: "间隔", placeholder: "如 5m、2h" },
+  { value: "cron", label: "Cron", placeholder: "如 0 9 * * 1-5" },
+  { value: "at", label: "定时", placeholder: "如 +30m、2026-03-07T10:00" },
+] as const;
+
+function CronJobForm({ onSubmit, onClose }: { onSubmit: (prompt: string) => void; onClose: () => void }) {
+  const [prompt, setPrompt] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState(0);
+  const [customKind, setCustomKind] = useState("every");
+  const [customExpr, setCustomExpr] = useState("");
+
+  const isCustom = selectedPreset === FREQ_PRESETS.length - 1;
+  const hasSchedule = isCustom ? customExpr.trim() !== "" : true;
+  const canSubmit = prompt.trim() !== "" && hasSchedule;
+
+  const handleSubmit = () => {
+    const preset = FREQ_PRESETS[selectedPreset];
+    const kind = isCustom ? customKind : preset.kind;
+    const expr = isCustom ? customExpr.trim() : preset.expr;
+
+    const composed = [
+      `请使用 cron_manage 工具创建一个定时任务，参数如下：`,
+      `- action: create`,
+      `- scheduleKind: ${kind}`,
+      `- schedule: ${expr}`,
+      `- prompt: ${prompt.trim()}`,
+      `- name: 根据任务内容自动生成一个简短名称`,
+      `- sessionTarget: isolated`,
+      kind === "at" ? `- deleteAfterRun: true` : null,
+      `\n请直接调用工具，不需要确认。`,
+    ].filter(Boolean).join("\n");
+
+    onSubmit(composed);
+  };
+
+  const kindInfo = CUSTOM_KINDS.find((k) => k.value === customKind);
+
+  return (
+    <div className="tp-form-wrapper">
+      <div className="tp-form">
+        <div className="tp-form-row">
+          <label className="tp-form-label">任务内容</label>
+          <textarea
+            className="tp-form-input tp-form-textarea"
+            placeholder="让 AI 做什么…"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            autoFocus
+          />
+        </div>
+
+        <div className="tp-form-row">
+          <label className="tp-form-label">执行频率</label>
+          <div className="tp-freq-grid">
+            {FREQ_PRESETS.map((p, i) => (
+              <button
+                key={p.label}
+                type="button"
+                className={`tp-freq-btn${selectedPreset === i ? " active" : ""}`}
+                onClick={() => setSelectedPreset(i)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {isCustom && (
+          <div className="tp-form-row">
+            <div className="tp-custom-row">
+              <select
+                className="tp-form-input tp-form-select tp-custom-kind"
+                value={customKind}
+                onChange={(e) => setCustomKind(e.target.value)}
+              >
+                {CUSTOM_KINDS.map((k) => (
+                  <option key={k.value} value={k.value}>{k.label}</option>
+                ))}
+              </select>
+              <input
+                className="tp-form-input tp-custom-expr"
+                placeholder={kindInfo?.placeholder}
+                value={customExpr}
+                onChange={(e) => setCustomExpr(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="tp-form-actions">
+          <button type="button" className="tp-form-btn tp-form-btn--cancel" onClick={onClose}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="tp-form-btn tp-form-btn--submit"
+            disabled={!canSubmit}
+            onClick={handleSubmit}
+          >
+            创建并执行
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -24,14 +139,17 @@ export default function TaskPanel({
   results,
   onClearResults,
   onNewCoworkSession,
+  onCreateCronTask,
   onClose,
 }: {
   results: CronResultItem[];
   onClearResults: () => void;
   onNewCoworkSession: () => void;
+  onCreateCronTask: (prompt: string) => void;
   onClose: () => void;
 }) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [showForm, setShowForm] = useState(false);
 
   const toggle = (index: number) => {
     setExpandedIndex((prev) => (prev === index ? null : index));
@@ -53,11 +171,22 @@ export default function TaskPanel({
           <Cloud size={13} />
           新建云端对话
         </button>
-        <button type="button" className="tp-pill tp-pill--cron" onClick={() => {}}>
+        <button type="button" className="tp-pill tp-pill--cron" onClick={() => setShowForm((v) => !v)}>
           <Plus size={13} />
           新建定时任务
         </button>
       </div>
+
+      {/* Cron create form */}
+      {showForm && (
+        <CronJobForm
+          onSubmit={(prompt) => {
+            setShowForm(false);
+            onCreateCronTask(prompt);
+          }}
+          onClose={() => setShowForm(false)}
+        />
+      )}
 
       {/* Timeline */}
       <div className="tp-timeline-scroll">

@@ -17,7 +17,7 @@
 :root {
 	/* ===== Colors — 暖色奶油基调 ===== */
 	--bg-primary: #F5F0EB;
-	--bg-secondary: #FFFFFF;
+	--bg-secondary: #FAF7F4;
 	--bg-tertiary: #EDE8E3;
 	--bg-input: #FFFFFF;
 	--bg-user-bubble: #E8E3DD;
@@ -29,6 +29,9 @@
 	--bg-backdrop: rgba(26, 26, 26, 0.28);
 	--bg-anonymous: color-mix(in srgb, var(--bg-primary) 92%, #4A3B5C);
 	--accent-anonymous: #7B6B8A;
+	--bg-cloud: color-mix(in srgb, var(--bg-primary) 92%, #3A6B9F);
+	--accent-cloud: #4A8EC4;
+	--accent-cloud-hover: #3D7AB0;
         --bg-code: #0d1117;
 
 	/* 文字 */

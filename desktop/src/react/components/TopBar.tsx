@@ -1,4 +1,4 @@
-import { AlertCircle, Bug, ChevronDown, Cloud, LoaderCircle, LogOut, PanelLeft, Settings, Unplug, UserCircle2 } from "lucide-react";
+import { AlertCircle, Bug, ChevronDown, Cloud, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
 import { useRef, useState } from "react";
 import type { OcConnectionPhase } from "../hooks/use-cowork-connection";
 import { useClickOutside } from "../hooks/use-click-outside";
@@ -63,7 +63,6 @@ export default function TopBar({
   let icon: React.ReactNode;
   if (isBusy) icon = <LoaderCircle size={14} className="spinning" />;
   else if (ocPhase === "error") icon = <AlertCircle size={14} />;
-  else if (isConnected) icon = <Unplug size={14} />;
   else icon = <Cloud size={14} />;
 
   const btnClass = [
@@ -101,16 +100,21 @@ export default function TopBar({
         <button
           type="button"
           className={btnClass}
-          title={isConnected ? "断开云端" : "连接云端"}
+          title={ocPhase === "error" ? "点击重试连接" : "任务面板"}
           onClick={onToggleCloud}
           disabled={isBusy}
         >
           {icon}
-          <span className="btn-cowork-label">{isConnected ? "断开云端" : "云端模式"}</span>
-          <span className={`oc-phase-badge ${phaseColor(ocPhase)}`}>
-            <span className={`oc-phase-dot ${phaseColor(ocPhase)}`} />
-            {phaseLabel(ocPhase)}
-          </span>
+          {ocPhase === "idle" ? (
+            <span className="btn-cowork-label">新建云端</span>
+          ) : ocPhase === "error" ? (
+            <span className="btn-cowork-label">重试连接</span>
+          ) : (
+            <span className={`oc-phase-badge ${phaseColor(ocPhase)}`}>
+              <span className={`oc-phase-dot ${phaseColor(ocPhase)}`} />
+              {phaseLabel(ocPhase)}
+            </span>
+          )}
         </button>
 
         <div className="user-menu-wrapper" ref={menuRef}>

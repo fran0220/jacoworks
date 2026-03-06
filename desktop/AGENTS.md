@@ -35,7 +35,7 @@ src/
 
 > Token 定义: `src/app.css :root`，完整规范: `docs/design-system.md`
 
-风格: Claude.ai 暖色奶油 — `#F5F0EB` 背景、`#C4724A` 陶土强调、白色卡片、大圆角。
+风格: Claude.ai 暖色奶油 — `#F5F0EB` 背景、`#FAF7F4` 卡片/侧栏、`#C4724A` 陶土强调、大圆角。**去边框化**: 用背景色层级 + 阴影替代 border，仅功能性边框保留 (如任务卡片左侧彩色条)。
 
 1. **禁止魔法数字**: spacing 用 `--space-*`、font-size 用 `--text-*`、radius 用 `--radius-*`、z-index 用 `--z-*`、transition 用 `--duration-*`
 2. **颜色必须用变量**: 禁止硬编码 `#hex` / `rgb()`
@@ -62,8 +62,10 @@ npm test
 - **CSS 模块化**: 样式拆分到 `react/styles/` 按组件分文件
 - **本地对话优先**: NewSessionPanel 无模式切换，对话永远本地 sidecar
 - **云端模式统一协议**: 云端 (cowork) 会话通过 `CloudAgentWS` 连接 `/ws/agent?token=`，使用与本地模式相同的 vm-agent RPC 协议 (prompt/abort/session_event/done)，`use-chat-stream` 共享同一 `processStream` 事件处理循环
-- **协作入口在任务面板**: TaskPanel 提供「启动云端对话」按钮
-- **视觉区分**: 云端对话 (oc-drawer) 蓝灰背景色调；Sidebar 云端会话有蓝灰左边框和图标色
+- **协作入口在任务面板**: TaskPanel 提供「启动云端对话」和「新建定时任务」按钮
+- **三色模式体系**: 默认 (陶土 `--accent`)、隐私 (紫灰 `--accent-anonymous`)、云端 (蓝 `--accent-cloud`)。通过 composer/input-card 的 `inset box-shadow` + 发送按钮色 + chat-view 背景微调区分
+- **TopBar 云端按钮**: 纯状态指示 — idle 显示「新建云端」触发连接、busy 时 disabled、ready 显示「已连接」toggle 面板、error 显示「重试连接」
+- **面板仅 ready 可见**: 连接成功自动打开面板，面板内无连接状态 UI
 - **记忆同步**: `memorySyncEnabled` 设置 (默认关)，开启后 syncMemory() 在登录和对话结束后自动执行 (30s 防抖)
 - 开发: `make dev-desktop` (Vite HMR + Tauri)
 - sidecar 需预编译: `cd ../vm-agent && bun build --compile src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin`

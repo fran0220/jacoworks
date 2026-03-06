@@ -160,7 +160,7 @@ export default function NewSessionPanel({
         <h1>开始新的任务</h1>
       </div>
 
-      <div className="ns-input-card">
+      <div className={`ns-input-card${anonymous ? " anonymous" : ""}`}>
         {/* Warnings toast */}
         {warnings.length > 0 && (
           <div className="composer-warnings">
