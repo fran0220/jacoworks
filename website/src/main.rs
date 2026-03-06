@@ -41,6 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = db::create_pool(&config.database.url).await?;
     tracing::info!("Connected to database");
 
+    // Sync changelog → releases table
+    if let Err(e) = services::changelog::sync_to_db(&db).await {
+        tracing::warn!("Failed to sync changelog to releases: {e}");
+    }
+
     // State
     let state = AppState {
         db,
