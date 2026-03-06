@@ -113,6 +113,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // upstreamURL builds the vm-agent WebSocket URL with token auth.
 // Prefers host port mapping (dockerHostIP:hostPort) over container internal IP.
+// Uses the per-container token for auth (each container has its own GATEWAY_TOKEN).
 func (p *Proxy) upstreamURL(info *store.ContainerInfo) string {
 	var host string
 	var port int
@@ -124,8 +125,13 @@ func (p *Proxy) upstreamURL(info *store.ContainerInfo) string {
 		port = p.agentPort
 	}
 	url := fmt.Sprintf("ws://%s:%d", host, port)
-	if p.token != "" {
-		url += "?token=" + p.token
+	// Prefer per-container token; fall back to global gateway token
+	token := info.ContainerToken
+	if token == "" {
+		token = p.token
+	}
+	if token != "" {
+		url += "?token=" + token
 	}
 	return url
 }
