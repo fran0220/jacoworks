@@ -114,6 +114,7 @@ pub fn build_nav_tree(current_path: &str) -> Vec<NavItem> {
             ("workspace", "工作空间"),
             ("memory", "记忆系统"),
             ("skills", "技能系统"),
+            ("tasks", "定时任务"),
             ("cowork", "协作模式"),
         ];
 
