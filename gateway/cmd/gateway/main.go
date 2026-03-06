@@ -87,6 +87,10 @@ func main() {
 				llm.JimengAPIURL = setting.Value
 			case "jimeng_api_key":
 				llm.JimengAPIKey = setting.Value
+			case "primary_model":
+				llm.PrimaryModel = setting.Value
+			case "primary_provider":
+				llm.PrimaryProvider = setting.Value
 			case "feishu_client_id":
 				cfg.Auth.FeishuClientID = setting.Value
 			case "feishu_client_secret":
@@ -755,6 +759,8 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"fal_api_key":        llm.FalAPIKey,
 			"jimeng_api_url":     llm.JimengAPIURL,
 			"jimeng_api_key":     llm.JimengAPIKey,
+			"primary_model":     llm.PrimaryModel,
+			"primary_provider":  llm.PrimaryProvider,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
@@ -1490,6 +1496,12 @@ func containerEnvVars(cfg *config.Config) map[string]string {
 	}
 	if llm.JimengAPIKey != "" {
 		env["JIMENG_API_KEY"] = llm.JimengAPIKey
+	}
+	if llm.PrimaryModel != "" {
+		env["PRIMARY_MODEL"] = llm.PrimaryModel
+	}
+	if llm.PrimaryProvider != "" {
+		env["PRIMARY_PROVIDER"] = llm.PrimaryProvider
 	}
 	if cfg.Docker.GatewayToken != "" {
 		env["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken

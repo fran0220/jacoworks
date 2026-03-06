@@ -42,6 +42,8 @@ type LLMConfig struct {
 	FalAPIKey        string `yaml:"fal_api_key"`
 	JimengAPIURL     string `yaml:"jimeng_api_url"`
 	JimengAPIKey     string `yaml:"jimeng_api_key"`
+	PrimaryModel    string `yaml:"primary_model"`
+	PrimaryProvider string `yaml:"primary_provider"`
 }
 
 type ServerConfig struct {
@@ -191,6 +193,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_LLM_JIMENG_API_KEY"); v != "" {
 		cfg.LLM.JimengAPIKey = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_PRIMARY_MODEL"); v != "" {
+		cfg.LLM.PrimaryModel = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_PRIMARY_PROVIDER"); v != "" {
+		cfg.LLM.PrimaryProvider = v
 	}
 	if v := os.Getenv("GATEWAY_CHAT_AGENT_URL"); v != "" {
 		cfg.ChatAgent.URL = v

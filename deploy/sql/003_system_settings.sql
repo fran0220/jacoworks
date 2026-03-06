@@ -28,5 +28,7 @@ INSERT INTO system_settings (key, description) VALUES
     ('jimeng_api_url', '即梦网关地址 (Seedance 视频生成)'),
     ('jimeng_api_key', '即梦网关 API 密钥'),
     ('github_token', 'GitHub Personal Access Token (反馈同步 Issues)'),
-    ('github_repo', 'GitHub 仓库 (owner/repo 格式, 反馈同步 Issues)')
+    ('github_repo', 'GitHub 仓库 (owner/repo 格式, 反馈同步 Issues)'),
+    ('primary_model', '云端容器默认模型 (如 claude-sonnet-4-6)'),
+    ('primary_provider', '云端容器默认 Provider (如 proxy-claude)')
 ON CONFLICT (key) DO NOTHING;

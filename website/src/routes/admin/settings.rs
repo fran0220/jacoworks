@@ -88,6 +88,8 @@ pub struct UpdateSettingsForm {
     admin_token: Option<String>,
     github_token: Option<String>,
     github_repo: Option<String>,
+    primary_model: Option<String>,
+    primary_provider: Option<String>,
 }
 
 pub async fn update(
@@ -134,6 +136,14 @@ pub async fn update(
         if !v.is_empty() {
             settings.insert("github_repo".to_string(), v);
         }
+    }
+    if let Some(v) = form.primary_model {
+        let v = v.trim().to_string();
+        settings.insert("primary_model".to_string(), v);
+    }
+    if let Some(v) = form.primary_provider {
+        let v = v.trim().to_string();
+        settings.insert("primary_provider".to_string(), v);
     }
     for (key, value) in [
         ("llm_proxy_key", form.llm_proxy_key),
