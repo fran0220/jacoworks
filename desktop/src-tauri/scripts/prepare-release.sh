@@ -124,5 +124,18 @@ else
   echo "  ⚠️  pi-meta: package.json not found (optional)"
 fi
 
+# ─── 6. Windows dependencies (bash + bun) ───────────────────────
+
+if [[ "$TARGET" == *"windows"* ]]; then
+  echo ""
+  echo "📦 Checking Windows dependencies..."
+  if [[ -f "$RESOURCES_DIR/win-bash/usr/bin/bash.exe" ]] && [[ -f "$RESOURCES_DIR/win-bin/bun.exe" ]]; then
+    echo "  ✅ win-bash + win-bin already populated"
+  else
+    echo "  ⚠️  win-bash/win-bin empty — running prepare-win-deps.sh..."
+    bash "$SCRIPT_DIR/prepare-win-deps.sh"
+  fi
+fi
+
 echo ""
 echo "✅ Release preparation complete for $TARGET"

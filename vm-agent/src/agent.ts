@@ -20,6 +20,9 @@ import { createMemoryExtension } from "./extensions/memory.js";
 import { createImageGenExtension } from "./extensions/image-gen.js";
 import { createReadDocumentExtension, ocrWithVision } from "./extensions/read-document.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
+import { createRemoteFsExtension } from "./extensions/remote-fs.js";
+import { registerTransportResponseHandler } from "./transport/handler.js";
+import type { TransportSender } from "./transport/types.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
@@ -49,6 +52,13 @@ let heartbeatService: HeartbeatService | null = null;
 let cronService: CronService | null = null;
 let promptQueue: PromptQueue | null = null;
 export const agentEvents = new EventEmitter();
+
+// ─── Remote FS Transport (cloud mode only) ──────────
+
+let currentSender: TransportSender | null = null;
+export function setTransportSender(sender: TransportSender | null) {
+  currentSender = sender;
+}
 
 // ─── Restricted mode: no coding tools, skills still available ──
 
@@ -421,6 +431,13 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   if (process.env.TAVILY_API_KEY || config.proxyKey) {
     extensionFactories.push(
       createWebSearchExtension(config.proxyUrl, config.proxyKey),
+    );
+  }
+
+  // Remote filesystem (cloud mode only — when transport sender is available)
+  if (currentSender) {
+    extensionFactories.push(
+      createRemoteFsExtension(() => currentSender, registerTransportResponseHandler),
     );
   }
 

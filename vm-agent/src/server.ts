@@ -5,6 +5,7 @@ import {
   destroyAllSessions,
   cleanupStaleSessions,
   listAvailableSkills,
+  setTransportSender,
 } from "./agent.js";
 import { handleCommand, type RawCommand } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
@@ -45,6 +46,13 @@ const server = Bun.serve({
   websocket: {
     open(ws) {
       console.error(`[ws] client connected`);
+      const sender: TransportSender = {
+        send(payload: unknown) {
+          ws.send(JSON.stringify(payload));
+        },
+      };
+      (ws as any).__sender = sender;
+      setTransportSender(sender);
     },
 
     message(ws, message) {
@@ -59,11 +67,7 @@ const server = Bun.serve({
         return;
       }
 
-      const sender: TransportSender = {
-        send(payload: unknown) {
-          ws.send(JSON.stringify(payload));
-        },
-      };
+      const sender = (ws as any).__sender as TransportSender;
 
       void handleCommand(config, sender, parsed).catch((err) => {
         sender.send({
@@ -78,6 +82,7 @@ const server = Bun.serve({
 
     close(ws, code, reason) {
       console.error(`[ws] client disconnected (code=${code}, reason=${reason})`);
+      setTransportSender(null);
     },
   },
 });

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -63,7 +64,14 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
+// ErrorCallback is called for server errors (5xx) and panics.
+type ErrorCallback func(event string, properties map[string]interface{})
+
 func RequestLog(next http.Handler) http.Handler {
+	return RequestLogWithCallback(next, nil)
+}
+
+func RequestLogWithCallback(next http.Handler, onError ErrorCallback) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip noisy health checks
 		if r.URL.Path == "/health" {
@@ -75,19 +83,34 @@ func RequestLog(next http.Handler) http.Handler {
 		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
 
+		latency := time.Since(start)
 		logger := zerolog.Ctx(r.Context())
 		logger.Info().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Int("status", rw.status).
 			Int("size", rw.size).
-			Dur("latency", time.Since(start)).
+			Dur("latency", latency).
 			Str("remote", r.RemoteAddr).
 			Msg("request")
+
+		if onError != nil && rw.status >= 500 {
+			onError("server_error", map[string]interface{}{
+				"method":     r.Method,
+				"path":       r.URL.Path,
+				"status":     rw.status,
+				"latency_ms": latency.Milliseconds(),
+				"request_id": GetRequestID(r.Context()),
+			})
+		}
 	})
 }
 
 func PanicRecovery(next http.Handler) http.Handler {
+	return PanicRecoveryWithCallback(next, nil)
+}
+
+func PanicRecoveryWithCallback(next http.Handler, onError ErrorCallback) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
@@ -98,6 +121,15 @@ func PanicRecovery(next http.Handler) http.Handler {
 					Str("path", r.URL.Path).
 					Msg("panic recovered")
 				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+
+				if onError != nil {
+					onError("panic", map[string]interface{}{
+						"method":     r.Method,
+						"path":       r.URL.Path,
+						"error":      fmt.Sprintf("%v", err),
+						"request_id": GetRequestID(r.Context()),
+					})
+				}
 			}
 		}()
 		next.ServeHTTP(w, r)

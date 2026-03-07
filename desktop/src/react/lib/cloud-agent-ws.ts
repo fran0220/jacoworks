@@ -9,6 +9,7 @@ const RECONNECT_JITTER_RATIO = 0.2;
 export interface CloudAgentWSHandlers {
   onReady?: () => void;
   onMessage?: (packet: AgentRpcEvent) => void;
+  onFileRequest?: (request: Record<string, unknown>) => void;
   onDisconnect?: (reason: string) => void;
   onError?: (error: Error) => void;
   onReconnect?: (delayMs: number, attempt: number) => void;
@@ -187,6 +188,12 @@ export class CloudAgentWS {
     if (type === "proxy.error") {
       const errMsg = typeof message.error === "string" ? message.error : "云端代理错误";
       this.handlers.onError?.(new Error(errMsg));
+      return;
+    }
+
+    // Remote filesystem requests from container
+    if (type.startsWith("fs.") && !type.endsWith(".result")) {
+      this.handlers.onFileRequest?.(message);
       return;
     }
 

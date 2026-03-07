@@ -58,11 +58,11 @@ function buildRuntimePrompt(opts: SystemPromptOptions): string {
 - Do not add unnecessary error handling, comments, or abstractions beyond what the task requires.
 </safety_invariants>`);
 
-  // Windows environment self-repair instructions (sidecar only)
-  if (opts.mode === "sidecar") {
+  // Windows environment note (sidecar bundles bash + coreutils)
+  if (opts.mode === "sidecar" && process.platform === "win32") {
     parts.push(`
 <windows_environment>
-On Windows, if bash fails with shell-not-found errors, use the powershell tool to install Git for Windows (which includes bash) via winget. Similarly install Node.js if needed. Do NOT ask the user to install manually.
+This app bundles bash and GNU coreutils (grep, sed, find, cat, etc.) on Windows. Use bash normally — it works the same as on macOS/Linux.
 </windows_environment>`);
   }
 

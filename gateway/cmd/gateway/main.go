@@ -126,6 +126,9 @@ func main() {
 	// Initialize PostHog client (error tracking + analytics, hot-reloadable via admin settings)
 	ph := &postHogHolder{}
 	ph.Reload(cfg.PostHog.APIKey, cfg.PostHog.Endpoint)
+	ph.CaptureEvent("gateway-server", "gateway_started", map[string]interface{}{
+		"addr": cfg.Addr(),
+	})
 
 	// Initialize Docker client
 	dockerClient := dockerpkg.NewClient(
@@ -299,12 +302,17 @@ func main() {
 	})
 
 	// Middleware chain: PanicRecovery → RequestID → RequestLog → CORS → mux
-	handler := middleware.PanicRecovery(
+	onError := func(event string, properties map[string]interface{}) {
+		ph.CaptureEvent("gateway-server", event, properties)
+	}
+	handler := middleware.PanicRecoveryWithCallback(
 		middleware.RequestID(
-			middleware.RequestLog(
+			middleware.RequestLogWithCallback(
 				corsMiddleware(mux),
+				onError,
 			),
 		),
+		onError,
 	)
 
 	server := &http.Server{
@@ -1582,6 +1590,17 @@ func isTerminal() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
+// posthogCallback logs PostHog event delivery results.
+type posthogCallback struct{}
+
+func (c *posthogCallback) Success(msg posthog.APIMessage) {
+	log.Info().Str("type", fmt.Sprintf("%T", msg)).Msg("posthog: event delivered")
+}
+
+func (c *posthogCallback) Failure(msg posthog.APIMessage, err error) {
+	log.Error().Err(err).Str("type", fmt.Sprintf("%T", msg)).Msg("posthog: event delivery failed")
+}
+
 // postHogHolder wraps a PostHog client for hot-reload via admin settings.
 type postHogHolder struct {
 	mu     sync.RWMutex
@@ -1599,7 +1618,10 @@ func (h *postHogHolder) Reload(apiKey, endpoint string) {
 		log.Info().Msg("posthog client disabled (no api key)")
 		return
 	}
-	opts := posthog.Config{}
+	opts := posthog.Config{
+		Verbose:  true,
+		Callback: &posthogCallback{},
+	}
 	if endpoint != "" {
 		opts.Endpoint = endpoint
 	}
@@ -1616,6 +1638,27 @@ func (h *postHogHolder) Get() posthog.Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.client
+}
+
+// CaptureEvent sends an event to PostHog if the client is initialized.
+func (h *postHogHolder) CaptureEvent(distinctID, event string, properties map[string]interface{}) {
+	c := h.Get()
+	if c == nil {
+		return
+	}
+	props := posthog.NewProperties()
+	for k, v := range properties {
+		props.Set(k, v)
+	}
+	if err := c.Enqueue(posthog.Capture{
+		DistinctId: distinctID,
+		Event:      event,
+		Properties: props,
+	}); err != nil {
+		log.Error().Err(err).Str("event", event).Msg("posthog: enqueue failed")
+	} else {
+		log.Info().Str("event", event).Msg("posthog: event enqueued")
+	}
 }
 
 func (h *postHogHolder) Close() {

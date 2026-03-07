@@ -65,6 +65,46 @@
   background: var(--accent-light);
 }
 
+/* ===== Update Button ===== */
+
+.btn-update {
+  height: var(--size-btn);
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  color: var(--accent);
+  background: var(--accent-light);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.btn-update:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.btn-update-label {
+  font-size: var(--text-xs);
+}
+
+.btn-update--downloading {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  cursor: default;
+}
+
+.btn-update--done {
+  color: var(--success, #2d7d46);
+  background: color-mix(in srgb, var(--success, #2d7d46) 10%, transparent);
+  cursor: default;
+}
+
 /* ===== Cowork Pill Button ===== */
 
 .btn-cowork {

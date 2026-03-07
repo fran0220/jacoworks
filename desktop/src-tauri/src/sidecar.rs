@@ -471,7 +471,7 @@ pub async fn start_agent(
             }
         }
 
-        // Windows: prepend bundled bash + bun/node to PATH
+        // Windows: prepend bundled bash + bun/node to PATH (only if real binaries exist)
         #[cfg(windows)]
         {
             if let Ok(resource_dir) = app.path().resource_dir() {
@@ -482,11 +482,14 @@ pub async fn start_agent(
                     .join("usr")
                     .join("bin");
 
+                let has_bash = win_bash.join("bash.exe").exists();
+                let has_bin = win_bin.join("bun.exe").exists() || win_bin.join("node.exe").exists();
+
                 let mut extra_paths: Vec<PathBuf> = Vec::new();
-                if win_bin.exists() {
+                if has_bin {
                     extra_paths.push(win_bin);
                 }
-                if win_bash.exists() {
+                if has_bash {
                     extra_paths.push(win_bash);
                 }
 
@@ -500,13 +503,15 @@ pub async fn start_agent(
                         cmd.env("PATH", &new_path);
                     }
                 }
-            }
 
-            cmd.env("CHERE_INVOKING", "1");
-            cmd.env("MSYS2_PATH_TYPE", "inherit");
-            cmd.env("MSYS2_ARG_CONV_EXCL", "*");
-            cmd.env("LANG", "C.UTF-8");
-            cmd.env("LC_ALL", "C.UTF-8");
+                if has_bash {
+                    cmd.env("CHERE_INVOKING", "1");
+                    cmd.env("MSYS2_PATH_TYPE", "inherit");
+                    cmd.env("MSYS2_ARG_CONV_EXCL", "*");
+                    cmd.env("LANG", "C.UTF-8");
+                    cmd.env("LC_ALL", "C.UTF-8");
+                }
+            }
         }
 
         if !memory_root.as_os_str().is_empty() {

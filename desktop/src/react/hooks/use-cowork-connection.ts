@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checkContainerStatus, provisionContainer } from "../cowork/lib/api";
 import { CloudAgentWS } from "../lib/cloud-agent-ws";
+import { handleFileRequest } from "../lib/cloud-file-handler";
 import type { AgentRpcEvent } from "../lib/agent";
 
 export type OcConnectionPhase =
@@ -32,6 +33,7 @@ export function useCoworkConnection() {
   const phaseRef = useRef<OcConnectionPhase>("idle");
   const cancelTokenRef = useRef(0);
   const messageHandlerRef = useRef<((packet: AgentRpcEvent) => void) | null>(null);
+  const workspacePathRef = useRef<string>("");
 
   const setPhaseSync = useCallback((p: OcConnectionPhase) => {
     phaseRef.current = p;
@@ -110,6 +112,19 @@ export function useCoworkConnection() {
             },
             onMessage: (packet) => {
               messageHandlerRef.current?.(packet);
+            },
+            onFileRequest: (request) => {
+              if (!wsRef.current) return;
+              const workspace = workspacePathRef.current;
+              if (!workspace) {
+                const type = typeof request.type === "string" ? request.type : "fs.unknown";
+                const reqId = typeof request.req_id === "string" ? request.req_id : undefined;
+                wsRef.current.send({ type: `${type}.result`, req_id: reqId, error: "workspace path not set" });
+                return;
+              }
+              handleFileRequest(wsRef.current, workspace, request).catch((err) => {
+                console.error("[cowork] file request error:", err);
+              });
             },
             onDisconnect: (reason) => {
               if (!firstReady && !settled) {
@@ -192,6 +207,10 @@ export function useCoworkConnection() {
     [],
   );
 
+  const setWorkspacePath = useCallback((path: string) => {
+    workspacePathRef.current = path;
+  }, []);
+
   const disconnect = useCallback(() => {
     cancelTokenRef.current = -1;
     wsRef.current?.close();
@@ -211,5 +230,6 @@ export function useCoworkConnection() {
     retry,
     disconnect,
     setMessageHandler,
+    setWorkspacePath,
   };
 }

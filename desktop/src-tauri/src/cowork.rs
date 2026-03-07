@@ -7,6 +7,172 @@ use reqwest::multipart;
 use tar::{Archive, Builder};
 use walkdir::WalkDir;
 
+// ── Remote filesystem commands (cloud file channel) ──
+
+#[derive(serde::Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+#[derive(serde::Serialize)]
+pub struct FileStat {
+    pub exists: bool,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+/// Resolve and validate that a target path stays within the workspace root.
+/// Returns the full canonical path or an error.
+fn safe_resolve(workspace: &str, relative: &str) -> Result<std::path::PathBuf, String> {
+    let root = std::path::Path::new(workspace);
+    let canonical_root = dunce::canonicalize(root)
+        .map_err(|e| format!("workspace root not found: {}", e))?;
+
+    // Empty relative path means workspace root itself
+    if relative.is_empty() || relative == "." {
+        return Ok(canonical_root);
+    }
+
+    let joined = canonical_root.join(relative);
+
+    // For paths that don't exist yet (writes), canonicalize the parent
+    if let Some(parent) = joined.parent() {
+        if parent.exists() {
+            let canonical_parent = dunce::canonicalize(parent)
+                .map_err(|e| format!("resolve parent: {}", e))?;
+            if !canonical_parent.starts_with(&canonical_root) {
+                return Err("path escapes workspace boundary".to_string());
+            }
+        }
+    }
+
+    // For existing paths, fully canonicalize to catch symlink escapes
+    if joined.exists() {
+        let canonical = dunce::canonicalize(&joined)
+            .map_err(|e| format!("resolve path: {}", e))?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err("path escapes workspace boundary (symlink)".to_string());
+        }
+        return Ok(canonical);
+    }
+
+    Ok(joined)
+}
+
+#[tauri::command]
+pub async fn read_file_text(workspace: String, relative_path: String) -> Result<String, String> {
+    let full = safe_resolve(&workspace, &relative_path)?;
+    tokio::task::spawn_blocking(move || {
+        std::fs::read_to_string(&full).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn write_file_text(workspace: String, relative_path: String, content: String) -> Result<(), String> {
+    let full = safe_resolve(&workspace, &relative_path)?;
+    tokio::task::spawn_blocking(move || {
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&full, &content).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+const MAX_LIST_ENTRIES: usize = 5000;
+
+#[tauri::command]
+pub async fn list_directory(workspace: String, relative_path: String, recursive: bool) -> Result<Vec<FileEntry>, String> {
+    let full = safe_resolve(&workspace, &relative_path)?;
+    tokio::task::spawn_blocking(move || {
+        if !full.is_dir() {
+            return Err("not a directory".to_string());
+        }
+        let mut entries = Vec::new();
+        list_dir_inner(&full, &full, recursive, &mut entries)?;
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn list_dir_inner(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    recursive: bool,
+    entries: &mut Vec<FileEntry>,
+) -> Result<(), String> {
+    if entries.len() >= MAX_LIST_ENTRIES {
+        return Ok(());
+    }
+    let read_dir = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for entry in read_dir {
+        if entries.len() >= MAX_LIST_ENTRIES {
+            break;
+        }
+        let entry = entry.map_err(|e| e.to_string())?;
+        // Use symlink_metadata to detect symlinks without following them
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip hidden files, common large directories, and symlinks
+        if name.starts_with('.')
+            || name == "node_modules"
+            || name == "target"
+            || name == "__pycache__"
+        {
+            continue;
+        }
+
+        let rel_path = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(&entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        entries.push(FileEntry {
+            name,
+            path: rel_path,
+            is_dir: metadata.is_dir(),
+            size: metadata.len(),
+        });
+
+        if recursive && metadata.is_dir() {
+            list_dir_inner(root, &entry.path(), true, entries)?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn file_stat(workspace: String, relative_path: String) -> Result<FileStat, String> {
+    let full = safe_resolve(&workspace, &relative_path)?;
+    tokio::task::spawn_blocking(move || match std::fs::metadata(&full) {
+        Ok(meta) => Ok(FileStat {
+            exists: true,
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(FileStat {
+            exists: false,
+            is_dir: false,
+            size: 0,
+        }),
+        Err(e) => Err(e.to_string()),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── Existing tar/upload/download commands ──
+
 #[tauri::command]
 pub async fn select_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;

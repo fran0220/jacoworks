@@ -1,6 +1,7 @@
-import { AlertCircle, Bug, ChevronDown, Cloud, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
+import { AlertCircle, ArrowDownCircle, Bug, CheckCircle2, ChevronDown, Cloud, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
 import { useRef, useState } from "react";
 import type { OcConnectionPhase } from "../hooks/use-cowork-connection";
+import type { UpdatePhase } from "../hooks/use-updater";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { getUser, logout } from "../lib/auth";
 
@@ -39,6 +40,9 @@ export default function TopBar({
   debugEnabled,
   showRpcLog,
   onToggleRpcLog,
+  updatePhase,
+  updateVersion,
+  onInstallUpdate,
 }: {
   title: string;
   sidebarOpen: boolean;
@@ -50,6 +54,9 @@ export default function TopBar({
   debugEnabled: boolean;
   showRpcLog: boolean;
   onToggleRpcLog: () => void;
+  updatePhase: UpdatePhase;
+  updateVersion: string | null;
+  onInstallUpdate: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -87,6 +94,29 @@ export default function TopBar({
         <h2 className="title">{title}</h2>
       </div>
       <div className="right">
+        {updatePhase === "available" && (
+          <button
+            type="button"
+            className="btn-update"
+            title={`新版本 ${updateVersion} 可用`}
+            onClick={onInstallUpdate}
+          >
+            <ArrowDownCircle size={14} />
+            <span className="btn-update-label">{updateVersion}</span>
+          </button>
+        )}
+        {updatePhase === "downloading" && (
+          <span className="btn-update btn-update--downloading" title="正在下载更新">
+            <LoaderCircle size={14} className="spinning" />
+            <span className="btn-update-label">更新中</span>
+          </span>
+        )}
+        {updatePhase === "done" && (
+          <span className="btn-update btn-update--done" title="更新完成，请重启应用">
+            <CheckCircle2 size={14} />
+            <span className="btn-update-label">重启生效</span>
+          </span>
+        )}
         {debugEnabled && (
           <button
             type="button"

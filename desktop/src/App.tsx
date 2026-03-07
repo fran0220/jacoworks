@@ -95,6 +95,11 @@ export default function App() {
     }
   }, [currentSession?.id, currentSession?.type, ocConnection.connect]);
 
+  // Sync active session workspace path to cowork file handler
+  useEffect(() => {
+    ocConnection.setWorkspacePath(currentSession?.workspacePath ?? "");
+  }, [currentSession?.workspacePath, ocConnection.setWorkspacePath]);
+
   // Auto-open panel when cloud becomes ready
   useEffect(() => {
     if (ocConnection.phase === "ready") {
@@ -191,23 +196,6 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      {updater.phase === "available" && updater.info && (
-        <div className="update-banner">
-          <span>新版本 {updater.info.version} 可用</span>
-          <button onClick={updater.doInstall}>下载更新</button>
-        </div>
-      )}
-      {updater.phase === "downloading" && (
-        <div className="update-banner">
-          <LoaderCircle size={14} className="spinning" />
-          <span>正在下载更新…</span>
-        </div>
-      )}
-      {updater.phase === "done" && (
-        <div className="update-banner update-banner--done">
-          <span>更新完成，请重启应用生效</span>
-        </div>
-      )}
       {isSidebarOpen && isMobileLike && (
         <button
           type="button"
@@ -254,6 +242,9 @@ export default function App() {
           debugEnabled={debugEnabled}
           showRpcLog={showRpcLog}
           onToggleRpcLog={() => setShowRpcLog(v => !v)}
+          updatePhase={updater.phase}
+          updateVersion={updater.info?.version ?? null}
+          onInstallUpdate={updater.doInstall}
         />
 
         <div className={`content-row${coworkOpen ? " oc-drawer-active" : ""}`}>
