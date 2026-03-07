@@ -82,7 +82,7 @@ jobs:
             for file in "${dir}"*; do
               [ -f "$file" ] || continue
               FILENAME=$(basename "$file")
-              case "$FILENAME" in .platform) continue;; esac
+              case "$FILENAME" in platform.txt) continue;; esac
 
               FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
               COS_PATH="cos://${COS_BUCKET}/releases/${VERSION}/${FILENAME}"
@@ -136,13 +136,13 @@ jobs:
           for dir in artifacts/desktop-*/; do
             [ -d "$dir" ] || continue
             PLATFORM=""
-            [ -f "${dir}.platform" ] && PLATFORM=$(cat "${dir}.platform" | tr -d '[:space:]')
+            [ -f "${dir}platform.txt" ] && PLATFORM=$(cat "${dir}platform.txt" | tr -d '[:space:]')
             [ -z "$PLATFORM" ] && continue
 
             for file in "${dir}"*; do
               [ -f "$file" ] || continue
               FILENAME=$(basename "$file")
-              case "$FILENAME" in *.sig|.platform) continue;; esac
+              case "$FILENAME" in *.sig|platform.txt) continue;; esac
 
               FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
               DOWNLOAD_URL="${BASE_URL}/${FILENAME}"
