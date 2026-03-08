@@ -21,6 +21,7 @@ src/
   services/heartbeat.ts        心跳服务 (sidecar 模式默认关闭)
   services/cron.ts             定时任务服务 (cron/at/every 三种调度 + isolated session + JSONL 历史 + 指数退避)
   tools/powershell.ts          PowerShell fallback (仅 Windows, 环境自修复)
+  lib/logger.ts                结构化 JSON 日志 (stderr, level/msg/ts/trace_id/session_id/user_id, LOG_LEVEL 过滤)
   lib/embedding.ts             OpenAI Embedding API 客户端 (text-embedding-3-small)
   lib/memory-store.ts          SQLite + FTS5 记忆存储 (BM25 + CJK 分词 + 向量 rerank + 迁移)
   lib/{daily-log,prompt-queue}.ts
@@ -54,6 +55,15 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 **prompt 字段**: `message` `session_id` `model` `user_id` `workspace?` `restricted` `streaming_behavior`
 
 **事件** (stdout JSON lines): `response` `session_event` `error` `done` `ready` (后台服务就绪后发送, 含技能列表)
+
+## 日志与可观测性
+
+- **结构化 JSON 日志** (`lib/logger.ts`): 所有日志输出到 stderr，格式 `{"level","msg","ts","trace_id","session_id","user_id",...}`
+- **LOG_LEVEL**: 环境变量控制最低日志级别 (debug/info/warn/error，默认 info)
+- **trace_id**: 每个 prompt 请求携带 trace_id (= RPC id)，贯穿整个处理链路
+- **prompt 生命周期日志**: started → thinking → tool_execution → compaction → completed/failed，含 duration_ms
+- **In-flight 锁安全**: `clearAllInFlight()` 在 WS 断开时清除所有未完成请求锁，防止重连后 "prompt already in-flight" 错误
+- **Prompt 安全超时**: `PROMPT_TIMEOUT_MS=300000` (5 分钟)，超时自动释放 in-flight 锁
 
 ## 模型
 

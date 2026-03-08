@@ -108,10 +108,11 @@ type openclawResetMode struct {
 }
 
 type openclawGateway struct {
-	Port      int                    `json:"port"`
-	Bind      string                 `json:"bind"`
-	Auth      openclawAuth           `json:"auth"`
-	ControlUI openclawControlUI      `json:"controlUi"`
+	Port           int                    `json:"port"`
+	Bind           string                 `json:"bind"`
+	Auth           openclawAuth           `json:"auth"`
+	ControlUI      openclawControlUI      `json:"controlUi"`
+	TrustedProxies []string               `json:"trustedProxies,omitempty"`
 }
 
 type openclawAuth struct {
@@ -120,7 +121,8 @@ type openclawAuth struct {
 }
 
 type openclawControlUI struct {
-	AllowedOrigins []string `json:"allowedOrigins"`
+	AllowedOrigins                  []string `json:"allowedOrigins"`
+	DangerouslyDisableDeviceAuth    bool     `json:"dangerouslyDisableDeviceAuth,omitempty"`
 }
 
 // GenerateConfig generates openclaw.json content as JSON bytes.
@@ -180,7 +182,9 @@ func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]
 					"http://127.0.0.1:18789",
 					fmt.Sprintf("http://%s:%d", oc.client.hostIP, oc.client.agentPort),
 				},
+				DangerouslyDisableDeviceAuth: true,
 			},
+			TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
 		},
 	}
 
@@ -350,10 +354,15 @@ func (oc *OpenClawClient) EnsureRunning(ctx context.Context, info *store.Contain
 }
 
 // UpstreamAddr returns the WebSocket upstream address for an OpenClaw container.
+// Uses the container's own IP from DB if available, falling back to the docker client's host IP.
 func (oc *OpenClawClient) UpstreamAddr(info *store.ContainerInfo) string {
+	host := oc.client.hostIP
+	if info.ContainerIP != "" {
+		host = info.ContainerIP
+	}
 	port := info.HostPort
 	if port == 0 {
 		port = oc.client.agentPort
 	}
-	return fmt.Sprintf("ws://%s:%d", oc.client.hostIP, port)
+	return fmt.Sprintf("ws://%s:%d", host, port)
 }

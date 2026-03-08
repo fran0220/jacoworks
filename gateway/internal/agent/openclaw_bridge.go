@@ -105,6 +105,20 @@ func (s *ocSession) run() {
 	s.configureReadLoop(s.downstream)
 	s.configureReadLoop(s.upstream)
 
+	// Log close frames to diagnose which side initiates closure
+	s.upstream.SetCloseHandler(func(code int, text string) error {
+		log.Warn().Int("code", code).Str("text", text).Str("user_id", s.userID).Msg("openclaw bridge: upstream sent close frame")
+		msg := websocket.FormatCloseMessage(code, text)
+		_ = s.downstream.WriteControl(websocket.CloseMessage, msg, time.Now().Add(writeWait))
+		return nil
+	})
+	s.downstream.SetCloseHandler(func(code int, text string) error {
+		log.Warn().Int("code", code).Str("text", text).Str("user_id", s.userID).Msg("openclaw bridge: downstream sent close frame")
+		msg := websocket.FormatCloseMessage(code, text)
+		_ = s.upstream.WriteControl(websocket.CloseMessage, msg, time.Now().Add(writeWait))
+		return nil
+	})
+
 	// Upstream (OpenClaw) → downstream (webchat)
 	go s.pumpUpToDown()
 
@@ -168,6 +182,15 @@ func (s *ocSession) pumpDownToUp() {
 			s.freezer.Touch(s.container)
 		}
 
+		// Debug: log downstream frames to diagnose handshake issues
+		if msgType == websocket.TextMessage {
+			preview := string(msg)
+			if len(preview) > 200 {
+				preview = preview[:200]
+			}
+			log.Debug().Str("user_id", s.userID).Int("len", len(msg)).Str("preview", preview).Msg("openclaw bridge: down→up frame")
+		}
+
 		if err := s.writeUpstream(msgType, msg); err != nil {
 			log.Debug().Err(err).Str("user_id", s.userID).Msg("openclaw bridge: upstream write error")
 			return
@@ -190,6 +213,15 @@ func (s *ocSession) pumpUpToDown() {
 
 		if s.freezer != nil {
 			s.freezer.Touch(s.container)
+		}
+
+		// Debug: log upstream frames to diagnose handshake issues
+		if msgType == websocket.TextMessage {
+			preview := string(msg)
+			if len(preview) > 200 {
+				preview = preview[:200]
+			}
+			log.Debug().Str("user_id", s.userID).Int("len", len(msg)).Str("preview", preview).Msg("openclaw bridge: up→down frame")
 		}
 
 		if err := s.writeDownstream(msgType, msg); err != nil {

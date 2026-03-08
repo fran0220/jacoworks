@@ -1,5 +1,4 @@
 import type { StreamBlock } from "../types";
-import { extractText } from "./message-extract";
 import { applyToolEvent, type ToolApplyResult } from "./tool-stream";
 
 export interface ParsedEvent {
@@ -116,9 +115,10 @@ function parseAgentEvent(payload: Record<string, unknown>): ParsedEvent {
 
 function parseChatEvent(payload: Record<string, unknown>): ParsedEvent {
   const state = asString(payload.state).toLowerCase();
+  // Ignore chat deltas — we already get token-level text from agent stream events.
+  // Using both would cause duplicate/doubled text in the UI.
   if (state === "delta") {
-    const text = extractText(payload.message);
-    return text ? { kind: "chat_delta", text } : { kind: "ignore" };
+    return { kind: "ignore" };
   }
   if (state === "final" || state === "aborted") {
     return { kind: "done", message: payload.message };
