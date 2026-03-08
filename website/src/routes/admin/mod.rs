@@ -3,6 +3,7 @@ pub mod containers;
 pub mod dashboard;
 pub mod feedback;
 pub mod invites;
+pub mod logs;
 pub mod releases;
 pub mod settings;
 pub mod skills;
@@ -48,6 +49,7 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/feedback/{id}/reply", post(feedback::reply))
         .route("/feedback/{id}/status", post(feedback::update_status))
         .route("/audit", get(audit::list))
+        .route("/logs", get(logs::index))
         .route("/settings", get(settings::index).post(settings::update))
         .route("/skills", get(skills::list))
         .route("/skills/edit", get(skills::edit_form))

@@ -3,6 +3,24 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LogEntry {
+    pub level: String,
+    pub msg: String,
+    #[serde(default)]
+    pub ts: String,
+    #[serde(default)]
+    pub trace_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub service: String,
+    #[serde(default)]
+    pub raw: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SystemSetting {
     pub key: String,
     pub value: String,
@@ -125,5 +143,46 @@ impl GatewayClient {
             )));
         }
         Ok(())
+    }
+
+    pub async fn get_logs(
+        &self,
+        service: &str,
+        container: Option<&str>,
+        level: Option<&str>,
+        search: Option<&str>,
+        lines: Option<u32>,
+    ) -> Result<Vec<LogEntry>, AppError> {
+        let mut url = format!("{}/api/admin/logs?service={}", self.base_url, service);
+        if let Some(c) = container {
+            url.push_str(&format!("&container={}", c));
+        }
+        if let Some(l) = level {
+            url.push_str(&format!("&level={}", l));
+        }
+        if let Some(s) = search {
+            url.push_str(&format!("&search={}", urlencoding::encode(s)));
+        }
+        if let Some(n) = lines {
+            url.push_str(&format!("&lines={}", n));
+        }
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.admin_token))
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("fetch logs failed: {e}")))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "fetch logs failed ({status}): {body}"
+            )));
+        }
+        resp.json::<Vec<LogEntry>>()
+            .await
+            .map_err(|e| AppError::Internal(format!("parse logs failed: {e}")))
     }
 }

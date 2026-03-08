@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS containers (
     cpu_limit       INT NOT NULL DEFAULT 1,
     memory_mb       INT NOT NULL DEFAULT 1024,
     disk_mb         INT NOT NULL DEFAULT 5120,
+    container_type  text        NOT NULL DEFAULT 'vm-agent',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
