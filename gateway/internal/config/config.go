@@ -15,11 +15,21 @@ type Config struct {
 	Server    ServerConfig    `yaml:"server"`
 	Auth      AuthConfig      `yaml:"auth"`
 	Docker    DockerConfig    `yaml:"docker"`
+	OpenClaw  OpenClawConfig  `yaml:"openclaw"`
 	LLM       LLMConfig       `yaml:"llm"`
 	Database  DatabaseConfig  `yaml:"database"`
 	GitHub    GitHubConfig    `yaml:"github"`
 	ChatAgent ChatAgentConfig `yaml:"chat_agent"`
 	PostHog   PostHogConfig   `yaml:"posthog"`
+}
+
+type OpenClawConfig struct {
+	SSHTarget string `yaml:"ssh_target"`
+	Image     string `yaml:"image"`
+	Port      int    `yaml:"port"`
+	HostIP    string `yaml:"host_ip"`
+	BasePort  int    `yaml:"base_port"`
+	DataRoot  string `yaml:"data_root"`
 }
 
 type GitHubConfig struct {
@@ -107,6 +117,18 @@ func Load(path string) (*Config, error) {
 	if cfg.Docker.Image == "" {
 		cfg.Docker.Image = "jacoworks/vm-agent:latest"
 	}
+	if cfg.OpenClaw.Port == 0 {
+		cfg.OpenClaw.Port = 18789
+	}
+	if cfg.OpenClaw.BasePort == 0 {
+		cfg.OpenClaw.BasePort = 18800
+	}
+	if cfg.OpenClaw.Image == "" {
+		cfg.OpenClaw.Image = "ghcr.io/openclaw/openclaw:latest"
+	}
+	if cfg.OpenClaw.DataRoot == "" {
+		cfg.OpenClaw.DataRoot = "/srv/jacoworks/openclaw"
+	}
 
 	applyEnvOverrides(cfg)
 	if err := validateRequired(cfg); err != nil {
@@ -166,6 +188,28 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_DOCKER_GATEWAY_TOKEN"); v != "" {
 		cfg.Docker.GatewayToken = v
+	}
+	if v := os.Getenv("GATEWAY_OPENCLAW_SSH_TARGET"); v != "" {
+		cfg.OpenClaw.SSHTarget = v
+	}
+	if v := os.Getenv("GATEWAY_OPENCLAW_IMAGE"); v != "" {
+		cfg.OpenClaw.Image = v
+	}
+	if v := os.Getenv("GATEWAY_OPENCLAW_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.OpenClaw.Port = port
+		}
+	}
+	if v := os.Getenv("GATEWAY_OPENCLAW_HOST_IP"); v != "" {
+		cfg.OpenClaw.HostIP = v
+	}
+	if v := os.Getenv("GATEWAY_OPENCLAW_BASE_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.OpenClaw.BasePort = port
+		}
+	}
+	if v := os.Getenv("GATEWAY_OPENCLAW_DATA_ROOT"); v != "" {
+		cfg.OpenClaw.DataRoot = v
 	}
 	if v := os.Getenv("GATEWAY_DATABASE_URL"); v != "" {
 		cfg.Database.URL = v

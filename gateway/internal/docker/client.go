@@ -459,6 +459,14 @@ func (c *Client) PushSkillFiles(containerName string, files map[string]string) e
 	return nil
 }
 
+// ContainerLogs returns the last N lines of stderr logs from a container.
+func (c *Client) ContainerLogs(containerName string, lines int) (string, error) {
+	if lines <= 0 || lines > 1000 {
+		lines = 200
+	}
+	return c.docker("logs", "--tail", fmt.Sprintf("%d", lines), containerName)
+}
+
 // WaitForHealthPort polls the agent health endpoint via host port mapping until ready.
 func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

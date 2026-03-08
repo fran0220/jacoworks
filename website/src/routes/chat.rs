@@ -12,12 +12,14 @@ struct ChatTemplate {
     gateway_url: String,
     user_name: String,
     auth_token: String,
+    openclaw_token: String,
     posthog_key: String,
     posthog_host: String,
 }
 
 /// Chat page — serves the React SPA with injected auth context.
 /// Cookie token doubles as the Gateway auth token (shared DB).
+/// For OpenClaw containers, also injects the container_token for in-band auth.
 pub async fn page(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -30,10 +32,22 @@ pub async fn page(
         .unwrap_or(&state.config.gateway.url)
         .to_string();
 
+    // Look up OpenClaw container token for this user (empty if vm-agent or no container)
+    let openclaw_token: String = sqlx::query_scalar(
+        "SELECT container_token FROM containers WHERE user_id = $1 AND container_type = 'openclaw'",
+    )
+    .bind(&auth.user.id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+
     render_template(&ChatTemplate {
         gateway_url,
         user_name: auth.user.name.clone(),
         auth_token: auth.token,
+        openclaw_token,
         posthog_key: state.config.posthog.api_key.clone(),
         posthog_host: state.config.posthog.host.clone(),
     })

@@ -4,12 +4,14 @@ export interface ContainerStatus {
   provisioned: boolean;
   container_name?: string;
   container_ip?: string;
+  container_type?: string;
+  container_token?: string;
 }
 
 export interface ProvisionResult {
   status: "ready" | "provisioning";
   container_name: string;
-  ip?: string;
+  container_token?: string;
 }
 
 async function apiFetch(
@@ -35,7 +37,10 @@ export async function getContainerStatus(): Promise<ContainerStatus> {
 }
 
 export async function provisionContainer(): Promise<ProvisionResult> {
-  const res = await apiFetch("/api/cowork/provision", { method: "POST" });
+  const res = await apiFetch("/api/cowork/provision", {
+    method: "POST",
+    body: JSON.stringify({ container_type: "openclaw" }),
+  });
   if (res.status < 200 || res.status > 202) throw new Error("容器分配失败");
   return JSON.parse(res.body);
 }

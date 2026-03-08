@@ -9,6 +9,8 @@ declare global {
     __GATEWAY_URL__?: string;
     __AUTH_TOKEN__?: string;
     __USER_NAME__?: string;
+    __OPENCLAW_TOKEN__?: string;
+    __OPENCLAW_GATEWAY_TOKEN__?: string;
     __POSTHOG_KEY__?: string;
     __POSTHOG_HOST__?: string;
   }

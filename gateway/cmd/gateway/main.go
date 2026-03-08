@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -173,6 +175,29 @@ func main() {
 		}
 	})
 
+	// OpenClaw Docker client + freezer (separate host, "oc-" prefix)
+	var ocClient *dockerpkg.OpenClawClient
+	var ocFreezer *dockerpkg.Freezer
+	if cfg.OpenClaw.SSHTarget != "" {
+		ocDockerClient := dockerpkg.NewClient(
+			cfg.OpenClaw.SSHTarget,
+			cfg.OpenClaw.Image,
+			"",
+			cfg.OpenClaw.Port,
+			cfg.OpenClaw.HostIP,
+		)
+		ocClient = dockerpkg.NewOpenClawClient(ocDockerClient, cfg.OpenClaw.DataRoot, cfg.GetLLM)
+		ocFreezer = dockerpkg.NewFreezerWithPrefix(ocDockerClient, "oc-", 30*time.Minute, 2*time.Hour, 5*time.Minute)
+		ocFreezer.Start()
+		defer ocFreezer.Stop()
+		ocFreezer.SetOnAfterFreeze(func(containerName string) {
+			if err := s.UpdateContainerStatusByName(context.Background(), containerName, "stopped"); err != nil {
+				log.Error().Err(err).Str("container", containerName).Msg("openclaw idle stop: update status failed")
+			}
+		})
+		log.Info().Str("ssh_target", cfg.OpenClaw.SSHTarget).Str("image", cfg.OpenClaw.Image).Msg("openclaw backend initialized")
+	}
+
 	// Initialize Goth providers
 	if cfg.Auth.FeishuClientID != "" {
 		baseURL := cfg.Server.PublicURL
@@ -204,6 +229,12 @@ func main() {
 		ph.CaptureEvent(userID, event, properties)
 	})
 	sseHandler := agent.NewSSEHandler(channelPool)
+
+	// OpenClaw bridge for cloud containers
+	if ocClient != nil {
+		openclawBridge := agent.NewOpenClawBridge(s, ocClient, ocFreezer)
+		wsHandler.SetOpenClawBridge(openclawBridge)
+	}
 
 	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
@@ -248,7 +279,7 @@ func main() {
 
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
-	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, dockerClient, auditLogger, cfg))))
+	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, dockerClient, ocClient, auditLogger, cfg))))
 
 	// Authenticated: cron announce (vm-agent → feishu delivery)
 	mux.Handle("POST /api/cron/announce", authMiddleware.Authenticate(http.HandlerFunc(feishuBotHandler.HandleCronAnnounce)))
@@ -303,6 +334,9 @@ func main() {
 	// Admin: settings
 	mux.Handle("GET /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(getSettingsHandler(s)))))
 	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger, feishuBotClient, ghClient, ph)))))
+
+	// Admin: logs
+	mux.Handle("GET /api/admin/logs", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(adminLogsHandler(dockerClient)))))
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -479,7 +513,7 @@ func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, a
 		containerName := containerNameForUser(req.UserID)
 		hostPort := allocateHostPort(r.Context(), s, req.UserID)
 
-		if err := s.CreateContainer(r.Context(), req.UserID, containerName, containerToken, hostPort); err != nil {
+		if err := s.CreateContainer(r.Context(), req.UserID, containerName, containerToken, hostPort, "vm-agent"); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
 			return
 		}
@@ -693,16 +727,26 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 			})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{
+		resp := map[string]interface{}{
 			"provisioned":    true,
 			"container_name": info.ContainerName,
 			"container_ip":   info.ContainerIP,
-		})
+			"container_type": info.ContainerType,
+		}
+		if info.ContainerType == "openclaw" {
+			resp["container_token"] = info.ContainerToken
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
-// selfProvisionHandler allows a user to provision their own container for cowork mode.
-func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
+// selfProvisionHandler allows a user to provision their own container.
+// Accepts optional container_type in request body: "vm-agent" (default) or "openclaw".
+func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, ocClient *dockerpkg.OpenClawClient, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
+	type provisionBody struct {
+		ContainerType string `json:"container_type"`
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -710,13 +754,35 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, al *au
 			return
 		}
 
+		var body provisionBody
+		_ = json.NewDecoder(r.Body).Decode(&body) // empty body is fine → defaults to vm-agent
+
+		containerType := body.ContainerType
+		if containerType == "" {
+			containerType = "vm-agent"
+		}
+		if containerType != "vm-agent" && containerType != "openclaw" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid container_type"})
+			return
+		}
+
+		if containerType == "openclaw" && ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
 		// Check if already provisioned
 		info, err := s.GetContainerInfo(r.Context(), user.ID)
 		if err == nil && info.ContainerIP != "" {
-			writeJSON(w, http.StatusOK, map[string]interface{}{
+			resp := map[string]interface{}{
 				"status":         "ready",
 				"container_name": info.ContainerName,
-			})
+				"container_type": info.ContainerType,
+			}
+			if info.ContainerType == "openclaw" {
+				resp["container_token"] = info.ContainerToken
+			}
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 
@@ -725,63 +791,92 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, al *au
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate container token"})
 			return
 		}
-		containerName := containerNameForUser(user.ID)
-		hostPort := allocateHostPort(r.Context(), s, user.ID)
 
-		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken, hostPort); err != nil {
+		var containerName string
+		var hostPort int
+
+		if containerType == "openclaw" {
+			containerName = openClawContainerName(user.ID)
+			hostPort = allocateOpenClawPort(r.Context(), s, user.ID)
+		} else {
+			containerName = containerNameForUser(user.ID)
+			hostPort = allocateHostPort(r.Context(), s, user.ID)
+		}
+
+		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken, hostPort, containerType); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
 			return
 		}
 
-		envVars := containerEnvVars(cfg)
-
-		// Respond immediately — provisioning runs in background
 		al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
-		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		resp := map[string]interface{}{
 			"status":         "provisioning",
 			"container_name": containerName,
-		})
+			"container_type": containerType,
+		}
+		if containerType == "openclaw" {
+			resp["container_token"] = containerToken
+		}
+		writeJSON(w, http.StatusAccepted, resp)
 
 		userID := user.ID
-		go func() {
-			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars, hostPort)
-			if err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision failed")
-				return
-			}
-			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer bgCancel()
-			if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken, hostPort); err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision: persist failed")
-				return
-			}
-			log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async self-provision complete")
+		if containerType == "openclaw" {
+			go func() {
+				ip, err := ocClient.Provision(containerName, userID, containerToken, hostPort)
+				if err != nil {
+					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision failed")
+					return
+				}
+				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer bgCancel()
+				if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken, hostPort); err != nil {
+					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision: persist failed")
+					return
+				}
+				log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async openclaw provision complete")
+			}()
+		} else {
+			envVars := containerEnvVars(cfg)
+			go func() {
+				ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars, hostPort)
+				if err != nil {
+					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision failed")
+					return
+				}
+				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer bgCancel()
+				if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken, hostPort); err != nil {
+					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision: persist failed")
+					return
+				}
+				log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async self-provision complete")
 
-			// Push memory + skills to newly provisioned container
-			bgCtx2 := context.Background()
-			memFiles, err := s.GetAllMemoryFiles(bgCtx2, userID)
-			if err == nil && len(memFiles) > 0 {
-				fileMap := make(map[string]string, len(memFiles))
-				for _, f := range memFiles {
-					fileMap[f.FilePath] = f.Content
-				}
-				if err := dockerClient.PushMemoryFiles(containerName, fileMap); err != nil {
-					log.Error().Err(err).Str("container", containerName).Msg("provision: push memory failed")
-				}
-			}
-			for _, owner := range []string{"system", userID} {
-				skillFiles, err := s.GetSkillFiles(bgCtx2, owner)
-				if err == nil && len(skillFiles) > 0 {
-					fileMap := make(map[string]string, len(skillFiles))
-					for _, f := range skillFiles {
+				// Push memory + skills to newly provisioned vm-agent container
+				bgCtx2 := context.Background()
+				memFiles, err := s.GetAllMemoryFiles(bgCtx2, userID)
+				if err == nil && len(memFiles) > 0 {
+					fileMap := make(map[string]string, len(memFiles))
+					for _, f := range memFiles {
 						fileMap[f.FilePath] = f.Content
 					}
-					if err := dockerClient.PushSkillFiles(containerName, fileMap); err != nil {
-						log.Error().Err(err).Str("container", containerName).Msg("provision: push skills failed")
+					if err := dockerClient.PushMemoryFiles(containerName, fileMap); err != nil {
+						log.Error().Err(err).Str("container", containerName).Msg("provision: push memory failed")
 					}
 				}
-			}
-		}()
+				for _, owner := range []string{"system", userID} {
+					skillFiles, err := s.GetSkillFiles(bgCtx2, owner)
+					if err == nil && len(skillFiles) > 0 {
+						fileMap := make(map[string]string, len(skillFiles))
+						for _, f := range skillFiles {
+							fileMap[f.FilePath] = f.Content
+						}
+						if err := dockerClient.PushSkillFiles(containerName, fileMap); err != nil {
+							log.Error().Err(err).Str("container", containerName).Msg("provision: push skills failed")
+						}
+					}
+				}
+			}()
+		}
 	}
 }
 
@@ -1520,6 +1615,167 @@ func cronJobHistoryHandler() http.HandlerFunc {
 	}
 }
 
+func adminLogsHandler(dockerClient *dockerpkg.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		service := r.URL.Query().Get("service")
+		container := r.URL.Query().Get("container")
+		level := r.URL.Query().Get("level")
+		search := r.URL.Query().Get("search")
+		linesStr := r.URL.Query().Get("lines")
+
+		lines := 200
+		if linesStr != "" {
+			if n, err := strconv.Atoi(linesStr); err == nil && n > 0 && n <= 1000 {
+				lines = n
+			}
+		}
+
+		var rawLogs string
+		var err error
+
+		switch service {
+		case "agent":
+			if container == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "container parameter required for agent logs"})
+				return
+			}
+			rawLogs, err = dockerClient.ContainerLogs(container, lines)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("failed to fetch container logs: %v", err)})
+				return
+			}
+		case "gateway", "":
+			args := []string{
+				"-u", "jacoworks-gateway",
+				"--output=json",
+				"--no-pager",
+				"-n", fmt.Sprintf("%d", lines),
+			}
+			if since := r.URL.Query().Get("since"); since != "" {
+				args = append(args, "--since", since)
+			}
+			cmd := exec.Command("journalctl", args...)
+			out, cmdErr := cmd.CombinedOutput()
+			if cmdErr != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("journalctl failed: %v", cmdErr)})
+				return
+			}
+			rawLogs = string(out)
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "service must be 'gateway' or 'agent'"})
+			return
+		}
+
+		type LogEntry struct {
+			Level     string `json:"level"`
+			Msg       string `json:"msg"`
+			Ts        string `json:"ts"`
+			TraceID   string `json:"trace_id,omitempty"`
+			SessionID string `json:"session_id,omitempty"`
+			UserID    string `json:"user_id,omitempty"`
+			Service   string `json:"service,omitempty"`
+			Raw       string `json:"raw,omitempty"`
+		}
+
+		var entries []LogEntry
+		for _, line := range strings.Split(rawLogs, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			var entry map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				entries = append(entries, LogEntry{
+					Level: "info",
+					Msg:   line,
+					Raw:   line,
+				})
+				continue
+			}
+
+			le := LogEntry{}
+
+			if service == "gateway" || service == "" {
+				if msg, ok := entry["MESSAGE"].(string); ok {
+					var inner map[string]interface{}
+					if json.Unmarshal([]byte(msg), &inner) == nil {
+						le.Level = strVal(inner, "level")
+						le.Msg = strVal(inner, "message")
+						if le.Msg == "" {
+							le.Msg = strVal(inner, "msg")
+						}
+						le.TraceID = strVal(inner, "trace_id")
+						le.SessionID = strVal(inner, "session_id")
+						le.UserID = strVal(inner, "user_id")
+						le.Service = "gateway"
+						if ts, ok := entry["__REALTIME_TIMESTAMP"].(string); ok {
+							if tsInt, err := strconv.ParseInt(ts, 10, 64); err == nil {
+								le.Ts = time.Unix(0, tsInt*1000).UTC().Format(time.RFC3339Nano)
+							}
+						}
+					} else {
+						le.Level = "info"
+						le.Msg = msg
+						le.Service = "gateway"
+						le.Raw = msg
+					}
+				} else {
+					continue
+				}
+			} else {
+				le.Level = strVal(entry, "level")
+				le.Msg = strVal(entry, "msg")
+				le.Ts = strVal(entry, "ts")
+				le.TraceID = strVal(entry, "trace_id")
+				le.SessionID = strVal(entry, "session_id")
+				le.UserID = strVal(entry, "user_id")
+				le.Service = strVal(entry, "service")
+				if le.Service == "" {
+					le.Service = "vm-agent"
+				}
+			}
+
+			if level != "" && le.Level != level {
+				continue
+			}
+
+			if search != "" {
+				searchLower := strings.ToLower(search)
+				if !strings.Contains(strings.ToLower(le.Msg), searchLower) &&
+					!strings.Contains(strings.ToLower(le.TraceID), searchLower) &&
+					!strings.Contains(strings.ToLower(le.SessionID), searchLower) &&
+					!strings.Contains(strings.ToLower(le.UserID), searchLower) &&
+					!strings.Contains(strings.ToLower(le.Raw), searchLower) {
+					continue
+				}
+			}
+
+			entries = append(entries, le)
+		}
+
+		if entries == nil {
+			entries = []LogEntry{}
+		}
+
+		writeJSON(w, http.StatusOK, entries)
+	}
+}
+
+func strVal(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		switch t := v.(type) {
+		case string:
+			return t
+		case float64:
+			return fmt.Sprintf("%.0f", t)
+		default:
+			return fmt.Sprintf("%v", v)
+		}
+	}
+	return ""
+}
+
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -1580,6 +1836,11 @@ func containerNameForUser(userID string) string {
 	return "agent-" + hex.EncodeToString(sum[:8])
 }
 
+func openClawContainerName(userID string) string {
+	sum := sha256.Sum256([]byte(userID))
+	return "oc-" + hex.EncodeToString(sum[:8])
+}
+
 // allocateHostPort assigns a unique host port from the range [19000, 19999].
 // It uses a deterministic base from the user ID hash and probes for an unused port.
 func allocateHostPort(ctx context.Context, s *store.Store, userID string) int {
@@ -1589,6 +1850,12 @@ func allocateHostPort(ctx context.Context, s *store.Store, userID string) int {
 	// Simple approach: deterministic mapping. Collisions are rare with <1000 users.
 	// For production scale, query DB for used ports and find a free one.
 	return port
+}
+
+func allocateOpenClawPort(ctx context.Context, s *store.Store, userID string) int {
+	sum := sha256.Sum256([]byte(userID))
+	base := int(sum[0])<<8 | int(sum[1])
+	return 18800 + (base % 200) // Keep range small: 18800-18999
 }
 
 func isTerminal() bool {

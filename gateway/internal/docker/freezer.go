@@ -33,12 +33,17 @@ type Freezer struct {
 }
 
 func NewFreezer(client *Client, pauseTimeout, stopTimeout, checkInterval time.Duration) *Freezer {
+	return NewFreezerWithPrefix(client, "agent-", pauseTimeout, stopTimeout, checkInterval)
+}
+
+// NewFreezerWithPrefix creates a Freezer with a custom container name prefix.
+func NewFreezerWithPrefix(client *Client, prefix string, pauseTimeout, stopTimeout, checkInterval time.Duration) *Freezer {
 	return &Freezer{
 		client:       client,
 		pauseTimeout: pauseTimeout,
 		stopTimeout:  stopTimeout,
 		interval:     checkInterval,
-		prefix:       "agent-",
+		prefix:       prefix,
 		containers:   make(map[string]*containerState),
 		stopCh:       make(chan struct{}),
 	}

@@ -28,12 +28,24 @@ const toolMeta: Record<string, { label: string; doneLabel: string; icon: LucideI
   cron_manage: { label: "正在管理定时任务", doneLabel: "任务完成", icon: Clock3 },
 };
 
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 export default function ToolStatus({
   toolName,
   status = "running",
+  args,
+  output,
 }: {
   toolName: string;
   status?: "running" | "completed" | "error";
+  args?: unknown;
+  output?: string;
 }) {
   const meta = toolMeta[toolName] ?? {
     label: `正在使用 ${toolName}`,
@@ -56,6 +68,12 @@ export default function ToolStatus({
         <X size={12} className="tool-error-icon" />
       ) : (
         <Check size={12} className="tool-check-icon" />
+      )}
+      {(args !== undefined || output) && (
+        <div className="tool-detail">
+          {args !== undefined && <pre>{safeStringify(args)}</pre>}
+          {output && <pre>{output}</pre>}
+        </div>
       )}
     </div>
   );

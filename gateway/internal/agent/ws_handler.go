@@ -31,14 +31,21 @@ var wsClientUpgrader = websocket.Upgrader{
 type EventCallback func(userID, event string, properties map[string]interface{})
 
 // WSHandler exposes vm-agent events/commands over browser WebSocket with ticket auth.
+// For OpenClaw containers, it delegates to OpenClawBridge instead of ChannelPool.
 type WSHandler struct {
-	pool        *ChannelPool
-	ticketStore *TicketStore
-	onEvent     EventCallback
+	pool          *ChannelPool
+	ticketStore   *TicketStore
+	onEvent       EventCallback
+	openclawBridge *OpenClawBridge
 }
 
 func NewWSHandler(pool *ChannelPool, ticketStore *TicketStore, onEvent EventCallback) *WSHandler {
 	return &WSHandler{pool: pool, ticketStore: ticketStore, onEvent: onEvent}
+}
+
+// SetOpenClawBridge enables OpenClaw container support.
+func (h *WSHandler) SetOpenClawBridge(bridge *OpenClawBridge) {
+	h.openclawBridge = bridge
 }
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +65,49 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeWSHTTPJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired ticket"})
 		return
 	}
+
+	// Look up container info to determine backend type
+	info, err := h.pool.ContainerInfo(r.Context(), userID)
+	if err != nil {
+		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
+		return
+	}
+
+	// Dispatch to OpenClaw bridge for openclaw containers
+	if info.ContainerType == "openclaw" && h.openclawBridge != nil {
+		conn, err := wsClientUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Warn().Err(err).Str("user_id", userID).Msg("openclaw ws: upgrade failed")
+			return
+		}
+
+		if h.onEvent != nil {
+			h.onEvent(userID, "ws_oc_connected", map[string]interface{}{
+				"container":      info.ContainerName,
+				"container_type": "openclaw",
+			})
+		}
+
+		// EnsureRunning before handing off
+		if err := h.openclawBridge.EnsureRunning(r.Context(), info, userID); err != nil {
+			log.Error().Err(err).Str("container", info.ContainerName).Msg("openclaw ws: container unavailable")
+			writeWSError(conn, "container unavailable, try again")
+			conn.Close()
+			return
+		}
+
+		h.openclawBridge.ServeSession(conn, info, userID)
+
+		if h.onEvent != nil {
+			h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{
+				"container":      info.ContainerName,
+				"container_type": "openclaw",
+			})
+		}
+		return
+	}
+
+	// ── vm-agent path (existing) ──────────────────────────────────
 
 	lastSeq, err := parseWSLastSeq(r.URL.Query().Get("lastSeq"))
 	if err != nil {

@@ -298,6 +298,7 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 .tool-status {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.375rem;
   padding: 0.375rem 0;
   color: var(--text-muted);
@@ -319,6 +320,22 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 .tool-done { opacity: 0.6; }
 .tool-check-icon { color: #22c55e; }
 .tool-error-icon { color: var(--danger); }
+.tool-detail {
+  width: 100%;
+  margin-top: 0.5rem;
+  border-left: 2px solid var(--border);
+  padding-left: 0.5rem;
+}
+.tool-detail pre {
+  margin: 0.25rem 0;
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
 
 /* ===== Thinking Block ===== */
 .thinking-block {

@@ -31,6 +31,14 @@ docker:
   host_ip: "10.0.1.3"
   gateway_token: ""
 
+openclaw:
+  ssh_target: "root@192.168.31.162"
+  image: "ghcr.io/openclaw/openclaw:latest"
+  port: 18789
+  host_ip: "192.168.31.162"
+  base_port: 18800
+  data_root: "/srv/jacoworks/openclaw"
+
 chat_agent:
   url: "http://127.0.0.1:18790"
   token: ""

@@ -128,3 +128,65 @@
 2. 未被请求的 fallback 会增加复杂度与维护成本，且违背用户决策。
 
 **规则**: 用户明确要求单一路径切换时，只实现目标路径；任何兼容/降级逻辑都必须先征得用户同意。
+
+---
+
+## 2026-03-09: 云端容器解耦设计 — 核心设计理念确认
+
+**触发**: 评估 vm-agent 本地/云端解耦方案时，错误建议"多用户共享容器"和"多渠道接入"。
+
+**核心设计理念**:
+1. **每用户一容器**: 用户隔离在容器级别，这是 JAcoworks 的核心安全和隔离模型，不可妥协
+2. **云端入口 = webchat**: cloud-agent 的唯一入口是 webchat SPA，不需要多渠道适配
+3. **功能优先**: 拆包的目的是让云端能独立发展实际功能，不是过度架构设计
+
+**规则**:
+- 涉及容器架构时，始终以"每用户一容器"为前提，不要建议共享容器或多租户方案
+- 不要在没有需求的情况下建议多渠道/多入口扩展
+- 解耦方案应聚焦实际功能差异，不是架构美感
+- **不动现有代码**: 新建独立包，按需复用，不要重构现有工作的模块
+- **新增不替换**: cloud-agent 是新增的镜像/方案，网关同时支持 vm-agent 和 cloud-agent，不替换现有容器
+
+---
+
+## 2026-03-09: OpenClaw 透明代理的身份与 CORS 陷阱
+
+**触发**: E2E 测试 OpenClaw 桥接时，webchat client 用 `webchat` + `webchat` 身份连接被 OpenClaw 拒绝：`origin not allowed`。
+
+**根因**: OpenClaw 对 `webchat` client.id 强制检查 `gateway.controlUi.allowedOrigins`。网关 bridge 是服务端到服务端的 WS 连接，不带 Origin header，因此被拒。而 `gateway-client` + `backend` 身份绕过此检查。
+
+**关键发现**:
+1. **OpenClaw client.id 是枚举**: 必须是预定义值之一 (`webchat`, `gateway-client`, `cli`, `test` 等)，不接受任意字符串
+2. **client.mode 也是枚举**: `webchat`, `backend`, `cli`, `ui`, `node`, `probe`, `test`
+3. **网关 bridge 必须用 `gateway-client` / `backend`**: 服务端代理身份，绕过 CORS 检查
+4. **connect 协议版本**: `minProtocol: 3, maxProtocol: 3`（不是 1）
+5. **auth 结构**: 只有 `{token: "..."}`, 不接受 `mode`/`nonce` 等额外字段
+6. **webchat 前端直连 vs 网关代理**: 前端直连需 allowedOrigins 匹配；走网关代理则由网关以 gateway-client 身份中转
+
+**规则**:
+- OpenClaw 透明代理场景，网关始终以 `gateway-client` + `backend` 身份连接上游
+- webchat 前端发帧给网关 → 网关原样转发给 OpenClaw，身份验证在网关层完成（ticket auth）
+- 新增 OpenClaw 容器时，`allowedOrigins` 只需包含容器自身地址（localhost），网关连接不受此限制
+- 更新 openclaw-integration skill 的协议文档保持同步
+
+---
+
+## 2026-03-09: webchat = OpenClaw 专属，不接入 vm-agent
+
+**触发**: 分析 webchat 用户流程时，发现 webchat 的 `WSClient` 只包装 `OpenClawClient`，但没有明确的架构边界声明，导致 `config.ts` OPENCLAW_TOKEN 会 fallback 到 AUTH_TOKEN（安全隐患），`selfProvisionHandler` 硬编码 vm-agent（用户无法自助获得 OpenClaw 容器）。
+
+**明确架构边界**:
+- **webchat = OpenClaw 专属前端**: 只说 OpenClaw WS 协议，不接入 vm-agent
+- **桌面端 = vm-agent 专属**: 通过 sidecar RPC 或 /ws/agent 接入 vm-agent 容器
+- **网关 /ws/oc = 双后端分派**: 按 `container_type` 分派，但 webchat 用户自动分配 OpenClaw 容器
+
+**修复**:
+1. `config.ts`: OPENCLAW_TOKEN 不再 fallback 到 AUTH_TOKEN，空就是空
+2. `container.ts`: provision 请求发送 `container_type: "openclaw"`
+3. `selfProvisionHandler`: 接受 `container_type` 参数，openclaw 走 `ocClient.Provision`
+4. `containerStatusHandler`: 返回 `container_type` + openclaw 容器返回 `container_token`
+5. `EnsureRunning`: openclaw 容器 not_found 时自动 reprovision
+6. `ContainerPanel`: provision 成功后 reload 页面注入新 OPENCLAW_TOKEN
+7. AGENTS.md 和 webchat/AGENTS.md 明确 "OpenClaw 专属" 定位
+
+**规则**: webchat 和桌面端是两个独立产品入口，共享 UI 组件但连接协议完全不同。不要在 webchat 中加 vm-agent 兼容路径。

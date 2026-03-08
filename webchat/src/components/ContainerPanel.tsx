@@ -45,8 +45,16 @@ export default function ContainerPanel() {
       if (result.status === "ready") {
         await fetchStatus();
       } else {
-        // Start polling
-        pollTimer.current = window.setInterval(fetchStatus, 3000);
+        // Poll until container is ready, then reload page to inject new OPENCLAW_TOKEN
+        pollTimer.current = window.setInterval(async () => {
+          const s = await getContainerStatus();
+          if (s.provisioned) {
+            stopPolling();
+            setProvisioning(false);
+            // Reload page so Website re-injects __OPENCLAW_TOKEN__ with the new container_token
+            location.reload();
+          }
+        }, 3000);
       }
     } catch {
       setError("容器启动失败");
@@ -69,7 +77,7 @@ export default function ContainerPanel() {
     <div className="panel-container">
       <div className="panel-header">
         <Box size={16} />
-        <h3>容器管理</h3>
+        <h3>AI 容器</h3>
         <button className="panel-refresh-btn" onClick={fetchStatus} title="刷新">
           <RefreshCw size={14} />
         </button>
@@ -97,21 +105,15 @@ export default function ContainerPanel() {
         </div>
 
         {status?.provisioned && (
-          <>
-            <div className="container-info-row">
-              <span className="container-label">容器名称</span>
-              <span className="container-value">{status.container_name}</span>
-            </div>
-            <div className="container-info-row">
-              <span className="container-label">容器 IP</span>
-              <span className="container-value container-value--mono">{status.container_ip}</span>
-            </div>
-          </>
+          <div className="container-info-row">
+            <span className="container-label">容器</span>
+            <span className="container-value">{status.container_name}</span>
+          </div>
         )}
 
         {!status?.provisioned && !provisioning && (
           <button className="container-provision-btn" onClick={handleProvision}>
-            启动容器
+            启动 AI 容器
           </button>
         )}
       </div>

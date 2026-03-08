@@ -12,6 +12,7 @@ type ContainerInfo struct {
 	ContainerIP    string
 	ContainerToken string
 	HostPort       int
+	ContainerType  string // "vm-agent" | "openclaw"
 }
 
 type Container struct {
@@ -31,22 +32,22 @@ type Container struct {
 func (s *Store) GetContainerInfo(ctx context.Context, userID string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0)
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent')
 		 FROM containers WHERE user_id = $1`,
 		userID,
-	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort)
+	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType)
 	if err != nil {
 		return nil, fmt.Errorf("get container info: %w", err)
 	}
 	return info, nil
 }
 
-func (s *Store) CreateContainer(ctx context.Context, userID, containerName, containerToken string, hostPort int) error {
+func (s *Store) CreateContainer(ctx context.Context, userID, containerName, containerToken string, hostPort int, containerType string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO containers (user_id, container_name, container_token, host_port, status)
-		 VALUES ($1, $2, $3, $4, 'creating')
-		 ON CONFLICT (user_id) DO UPDATE SET container_name = $2, container_token = $3, host_port = $4`,
-		userID, containerName, containerToken, hostPort,
+		`INSERT INTO containers (user_id, container_name, container_token, host_port, container_type, status)
+		 VALUES ($1, $2, $3, $4, $5, 'creating')
+		 ON CONFLICT (user_id) DO UPDATE SET container_name = $2, container_token = $3, host_port = $4, container_type = $5`,
+		userID, containerName, containerToken, hostPort, containerType,
 	)
 	return err
 }

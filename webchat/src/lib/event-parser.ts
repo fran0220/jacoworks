@@ -1,95 +1,135 @@
 import type { StreamBlock } from "../types";
-
-/**
- * Parse a vm-agent WebSocket frame into state updates.
- * The real protocol sends:
- *   { event: "session_event", data: { type: "session_event", event: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "..." } } } }
- */
-
-interface AssistantMessageEvent {
-  type?: string;
-  delta?: string;
-}
-
-interface VMAgentEvent {
-  type?: string;
-  assistantMessageEvent?: AssistantMessageEvent;
-  toolName?: string;
-  toolCallId?: string;
-}
+import { extractText } from "./message-extract";
+import { applyToolEvent, type ToolApplyResult } from "./tool-stream";
 
 export interface ParsedEvent {
-  kind: "text_delta" | "thinking_start" | "thinking_delta" | "thinking_end" |
-    "tool_start" | "tool_end" | "done" | "error" | "proxy_ready" | "proxy_error" | "ignore";
+  kind:
+    | "text_delta"
+    | "chat_delta"
+    | "thinking_start"
+    | "thinking_delta"
+    | "thinking_end"
+    | "tool_start"
+    | "tool_update"
+    | "tool_end"
+    | "done"
+    | "error"
+    | "proxy_ready"
+    | "ignore";
   text?: string;
-  toolName?: string;
-  toolId?: string;
   error?: string;
+  message?: unknown;
+  toolId?: string;
+  toolName?: string;
+  toolArgs?: unknown;
+  toolOutput?: unknown;
+  toolError?: string;
 }
 
-export function parseFrame(frame: { event?: string; data?: Record<string, unknown> }): ParsedEvent {
-  const evt = frame.event || "";
-  const data = frame.data || {};
+export interface ApplyResult {
+  changed: boolean;
+  renderDelayMs?: number;
+}
 
-  if (evt === "proxy.ready") return { kind: "proxy_ready" };
-  if (evt === "proxy.error") return { kind: "proxy_error", error: String(data.error || "代理错误") };
-  if (evt === "done" || data.type === "done") return { kind: "done" };
-  if (evt === "error" || data.type === "error") return { kind: "error", error: String(data.error || data.message || "未知错误") };
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
 
-  // session_event contains the real agent events
-  if (evt === "session_event" || data.type === "session_event") {
-    const agentEvent = (data.event || data) as VMAgentEvent;
-    return parseAgentEvent(agentEvent);
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+export function parseFrame(frame: unknown): ParsedEvent {
+  const rec = asRecord(frame);
+  const type = asString(rec.type);
+
+  if (type === "proxy.ready") return { kind: "proxy_ready" };
+  if (type === "error" || type === "proxy.error") {
+    return { kind: "error", error: asString(rec.error || rec.message) || "未知错误" };
   }
 
-  // Legacy response format
-  if (evt === "response" || data.type === "response") {
-    const text = String(data.text || data.content || data.message || "");
-    if (text) return { kind: "text_delta", text };
+  if (type === "res" && rec.ok === false) {
+    const err = asRecord(rec.error);
+    return { kind: "error", error: asString(err.message) || "请求失败" };
+  }
+
+  if (type === "event") {
+    const eventName = asString(rec.event);
+    const payload = asRecord(rec.payload);
+    if (eventName === "connect.challenge") return { kind: "ignore" };
+    if (eventName === "agent") return parseAgentEvent(payload);
+    if (eventName === "chat") return parseChatEvent(payload);
+    return { kind: "ignore" };
   }
 
   return { kind: "ignore" };
 }
 
-function parseAgentEvent(event: VMAgentEvent): ParsedEvent {
-  if (!event || !event.type) return { kind: "ignore" };
+function parseAgentEvent(payload: Record<string, unknown>): ParsedEvent {
+  const stream = asString(payload.stream);
+  const data = asRecord(payload.data);
 
-  // Legacy simplified format: { event: "text", data: "..." }
-  if (event.type === "text" && typeof (event as Record<string, unknown>).data === "string") {
-    return { kind: "text_delta", text: String((event as Record<string, unknown>).data) };
+  if (stream === "text") {
+    const text = asString(data.text || data.delta);
+    return text ? { kind: "text_delta", text } : { kind: "ignore" };
   }
 
-  if (event.type === "message_update") {
-    const ame = event.assistantMessageEvent;
-    if (!ame) return { kind: "ignore" };
-    switch (ame.type) {
-      case "text_delta":
-        return { kind: "text_delta", text: ame.delta || "" };
-      case "thinking_start":
-        return { kind: "thinking_start" };
-      case "thinking_delta":
-        return { kind: "thinking_delta", text: ame.delta || "" };
-      case "thinking_end":
-        return { kind: "thinking_end" };
-      default:
-        return { kind: "ignore" };
+  if (stream === "thinking" || stream === "reasoning") {
+    const phase = asString(data.phase).toLowerCase();
+    if (phase === "start") return { kind: "thinking_start" };
+    if (phase === "end" || phase === "stop" || phase === "final") return { kind: "thinking_end" };
+    const text = asString(data.text || data.delta || data.thinking);
+    return text ? { kind: "thinking_delta", text } : { kind: "ignore" };
+  }
+
+  if (stream === "tool") {
+    const phase = asString(data.phase).toLowerCase();
+    const toolId = asString(data.toolCallId) || `tool-${Date.now()}`;
+    const toolName = asString(data.name) || "tool";
+
+    if (phase === "start") {
+      return { kind: "tool_start", toolId, toolName, toolArgs: data.args };
+    }
+    if (phase === "update") {
+      return { kind: "tool_update", toolId, toolName, toolOutput: data.partialResult ?? data.result };
+    }
+    if (phase === "result") {
+      return { kind: "tool_end", toolId, toolName, toolOutput: data.result };
+    }
+    if (phase === "error") {
+      return {
+        kind: "tool_end",
+        toolId,
+        toolName,
+        toolOutput: data.result,
+        toolError: asString(data.error || data.message || "tool error"),
+      };
     }
   }
 
-  if (event.type === "tool_execution_start") {
-    return { kind: "tool_start", toolName: event.toolName || "tool", toolId: event.toolCallId };
+  if (stream === "lifecycle" && asString(data.phase) === "error") {
+    return { kind: "error", error: asString(data.error || data.message) || "运行错误" };
   }
 
-  if (event.type === "tool_execution_end") {
-    return { kind: "tool_end", toolName: event.toolName || "tool", toolId: event.toolCallId };
-  }
-
-  // keepalive, agent_start/end, turn_start/end, auto_compaction_* → ignore
   return { kind: "ignore" };
 }
 
-/** Merge a parsed event into the current stream blocks array. Returns true if blocks changed. */
-export function applyEvent(blocks: StreamBlock[], event: ParsedEvent): boolean {
+function parseChatEvent(payload: Record<string, unknown>): ParsedEvent {
+  const state = asString(payload.state).toLowerCase();
+  if (state === "delta") {
+    const text = extractText(payload.message);
+    return text ? { kind: "chat_delta", text } : { kind: "ignore" };
+  }
+  if (state === "final" || state === "aborted") {
+    return { kind: "done", message: payload.message };
+  }
+  if (state === "error") {
+    return { kind: "error", error: asString(payload.errorMessage) || "未知错误" };
+  }
+  return { kind: "ignore" };
+}
+
+export function applyEvent(blocks: StreamBlock[], event: ParsedEvent): ApplyResult {
   switch (event.kind) {
     case "text_delta": {
       const last = blocks[blocks.length - 1];
@@ -98,11 +138,11 @@ export function applyEvent(blocks: StreamBlock[], event: ParsedEvent): boolean {
       } else {
         blocks.push({ type: "text", content: event.text || "" });
       }
-      return true;
+      return { changed: true };
     }
     case "thinking_start": {
       blocks.push({ type: "thinking", content: "" });
-      return true;
+      return { changed: true };
     }
     case "thinking_delta": {
       const last = blocks[blocks.length - 1];
@@ -111,30 +151,24 @@ export function applyEvent(blocks: StreamBlock[], event: ParsedEvent): boolean {
       } else {
         blocks.push({ type: "thinking", content: event.text || "" });
       }
-      return true;
+      return { changed: true };
     }
     case "thinking_end":
-      return false;
-    case "tool_start": {
-      blocks.push({
-        type: "tool",
-        id: event.toolId || `tool-${Date.now()}`,
-        name: event.toolName || "tool",
-        status: "running",
-      });
-      return true;
-    }
+      return { changed: false };
+    case "tool_start":
+    case "tool_update":
     case "tool_end": {
-      for (let i = blocks.length - 1; i >= 0; i--) {
-        const block = blocks[i];
-        if (block.type === "tool" && block.status === "running") {
-          block.status = "completed";
-          return true;
-        }
-      }
-      return false;
+      const toolResult: ToolApplyResult = applyToolEvent(blocks, {
+        kind: event.kind,
+        toolId: event.toolId || `tool-${Date.now()}`,
+        toolName: event.toolName || "tool",
+        toolArgs: event.toolArgs,
+        toolOutput: event.toolOutput,
+        toolError: event.toolError,
+      });
+      return toolResult;
     }
     default:
-      return false;
+      return { changed: false };
   }
 }

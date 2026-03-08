@@ -5,10 +5,17 @@ export interface User {
   role: string;
 }
 
+export type MessageContentItem =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
+  | { type: "toolcall" | "tool_call"; name: string; arguments?: unknown }
+  | { type: "toolresult" | "tool_result"; name?: string; text?: string; output?: unknown };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | MessageContentItem[];
   blocks?: StreamBlock[];
+  timestamp?: number;
 }
 
 export interface ChatSession {
@@ -24,5 +31,12 @@ export interface ChatSession {
 export type StreamBlock =
   | { type: "thinking"; content: string }
   | { type: "text"; content: string }
-  | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error" }
+  | {
+      type: "tool";
+      id: string;
+      name: string;
+      status: "running" | "completed" | "error";
+      args?: unknown;
+      output?: string;
+    }
   | { type: "status"; text: string };
