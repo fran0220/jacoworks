@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"time"
 
@@ -55,7 +56,9 @@ func (b *OpenClawBridge) ServeSession(downstream *websocket.Conn, info *store.Co
 	// Dial upstream OpenClaw container
 	upstreamURL := b.oc.UpstreamAddr(info)
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	upstream, _, err := dialer.Dial(upstreamURL, nil)
+	// Set Origin header to match OpenClaw's allowedOrigins
+	headers := http.Header{"Origin": []string{upstreamURL}}
+	upstream, _, err := dialer.Dial(upstreamURL, headers)
 	if err != nil {
 		log.Error().Err(err).Str("url", upstreamURL).Str("user_id", userID).Msg("openclaw bridge: dial failed")
 		writeWSError(downstream, "upstream connection failed")
