@@ -42,6 +42,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 | `web_search` | `extensions/web-search.ts` | `LLM_PROXY_KEY` 或 `TAVILY_API_KEY` | 网络搜索 (Grok → Tavily fallback) |
 | `remote_read/write/list/stat` | `extensions/remote-fs.ts` | 云端/server 模式 (transport sender 可用) | WebSocket 文件通道, 按需读写桌面端本地文件 |
 | `cron_manage` | `services/cron.ts` | 始终注册 | 定时任务管理 (sidecar→Gateway 代理, server→本地执行) |
+| (compaction safeguard) | `extensions/compaction-safeguard.ts` | `MEMORY_ENABLED=true` | token 用量日志 + 压缩前记忆刷写 |
 | `powershell` | `tools/powershell.ts` | Windows only | 环境自修复 |
 | (拦截器) | `agent.ts` 内联 | 始终 | read 二进制文档 → 提示用 read_document |
 | (拦截器) | `agent.ts` 内联 | `TOOL_DENY_LIST` | 屏蔽 Pi 内置 Web 工具 (默认 WebSearch/WebFetch/WebBrowse) |
@@ -111,6 +112,21 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 - **特性**: deleteAfterRun (at 默认 true) / 指数退避 (1→5→15→60 分钟) / 飞书 announce 推送
 - **持久化 (server)**: `{workspaceDir}/cron-jobs.json` + `{workspaceDir}/cron/runs/{jobId}.jsonl`
 - **持久化 (sidecar)**: Gateway PostgreSQL `cron_jobs` 表
+
+## Compaction (上下文压缩)
+
+Pi SDK 在对话接近 context window 上限时自动触发压缩。通过环境变量调优：
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `COMPACTION_RESERVE_TOKENS` | `32768` | 为 LLM 响应预留的 token 数。触发阈值 = contextWindow - reserveTokens |
+| `COMPACTION_KEEP_RECENT_TOKENS` | `40000` | 压缩时保留的最近消息 token 数 (~10K 字) |
+| `MAX_HISTORY_TURNS` | `0` | 历史轮次硬上限 (0=不限, 预留未来使用) |
+| `SYSTEM_PROMPT_TOTAL_CHARS` | `30000` | Bootstrap 文件总字符上限 (SOUL+AGENTS+USER+TOOLS) |
+| `SYSTEM_PROMPT_FILE_CHARS` | `8000` | 单个 bootstrap 文件字符上限 |
+
+**压缩流程**: agent_end → 检查 token 用量 → 超阈值时调用 LLM 生成结构化摘要 → 旧消息替换为摘要 + 保留近期消息。
+**Compaction Safeguard** (extensions/compaction-safeguard.ts): 压缩前将对话主题刷写到 daily log 防止信息丢失；每轮记录 token 用量到日志。
 
 ## 测试矩阵（持续扩展）
 

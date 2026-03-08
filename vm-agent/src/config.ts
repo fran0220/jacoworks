@@ -36,6 +36,11 @@ export interface Config {
   heartbeatActiveHours?: { start: string; end: string };
   cronEnabled: boolean;
   toolDenyList: string[];
+  compactionReserveTokens: number;
+  compactionKeepRecentTokens: number;
+  maxHistoryTurns: number;
+  systemPromptTotalChars: number;
+  systemPromptFileChars: number;
 }
 
 function defaultAppDataDir(): string {
@@ -191,5 +196,10 @@ export function loadConfig(): Config {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    compactionReserveTokens: parseInt(process.env.COMPACTION_RESERVE_TOKENS || "32768", 10),
+    compactionKeepRecentTokens: parseInt(process.env.COMPACTION_KEEP_RECENT_TOKENS || "40000", 10),
+    maxHistoryTurns: parseInt(process.env.MAX_HISTORY_TURNS || "0", 10),
+    systemPromptTotalChars: parseInt(process.env.SYSTEM_PROMPT_TOTAL_CHARS || "30000", 10),
+    systemPromptFileChars: parseInt(process.env.SYSTEM_PROMPT_FILE_CHARS || "8000", 10),
   };
 }

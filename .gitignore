@@ -54,3 +54,13 @@ dist-release/
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 desktop/.env
+
+# === WebChat build output (committed via make build-webchat) ===
+website/static/chat/
+
+# === COS CLI / temp files ===
+coscli.log
+coscli_output/
+**/coscli.log
+**/coscli_output/
+deploy/SecretKey.csv

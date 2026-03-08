@@ -98,6 +98,27 @@
 
 **规则**: 处理 bug 时默认执行“根因优先、最小改动”策略；未经证据支持，不得跨层堆叠功能性判断或防御代码。
 
+## 2026-03-06: 新增 system_settings 配置项必须走完四层链路
+
+**触发**: 给网关加 PostHog 集成，只改了 Go 网关代码（config + allowedKeys + 热重载），部署后管理后台看不到配置项。
+
+**根因**: `system_settings` 配置项跨四个层，缺任何一层都不完整：
+1. **DB 行**: `system_settings` 表需要 INSERT 对应的 key + description（管理后台靠这个渲染表单）
+2. **网关 Go**: `config.go` 结构体 + 启动加载 + `updateSettingsHandler` allowedKeys + 热重载逻辑
+3. **网站 Rust**: `settings.rs` 的 `UpdateSettingsForm` 字段 + `is_secret_key()` + update handler 提交处理
+4. **SQL 迁移**: `deploy/sql/` 新增迁移文件 + 更新全量 seed SQL
+
+**修复**: 补了 DB INSERT + 网站 Rust 表单处理 + SQL 迁移文件，重新部署网站。
+
+**规则**: 新增 `system_settings` 配置项时，必须同时修改四个位置（DB 行 / 网关 Go / 网站 Rust / SQL 迁移），缺一不可。用 checklist 确认：
+- [ ] `deploy/sql/0XX_*.sql` 迁移 + 更新 `003_system_settings.sql` 全量 seed
+- [ ] `gateway/cmd/gateway/main.go` 启动加载 + allowedKeys + 热重载
+- [ ] `gateway/internal/config/config.go` 结构体字段
+- [ ] `website/src/routes/admin/settings.rs` 表单字段 + secret 判断 + 提交处理
+- [ ] 线上 DB 执行迁移 SQL
+
+---
+
 ## 2026-02-25: 用户纠偏 — 要求"完整切换"时禁止擅自加降级路径
 
 **触发**: 用户明确要求切换到 Exa，我自行保留了 Tavily fallback，导致实现偏离需求并引入冗余代码。

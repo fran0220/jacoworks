@@ -16,10 +16,9 @@ import { fileURLToPath } from "node:url";
 
 // ─── Constants ──────────────────────────────────────
 
-const MAX_FILE_CHARS = 20_000;
-const MAX_TOTAL_CHARS = 100_000;
-
-const BOOTSTRAP_FILES = ["SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md"] as const;
+// AGENTS.md is loaded natively by Pi SDK (loadProjectContextFiles) — do NOT duplicate here.
+// JAco only loads its own unique files: SOUL.md (persona), USER.md (prefs), TOOLS.md (notes).
+const BOOTSTRAP_FILES = ["SOUL.md", "USER.md", "TOOLS.md"] as const;
 
 const SEEDS_DIR = join(dirname(fileURLToPath(import.meta.url)), "seeds");
 
@@ -98,28 +97,28 @@ This app bundles bash and GNU coreutils (grep, sed, find, cat, etc.) on Windows.
 
 // ─── Layer 2: Bootstrap Files from agentHomeDir ─────
 
-async function loadBootstrapFile(filePath: string): Promise<string> {
+async function loadBootstrapFile(filePath: string, maxChars: number): Promise<string> {
   try {
     const content = await readFile(filePath, "utf-8");
     const trimmed = content.trim();
     if (!trimmed) return "";
-    return trimmed.length > MAX_FILE_CHARS
-      ? trimmed.slice(0, MAX_FILE_CHARS) + "\n\n[... truncated ...]"
+    return trimmed.length > maxChars
+      ? trimmed.slice(0, maxChars) + "\n\n[... truncated ...]"
       : trimmed;
   } catch {
     return "";
   }
 }
 
-async function loadBootstrapFiles(agentHomeDir: string): Promise<string> {
+async function loadBootstrapFiles(agentHomeDir: string, maxFileChars: number, maxTotalChars: number): Promise<string> {
   const sections: string[] = [];
   let totalChars = 0;
 
   for (const filename of BOOTSTRAP_FILES) {
-    const content = await loadBootstrapFile(join(agentHomeDir, filename));
+    const content = await loadBootstrapFile(join(agentHomeDir, filename), maxFileChars);
     if (!content) continue;
 
-    if (totalChars + content.length > MAX_TOTAL_CHARS) break;
+    if (totalChars + content.length > maxTotalChars) break;
 
     const tag = filename.replace(".md", "").toLowerCase();
     sections.push(`<bootstrap_${tag}>\n${content}\n</bootstrap_${tag}>`);
@@ -133,13 +132,13 @@ async function loadBootstrapFiles(agentHomeDir: string): Promise<string> {
 
 // ─── Layer 3: Project-level SOUL.md overlay ─────────
 
-async function loadProjectSoulMd(workspaceDir: string): Promise<string> {
+async function loadProjectSoulMd(workspaceDir: string, maxChars: number): Promise<string> {
   try {
     const content = await readFile(join(workspaceDir, "SOUL.md"), "utf-8");
     const trimmed = content.trim();
     if (!trimmed) return "";
-    const truncated = trimmed.length > MAX_FILE_CHARS
-      ? trimmed.slice(0, MAX_FILE_CHARS) + "\n\n[... truncated ...]"
+    const truncated = trimmed.length > maxChars
+      ? trimmed.slice(0, maxChars) + "\n\n[... truncated ...]"
       : trimmed;
     return `\n\n<project_overlay>\nProject-specific conventions for this workspace:\n\n${truncated}\n</project_overlay>`;
   } catch {
@@ -182,6 +181,10 @@ export interface SystemPromptOptions {
   heartbeatEnabled: boolean;
   /** User-created skills directory (editable) */
   userSkillsDir?: string;
+  /** Max chars per bootstrap file (default 8000) */
+  maxFileChars?: number;
+  /** Max total chars across all bootstrap files (default 30000) */
+  maxTotalChars?: number;
   /** Extra prompt sections to append (e.g. from extensions) */
   extraSections?: string[];
 }
@@ -194,18 +197,20 @@ export interface SystemPromptOptions {
  * 4. Extra sections from extensions
  */
 export async function buildSystemPrompt(opts: SystemPromptOptions): Promise<string> {
+  const maxFileChars = opts.maxFileChars ?? 8_000;
+  const maxTotalChars = opts.maxTotalChars ?? 30_000;
   const parts: string[] = [];
 
   // Layer 1: Runtime context
   parts.push(buildRuntimePrompt(opts));
 
   // Layer 2: Bootstrap files from agentHomeDir
-  const bootstrap = await loadBootstrapFiles(opts.agentHomeDir);
+  const bootstrap = await loadBootstrapFiles(opts.agentHomeDir, maxFileChars, maxTotalChars);
   if (bootstrap) parts.push(bootstrap);
 
   // Layer 3: Project-level SOUL.md overlay (only if cwd differs from agentHomeDir)
   if (opts.workspaceDir !== opts.agentHomeDir) {
-    const projectSoul = await loadProjectSoulMd(opts.workspaceDir);
+    const projectSoul = await loadProjectSoulMd(opts.workspaceDir, maxFileChars);
     if (projectSoul) parts.push(projectSoul);
   }
 

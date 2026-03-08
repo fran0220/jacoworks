@@ -2,11 +2,11 @@
 # 用法: make <target>
 # 列出所有: make help
 
-.PHONY: help dev dev-gateway dev-website dev-agent dev-desktop \
-        build build-gateway build-website build-agent build-desktop \
+.PHONY: help dev dev-gateway dev-website dev-webchat dev-agent dev-desktop \
+        build build-gateway build-website build-webchat build-agent build-desktop \
         compile-agent prepare-win-deps \
         deploy deploy-gateway deploy-website deploy-agent push-skills \
-        check check-gateway check-website check-agent check-desktop \
+        check check-gateway check-website check-webchat check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
         db-reset db-migrate clean \
         docker-build-agent docker-run-agent \
@@ -52,6 +52,9 @@ dev-agent: ## 启动 vm-agent 开发模式 (热重载)
 dev-desktop: ## 启动 Desktop 开发模式 (Tauri + Vite HMR)
 	cd desktop && cargo tauri dev
 
+dev-webchat: ## 启动 Web 聊天 SPA 开发模式
+	cd webchat && npx vite
+
 # ═══════════════════════════════════════════
 #  构建 (本地)
 # ═══════════════════════════════════════════
@@ -69,6 +72,10 @@ build-website: ## 构建 Website (release)
 build-agent: ## 构建 vm-agent
 	cd vm-agent && npm run build
 	@echo "✅ vm-agent/dist/"
+
+build-webchat: ## 构建 Web 聊天 SPA → website/static/chat/
+	cd webchat && npm run build
+	@echo "✅ website/static/chat/"
 
 compile-agent: ## 编译 vm-agent + 打包所有 release 资源 (sidecar + doc-packages + validation)
 	@TARGET=$$(rustc -vV | grep host | cut -d' ' -f2) && \
@@ -133,13 +140,16 @@ deploy-website: deploy-sync ## 部署 Website 到 jingao (远程编译)
 #  检查 (Lint / Typecheck / Test)
 # ═══════════════════════════════════════════
 
-check: check-gateway check-website check-agent check-desktop ## 全量检查
+check: check-gateway check-website check-webchat check-agent check-desktop ## 全量检查
 
 check-gateway: ## Go vet + test
 	cd gateway && go vet ./... && go test ./...
 
 check-website: ## Cargo check + test
 	cd website && cargo check && cargo test
+
+check-webchat: ## WebChat typecheck + build 验证
+	cd webchat && npx tsc --noEmit
 
 check-agent: ## TypeScript typecheck + 单元测试
 	cd vm-agent && npm run typecheck && npm test
@@ -172,6 +182,7 @@ clean: ## 清理所有构建产物
 	rm -rf gateway/bin/
 	cd website && cargo clean
 	rm -rf vm-agent/dist/
+	rm -rf webchat/dist/
 	rm -rf desktop/dist/ desktop/src-tauri/target/
 
 # ═══════════════════════════════════════════
