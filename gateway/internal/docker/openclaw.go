@@ -178,7 +178,7 @@ func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]
 				AllowedOrigins: []string{
 					"http://localhost:18789",
 					"http://127.0.0.1:18789",
-					fmt.Sprintf("ws://%s:%d", oc.client.hostIP, oc.client.agentPort),
+					fmt.Sprintf("http://%s:%d", oc.client.hostIP, oc.client.agentPort),
 				},
 			},
 		},
