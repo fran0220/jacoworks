@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 -- 容器映射
 CREATE TABLE IF NOT EXISTS containers (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         TEXT NOT NULL UNIQUE,
+    user_id         TEXT NOT NULL,
     container_name  TEXT NOT NULL,
     container_ip    INET,
     container_token TEXT NOT NULL,
@@ -123,6 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at
 -- Business indexes
 CREATE INDEX IF NOT EXISTS idx_containers_status ON containers(status);
 CREATE INDEX IF NOT EXISTS idx_containers_user ON containers(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_containers_user_type ON containers(user_id, container_type);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated ON chat_sessions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_type ON chat_sessions(user_id, type);

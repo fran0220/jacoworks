@@ -536,7 +536,7 @@ func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, a
 			}
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer bgCancel()
-			if err := s.UpdateContainer(bgCtx, req.UserID, containerName, ip, containerToken, hostPort); err != nil {
+			if err := s.UpdateContainer(bgCtx, req.UserID, store.ContainerTypeVMAgent, containerName, ip, containerToken, hostPort); err != nil {
 				log.Error().Err(err).Str("container", containerName).Msg("async provision: persist failed")
 				return
 			}
@@ -720,7 +720,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		info, err := s.GetContainerInfo(r.Context(), user.ID)
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeVMAgent)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"provisioned": false,
@@ -772,7 +772,7 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, ocClie
 		}
 
 		// Check if already provisioned
-		info, err := s.GetContainerInfo(r.Context(), user.ID)
+		info, err := s.GetContainerInfo(r.Context(), user.ID, containerType)
 		if err == nil && info.ContainerIP != "" {
 			resp := map[string]interface{}{
 				"status":         "ready",
@@ -829,7 +829,7 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, ocClie
 				}
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer bgCancel()
-				if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken, hostPort); err != nil {
+				if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeOpenClaw, containerName, ip, containerToken, hostPort); err != nil {
 					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision: persist failed")
 					return
 				}
@@ -845,7 +845,7 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, ocClie
 				}
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer bgCancel()
-				if err := s.UpdateContainer(bgCtx, userID, containerName, ip, containerToken, hostPort); err != nil {
+				if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeVMAgent, containerName, ip, containerToken, hostPort); err != nil {
 					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision: persist failed")
 					return
 				}

@@ -81,7 +81,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := h.store.GetContainerInfo(r.Context(), user.ID)
+	info, err := h.store.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeVMAgent)
 	if err != nil {
 		log.Warn().Err(err).Str("user_id", user.ID).Str("session_id", sid).Msg("container info missing for cowork upload")
 		http.Error(w, `{"error":"no container provisioned"}`, http.StatusBadGateway)

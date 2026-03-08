@@ -74,7 +74,7 @@ func (p *ChannelPool) GetOrCreate(ctx context.Context, userID string) (*UserChan
 		return nil, nil, fmt.Errorf("channel pool not initialized")
 	}
 
-	info, err := p.proxy.store.GetContainerInfo(ctx, userID)
+	info, err := p.proxy.store.GetContainerInfo(ctx, userID, store.ContainerTypeVMAgent)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -97,11 +97,11 @@ func (p *ChannelPool) Get(userID string) *UserChannel {
 	return p.channels[userID]
 }
 
-func (p *ChannelPool) ContainerInfo(ctx context.Context, userID string) (*store.ContainerInfo, error) {
+func (p *ChannelPool) ContainerInfo(ctx context.Context, userID, containerType string) (*store.ContainerInfo, error) {
 	if p.proxy == nil || p.proxy.store == nil {
 		return nil, fmt.Errorf("channel pool not initialized")
 	}
-	return p.proxy.store.GetContainerInfo(ctx, userID)
+	return p.proxy.store.GetContainerInfo(ctx, userID, containerType)
 }
 
 func (p *ChannelPool) removeIfMatch(userID string, ch *UserChannel) {
@@ -318,7 +318,7 @@ func (c *UserChannel) run() {
 
 		c.reconnecting.Store(true)
 
-		info, err := c.pool.proxy.store.GetContainerInfo(context.Background(), c.userID)
+		info, err := c.pool.proxy.store.GetContainerInfo(context.Background(), c.userID, store.ContainerTypeVMAgent)
 		if err != nil {
 			c.publishProxyError("container not provisioned")
 			if !c.waitReconnect(backoff) {

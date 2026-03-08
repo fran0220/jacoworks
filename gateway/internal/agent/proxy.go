@@ -65,7 +65,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := p.store.GetContainerInfo(r.Context(), user.ID)
+	info, err := p.store.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeVMAgent)
 	if err != nil {
 		log.Error().Err(err).Str("user_id", user.ID).Msg("agent ws: no container provisioned")
 		http.Error(w, `{"error":"no container provisioned"}`, http.StatusBadGateway)
@@ -310,7 +310,7 @@ func (p *Proxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, us
 		if err != nil {
 			return fmt.Errorf("reprovision: %w", err)
 		}
-		if err := p.store.UpdateContainerIP(ctx, userID, ip); err != nil {
+		if err := p.store.UpdateContainerIP(ctx, userID, store.ContainerTypeVMAgent, ip); err != nil {
 			return fmt.Errorf("update IP after reprovision: %w", err)
 		}
 		if p.onContainerReady != nil {

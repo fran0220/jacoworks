@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fran0220/jacoworks/gateway/internal/store"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
@@ -66,8 +67,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up container info to determine backend type
-	info, err := h.pool.ContainerInfo(r.Context(), userID)
+	// Look up OpenClaw container first; fall back to vm-agent for legacy users
+	info, err := h.pool.ContainerInfo(r.Context(), userID, store.ContainerTypeOpenClaw)
+	if err != nil {
+		info, err = h.pool.ContainerInfo(r.Context(), userID, store.ContainerTypeVMAgent)
+	}
 	if err != nil {
 		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return

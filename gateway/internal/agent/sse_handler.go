@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
+	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
 // SSEHandler exposes vm-agent channel adapter endpoints for desktop clients.
@@ -158,7 +159,7 @@ func (h *SSEHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	containerName := ""
-	if info, err := h.pool.ContainerInfo(r.Context(), user.ID); err == nil {
+	if info, err := h.pool.ContainerInfo(r.Context(), user.ID, store.ContainerTypeVMAgent); err == nil {
 		containerName = info.ContainerName
 	}
 

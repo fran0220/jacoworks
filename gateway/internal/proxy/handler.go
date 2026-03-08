@@ -110,7 +110,7 @@ func (h *Handler) proxyToSharedAgent(w http.ResponseWriter, r *http.Request, use
 
 // proxyToContainer forwards the request to the user's per-container vm-agent.
 func (h *Handler) proxyToContainer(w http.ResponseWriter, r *http.Request, user *auth.UserInfo, coworkSessionID string) {
-	info, err := h.store.GetContainerInfo(r.Context(), user.ID)
+	info, err := h.store.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeVMAgent)
 	if err != nil {
 		log.Error().Err(err).Str("user_id", user.ID).Msg("get container info failed")
 		http.Error(w, `{"error":"no container provisioned, enter cowork mode first"}`, http.StatusBadGateway)
@@ -226,12 +226,12 @@ func (h *Handler) ensureRunning(ctx context.Context, containerName, userID strin
 		if err != nil {
 			return err
 		}
-		return h.store.UpdateContainerIP(ctx, userID, ip)
+		return h.store.UpdateContainerIP(ctx, userID, store.ContainerTypeVMAgent, ip)
 	case "not_found":
 		if h.containerEnvVars == nil {
 			return fmt.Errorf("container destroyed and no env vars for reprovision")
 		}
-		cInfo, err := h.store.GetContainerInfo(ctx, userID)
+		cInfo, err := h.store.GetContainerInfo(ctx, userID, store.ContainerTypeVMAgent)
 		if err != nil {
 			return fmt.Errorf("get container info for reprovision: %w", err)
 		}
@@ -240,7 +240,7 @@ func (h *Handler) ensureRunning(ctx context.Context, containerName, userID strin
 		if err != nil {
 			return fmt.Errorf("reprovision: %w", err)
 		}
-		return h.store.UpdateContainerIP(ctx, userID, ip)
+		return h.store.UpdateContainerIP(ctx, userID, store.ContainerTypeVMAgent, ip)
 	default:
 		return fmt.Errorf("container in unexpected state: %s", info.Status)
 	}

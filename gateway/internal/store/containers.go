@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+const (
+	ContainerTypeVMAgent  = "vm-agent"
+	ContainerTypeOpenClaw = "openclaw"
+)
+
 type ContainerInfo struct {
 	UserID         string
 	ContainerName  string
@@ -29,12 +34,12 @@ type Container struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-func (s *Store) GetContainerInfo(ctx context.Context, userID string) (*ContainerInfo, error) {
+func (s *Store) GetContainerInfo(ctx context.Context, userID, containerType string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent')
-		 FROM containers WHERE user_id = $1`,
-		userID,
+		 FROM containers WHERE user_id = $1 AND container_type = $2`,
+		userID, containerType,
 	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType)
 	if err != nil {
 		return nil, fmt.Errorf("get container info: %w", err)
@@ -46,25 +51,25 @@ func (s *Store) CreateContainer(ctx context.Context, userID, containerName, cont
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO containers (user_id, container_name, container_token, host_port, container_type, status)
 		 VALUES ($1, $2, $3, $4, $5, 'creating')
-		 ON CONFLICT (user_id) DO UPDATE SET container_name = $2, container_token = $3, host_port = $4, container_type = $5`,
+		 ON CONFLICT (user_id, container_type) DO UPDATE SET container_name = $2, container_token = $3, host_port = $4, container_ip = NULL, status = 'creating'`,
 		userID, containerName, containerToken, hostPort, containerType,
 	)
 	return err
 }
 
-func (s *Store) UpdateContainerIP(ctx context.Context, userID, ip string) error {
+func (s *Store) UpdateContainerIP(ctx context.Context, userID, containerType, ip string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE containers SET container_ip = $1::inet, status = 'running' WHERE user_id = $2`,
-		ip, userID,
+		`UPDATE containers SET container_ip = $1::inet, status = 'running' WHERE user_id = $2 AND container_type = $3`,
+		ip, userID, containerType,
 	)
 	return err
 }
 
-func (s *Store) UpdateContainer(ctx context.Context, userID, name, ip, token string, hostPort int) error {
+func (s *Store) UpdateContainer(ctx context.Context, userID, containerType, name, ip, token string, hostPort int) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE containers SET container_name = $1, container_ip = $2::inet, container_token = $3, host_port = $4, status = 'running'
-		 WHERE user_id = $5`,
-		name, ip, token, hostPort, userID,
+		 WHERE user_id = $5 AND container_type = $6`,
+		name, ip, token, hostPort, userID, containerType,
 	)
 	return err
 }
