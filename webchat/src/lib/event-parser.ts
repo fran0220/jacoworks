@@ -69,8 +69,8 @@ function parseAgentEvent(payload: Record<string, unknown>): ParsedEvent {
   const stream = asString(payload.stream);
   const data = asRecord(payload.data);
 
-  if (stream === "text") {
-    const text = asString(data.text || data.delta);
+  if (stream === "text" || stream === "assistant") {
+    const text = asString(data.delta || data.text);
     return text ? { kind: "text_delta", text } : { kind: "ignore" };
   }
 
