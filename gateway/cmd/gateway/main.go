@@ -200,7 +200,9 @@ func main() {
 	defer channelPool.Close()
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
 	defer wsTicketStore.Close()
-	wsHandler := agent.NewWSHandler(channelPool, wsTicketStore)
+	wsHandler := agent.NewWSHandler(channelPool, wsTicketStore, func(userID, event string, properties map[string]interface{}) {
+		ph.CaptureEvent(userID, event, properties)
+	})
 	sseHandler := agent.NewSSEHandler(channelPool)
 
 	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
@@ -271,7 +273,14 @@ func main() {
 	mux.Handle("GET /ws/agent", authMiddleware.Authenticate(agentProxy))
 
 	// Agent browser WebSocket bridge (ticket auth)
-	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(wsTicketStore.IssueTicket)))
+	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wsTicketStore.IssueTicket(w, r)
+		if user := auth.GetUser(r.Context()); user != nil {
+			ph.CaptureEvent(user.ID, "ws_ticket_issued", map[string]interface{}{
+				"user_name": user.Name,
+			})
+		}
+	})))
 	mux.Handle("GET /ws/oc", wsHandler)
 
 	// Agent SSE/HTTP bridge

@@ -6,9 +6,11 @@ import {
   destroySession,
   generateSessionTitle,
   listAvailableSkills,
+  handoffSession,
 } from "../agent.js";
 import type { Config } from "../config.js";
 import type { TransportSender } from "./types.js";
+import { log } from "../lib/logger.js";
 
 type RpcId = string | number;
 
@@ -63,10 +65,22 @@ function sendDone(sender: TransportSender, id: RpcId | undefined, sessionId: str
   sender.send({ id, type: "done", session_id: sessionId });
 }
 
-const promptInFlight = new Map<string, { finish: (error?: string) => void }>();
+const PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
+const promptInFlight = new Map<string, { finish: (error?: string) => void; startedAt: number }>();
+
+export function clearAllInFlight() {
+  if (promptInFlight.size > 0) {
+    log.warn(`clearing ${promptInFlight.size} stale in-flight locks`);
+    for (const [, entry] of promptInFlight) {
+      try { entry.finish("connection reset"); } catch {}
+    }
+    promptInFlight.clear();
+  }
+}
 
 async function handlePrompt(config: Config, sender: TransportSender, command: PromptCommand) {
   const id = normalizeId(command.id);
+  const traceId = String(id);
 
   if (!command.message?.trim()) {
     sendResponse(sender, id, command.type, false, { error: "message required" });
@@ -90,14 +104,27 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
     : `${config.primaryProvider}/${config.primaryModel}`;
   const sessionId = command.session_id || modelKey;
 
-  if (promptInFlight.has(sessionId)) {
-    sendResponse(sender, id, command.type, false, { error: "prompt already in-flight for this session" });
-    sendError(sender, id, sessionId, "prompt already in-flight for this session");
-    sendDone(sender, id, sessionId);
-    return;
+  const plog = log.child({ trace_id: traceId, session_id: sessionId, user_id: command.user_id });
+
+  const existing = promptInFlight.get(sessionId);
+  if (existing) {
+    if (Date.now() - existing.startedAt > PROMPT_TIMEOUT_MS) {
+      plog.warn("clearing stale in-flight lock", { age_ms: Date.now() - existing.startedAt });
+      try { existing.finish("timeout"); } catch {}
+      promptInFlight.delete(sessionId);
+    } else {
+      plog.warn("prompt rejected: in-flight");
+      sendResponse(sender, id, command.type, false, { error: "prompt already in-flight for this session" });
+      sendError(sender, id, sessionId, "prompt already in-flight for this session");
+      sendDone(sender, id, sessionId);
+      return;
+    }
   }
 
-  promptInFlight.set(sessionId, { finish: () => {} });
+  const startedAt = Date.now();
+  promptInFlight.set(sessionId, { finish: () => {}, startedAt });
+
+  plog.info("prompt started", { model: modelKey });
 
   try {
     const { session } = await getSession(sessionId, {
@@ -131,30 +158,34 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
       finished = true;
       clearInterval(keepaliveId);
       promptInFlight.delete(sessionId);
+      const duration_ms = Date.now() - startedAt;
       if (error) {
+        plog.error("prompt failed", { error, duration_ms });
         sendError(sender, id, sessionId, error);
+      } else {
+        plog.info("prompt completed", { duration_ms });
       }
       sendDone(sender, id, sessionId);
       unsub();
     };
 
-    promptInFlight.set(sessionId, { finish });
+    promptInFlight.set(sessionId, { finish, startedAt });
 
     const unsub = session.subscribe((event) => {
       if (finished) return;
 
       if (event.type === "message_update") {
         const ame = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
-        if (ame?.type === "thinking_start") console.error("[stream] thinking_start");
-        else if (ame?.type === "thinking_delta") console.error(`[stream] thinking_delta (${ame.delta?.length || 0} chars)`);
-        else if (ame?.type === "thinking_end") console.error("[stream] thinking_end");
+        if (ame?.type === "thinking_start") plog.debug("thinking_start");
+        else if (ame?.type === "thinking_delta") plog.debug("thinking_delta", { chars: ame.delta?.length || 0 });
+        else if (ame?.type === "thinking_end") plog.debug("thinking_end");
       } else if (event.type === "agent_start" || event.type === "agent_end" || event.type === "turn_start" || event.type === "turn_end") {
-        console.error(`[stream] ${event.type}`);
+        plog.debug(event.type);
       } else if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
         const te = event as { toolName?: string };
-        console.error(`[stream] ${event.type}: ${te.toolName || "?"}`);
+        plog.debug(event.type, { tool: te.toolName || "?" });
       } else if (event.type === "auto_compaction_start" || event.type === "auto_compaction_end" || event.type === "auto_retry_start" || event.type === "auto_retry_end") {
-        console.error(`[stream] ${event.type}`);
+        plog.info(event.type);
       }
 
       sender.send({ id, type: "session_event", session_id: sessionId, event });
@@ -172,6 +203,7 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
   } catch (err) {
     promptInFlight.delete(sessionId);
     const error = err instanceof Error ? err.message : "prompt failed";
+    plog.error("prompt setup failed", { error });
     sendResponse(sender, id, command.type, false, { error });
     sendError(sender, id, sessionId, error);
     sendDone(sender, id, sessionId);
@@ -262,6 +294,24 @@ export async function handleCommand(config: Config, sender: TransportSender, com
       } catch (err) {
         sendResponse(sender, command.id, command.type, false, {
           error: err instanceof Error ? err.message : "title generation failed",
+        });
+      }
+      return;
+    }
+
+    case "handoff": {
+      const sessionId = typeof command.session_id === "string" ? command.session_id : "";
+      if (!sessionId) {
+        sendResponse(sender, command.id, command.type, false, { error: "session_id required" });
+        return;
+      }
+      const goal = typeof command.goal === "string" ? command.goal : undefined;
+      try {
+        const result = await handoffSession(sessionId, { goal });
+        sendResponse(sender, command.id, command.type, true, result);
+      } catch (err) {
+        sendResponse(sender, command.id, command.type, false, {
+          error: err instanceof Error ? err.message : "handoff failed",
         });
       }
       return;

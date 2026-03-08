@@ -8,6 +8,8 @@ pub struct Config {
     pub gateway: GatewayConfig,
     pub site: SiteConfig,
     pub cookie_secret: String,
+    #[serde(default)]
+    pub posthog: PosthogConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -36,6 +38,18 @@ pub struct SiteConfig {
     pub name: String,
     pub description: String,
     pub base_url: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct PosthogConfig {
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_posthog_host")]
+    pub host: String,
+}
+
+fn default_posthog_host() -> String {
+    "https://us.i.posthog.com".to_string()
 }
 
 fn default_host() -> String {

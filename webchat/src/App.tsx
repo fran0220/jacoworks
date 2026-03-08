@@ -3,9 +3,14 @@ import type { ChatSession, ChatMessage, StreamBlock } from "./types";
 import { WSClient, type ConnectionState, type WSFrame } from "./lib/ws-client";
 import { parseFrame, applyEvent } from "./lib/event-parser";
 import { listSessions, createSession, getSession, updateSession, deleteSession, generateTitle } from "./lib/sessions";
+import { posthog } from "./lib/posthog";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Composer from "./components/Composer";
+import ContainerPanel from "./components/ContainerPanel";
+import CronPanel from "./components/CronPanel";
+
+export type ActiveTab = "chat" | "container" | "cron";
 
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -17,6 +22,7 @@ export default function App() {
   const [connState, setConnState] = useState<ConnectionState>("disconnected");
   const [connMsg, setConnMsg] = useState("正在连接...");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
 
   const blocksRef = useRef<StreamBlock[]>([]);
   const streamingRef = useRef(false);
@@ -48,6 +54,7 @@ export default function App() {
       const updated = [...messagesRef.current, assistantMsg];
       setMessages(updated);
       messagesRef.current = updated;
+      posthog.capture('chat_response_received', { length: fullText.length });
 
       // Persist to gateway
       const sid = activeSessionRef.current;
@@ -92,6 +99,7 @@ export default function App() {
 
         if (parsed.kind === "error") {
           setError(parsed.error || "未知错误");
+          posthog.capture('chat_error', { error: parsed.error });
           finishStream();
           return;
         }
@@ -137,6 +145,7 @@ export default function App() {
       setBlocks([]);
       setError(null);
       setSidebarOpen(false);
+      posthog.capture('chat_session_created');
     } catch {
       // ignore
     }
@@ -197,6 +206,7 @@ export default function App() {
 
     // Send via WS with session_id to avoid shared in-flight lock
     wsRef.current.send("prompt", text, { session_id: sid });
+    posthog.capture('chat_message_sent', { session_id: sid });
   }, []);
 
   const handleAbort = useCallback(() => {
@@ -210,9 +220,11 @@ export default function App() {
       <Sidebar
         sessions={sessions}
         activeId={activeSessionId}
+        activeTab={activeTab}
         onSelect={handleSelectSession}
         onNew={handleNewSession}
         onDelete={handleDeleteSession}
+        onTabChange={setActiveTab}
       />
       <div className="chat-main">
         <div className="status-bar">
@@ -222,13 +234,19 @@ export default function App() {
           <span className={`status-dot ${connState}`} />
           <span>{connMsg}</span>
         </div>
-        <ChatView messages={messages} blocks={blocks} streaming={streaming} error={error} />
-        <Composer
-          disabled={connState !== "connected"}
-          streaming={streaming}
-          onSend={handleSend}
-          onAbort={handleAbort}
-        />
+        {activeTab === "chat" && (
+          <>
+            <ChatView messages={messages} blocks={blocks} streaming={streaming} error={error} />
+            <Composer
+              disabled={connState !== "connected"}
+              streaming={streaming}
+              onSend={handleSend}
+              onAbort={handleAbort}
+            />
+          </>
+        )}
+        {activeTab === "container" && <ContainerPanel />}
+        {activeTab === "cron" && <CronPanel />}
       </div>
     </div>
   );

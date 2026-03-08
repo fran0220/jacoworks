@@ -7,8 +7,9 @@ import {
   listAvailableSkills,
   setTransportSender,
 } from "./agent.js";
-import { handleCommand, type RawCommand } from "./transport/handler.js";
+import { handleCommand, clearAllInFlight, type RawCommand } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
+import { log } from "./lib/logger.js";
 
 const config = loadConfig();
 initAgent(config);
@@ -45,7 +46,7 @@ const server = Bun.serve({
 
   websocket: {
     open(ws) {
-      console.error(`[ws] client connected`);
+      log.info("ws client connected");
       const sender: TransportSender = {
         send(payload: unknown) {
           ws.send(JSON.stringify(payload));
@@ -81,37 +82,36 @@ const server = Bun.serve({
     },
 
     close(ws, code, reason) {
-      console.error(`[ws] client disconnected (code=${code}, reason=${reason})`);
+      log.info("ws client disconnected", { code, reason: String(reason) });
+      clearAllInFlight();
       setTransportSender(null);
     },
   },
 });
 
-console.error(`🚀 vm-agent server listening on ws://0.0.0.0:${server.port}`);
-console.error(`   Health: http://0.0.0.0:${server.port}/health`);
+log.info("server listening", { port: server.port, health: `http://0.0.0.0:${server.port}/health` });
 
 // Wait for background services (cron, heartbeat) to initialize before marking ready,
 // ensuring cronService is registered as extension before the first prompt arrives.
 startBackgroundServices()
   .catch((err) => {
-    console.error("❌ Background services error:", err);
+    log.error("background services error", { error: err instanceof Error ? err.message : String(err) });
   })
   .finally(() => {
     servicesReady = true;
-    console.error(`   Skills: ${listAvailableSkills().length} loaded`);
-    console.error(`   ✅ Background services ready`);
+    log.info("background services ready", { skills: listAvailableSkills().length });
   });
 
 // Stale session cleanup every 10 minutes (1 hour inactivity threshold)
 setInterval(() => {
   const cleaned = cleanupStaleSessions(3600_000);
   if (cleaned > 0) {
-    console.error(`[cleanup] cleaned ${cleaned} stale sessions`);
+    log.info("cleaned stale sessions", { count: cleaned });
   }
 }, 600_000);
 
 function shutdown() {
-  console.error("[ws] shutting down...");
+  log.info("shutting down");
   destroyAllSessions();
   server.stop();
   process.exit(0);
@@ -121,9 +121,9 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 process.on("uncaughtException", (err) => {
-  console.error("uncaught exception:", err);
+  log.error("uncaught exception", { error: err instanceof Error ? err.message : String(err) });
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("unhandled rejection:", reason);
+  log.error("unhandled rejection", { error: reason instanceof Error ? reason.message : String(reason) });
 });

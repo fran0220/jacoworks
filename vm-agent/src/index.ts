@@ -10,6 +10,7 @@ import {
 } from "./agent.js";
 import { handleCommand, type RawCommand } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
+import { log } from "./lib/logger.js";
 
 const config = loadConfig();
 initAgent(config);
@@ -62,7 +63,7 @@ rl.on("close", () => {
 setInterval(() => {
   const cleaned = cleanupStaleSessions(3600_000);
   if (cleaned > 0) {
-    console.error(`[cleanup] cleaned ${cleaned} stale sessions`);
+    log.info("cleaned stale sessions", { count: cleaned });
   }
 }, 600_000);
 
@@ -75,18 +76,18 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
 process.on("uncaughtException", (err) => {
-  console.error("uncaught exception:", err);
+  log.error("uncaught exception", { error: err instanceof Error ? err.message : String(err) });
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("unhandled rejection:", reason);
+  log.error("unhandled rejection", { error: reason instanceof Error ? reason.message : String(reason) });
 });
 
 // 等待后台服务 (cron, heartbeat) 初始化完成后再发 ready，
 // 确保首个 prompt 到达时 cronService 等已注册为 extension。
 startBackgroundServices()
   .catch((err) => {
-    console.error("❌ Background services error:", err);
+    log.error("background services error", { error: err instanceof Error ? err.message : String(err) });
   })
   .finally(() => {
     sender.send({ type: "ready", service: "vm-agent", version: "0.2.0-rpc", skills: listAvailableSkills() });

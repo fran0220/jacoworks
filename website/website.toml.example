@@ -17,3 +17,7 @@ admin_token = "your-admin-token"
 name = "JAcoworks"
 description = "企业 AI 协同办公平台"
 base_url = "https://jaco.jingao.club"
+
+[posthog]
+api_key = ""
+host = "https://us.i.posthog.com"

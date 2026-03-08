@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -12,6 +12,8 @@ import {
   SettingsManager,
   createCodingTools,
   loadSkillsFromDir,
+  convertToLlm,
+  serializeConversation,
 } from "@mariozechner/pi-coding-agent";
 import type { ExtensionFactory, CreateAgentSessionResult } from "@mariozechner/pi-coding-agent";
 import type { Config } from "./config.js";
@@ -21,6 +23,7 @@ import { createImageGenExtension } from "./extensions/image-gen.js";
 import { createReadDocumentExtension, ocrWithVision } from "./extensions/read-document.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
 import { createRemoteFsExtension } from "./extensions/remote-fs.js";
+import { createCompactionSafeguardExtension } from "./extensions/compaction-safeguard.js";
 import { registerTransportResponseHandler } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
@@ -29,6 +32,7 @@ import { createHeartbeatService, type HeartbeatService } from "./services/heartb
 import { createCronService, type CronService, type CronResultEvent } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 import { createPowershellTool, isPowershellAvailable } from "./tools/powershell.js";
+import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
 
 // ─── Session Metadata ───────────────────────────────
@@ -37,6 +41,8 @@ export interface SessionMeta {
   restricted: boolean;
   workspace: string;
   userScope: string;
+  userId?: string;
+  anonymous?: boolean;
   lastAccess: number;
 }
 
@@ -247,7 +253,7 @@ function ensureDocPackages(dir: string): boolean {
   const nmDir = join(dir, "node_modules");
   if (existsSync(join(nmDir, "mammoth"))) return true;
 
-  console.log("📦 Installing document processing packages (first-time setup)...");
+  log.info("installing document processing packages");
   try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -260,10 +266,10 @@ function ensureDocPackages(dir: string): boolean {
       timeout: 120_000,
       stdio: "pipe",
     });
-    console.log("✅ Document processing packages installed");
+    log.info("document processing packages installed");
     return true;
   } catch (err) {
-    console.warn(`⚠️ Doc packages install failed: ${err instanceof Error ? err.message : err}`);
+    log.warn("doc packages install failed", { error: err instanceof Error ? err.message : String(err) });
     return false;
   }
 }
@@ -317,7 +323,7 @@ export function initAgent(cfg: Config) {
 
   // Seed agent home directory with default bootstrap files (non-fatal)
   seedAgentHome(cfg.agentHomeDir).catch((err) => {
-    console.warn(`⚠️ Failed to seed agent home: ${err instanceof Error ? err.message : err}`);
+    log.warn("failed to seed agent home", { error: err instanceof Error ? err.message : String(err) });
   });
 
   // 初始化 Embedding API (向量记忆搜索)
@@ -331,22 +337,19 @@ export function initAgent(cfg: Config) {
   // 设置 NODE_PATH 让文档处理脚本能找到预装包
   setupNodePath(cfg);
 
-  console.log("✅ Agent initialized");
-  console.log(`   Default model: ${cfg.primaryProvider}/${cfg.primaryModel}`);
-  console.log(`   LLM Proxy: ${cfg.proxyUrl}`);
-  console.log(`   Workspace: ${cfg.workspaceDir}`);
-  console.log(`   Memory root: ${cfg.memoryRootDir}`);
-  console.log(`   NODE_PATH: ${process.env.NODE_PATH || "(not set)"}`);
-  console.log(`   Embedding: ${isEmbeddingAvailable() ? `text-embedding-3-small → ${cfg.embeddingBaseUrl || "https://api.openai.com/v1"}` : "disabled (no EMBEDDING_API_KEY / OPENAI_API_KEY)"}`);
+  log.info("agent initialized", {
+    model: `${cfg.primaryProvider}/${cfg.primaryModel}`,
+    proxy: cfg.proxyUrl,
+    workspace: cfg.workspaceDir,
+    memory_root: cfg.memoryRootDir,
+    node_path: process.env.NODE_PATH || "(not set)",
+    embedding: isEmbeddingAvailable() ? `text-embedding-3-small → ${cfg.embeddingBaseUrl || "https://api.openai.com/v1"}` : "disabled",
+  });
 
-  // 列出已注册的代理模型
   const proxyModels = modelRegistry
     .getAll()
     .filter((m) => m.provider.startsWith("proxy-"));
-  console.log(`   Proxy models: ${proxyModels.length}`);
-  for (const m of proxyModels) {
-    console.log(`     - ${m.provider}/${m.id}`);
-  }
+  log.info("proxy models registered", { count: proxyModels.length, models: proxyModels.map((m) => `${m.provider}/${m.id}`) });
 }
 
 export interface SessionOptions {
@@ -399,13 +402,16 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   }
 
   if (config.memoryEnabled && !opts?.anonymous) {
+    const memRoot = userMemoryRootDir(opts?.userId);
     extensionFactories.push(
-      createMemoryExtension(userMemoryRootDir(opts?.userId), {
+      createMemoryExtension(memRoot, {
         embedCacheMax: config.embedCacheMax,
         hybridWBm25: config.hybridWBm25,
         hybridWVec: config.hybridWVec,
       }),
     );
+    // Compaction safeguard: token usage logging + pre-compaction memory flush
+    extensionFactories.push(createCompactionSafeguardExtension(memRoot));
   }
 
   if (cronService) {
@@ -488,6 +494,14 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   const settingsManager = getSettingsManager(workspace);
 
+  // Apply compaction settings: earlier trigger + more recent context preserved
+  settingsManager.applyOverrides({
+    compaction: {
+      reserveTokens: config.compactionReserveTokens,
+      keepRecentTokens: config.compactionKeepRecentTokens,
+    },
+  });
+
   // Build system prompt: runtime context + bootstrap files from agentHomeDir + project SOUL.md
   const systemPrompt = await buildSystemPrompt({
     mode: config.mode,
@@ -497,6 +511,8 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     cronEnabled: config.cronEnabled,
     heartbeatEnabled: config.heartbeatEnabled,
     userSkillsDir: config.userSkillsDir,
+    maxFileChars: config.systemPromptFileChars,
+    maxTotalChars: config.systemPromptTotalChars,
   });
 
   const resourceLoader = new DefaultResourceLoader({
@@ -510,6 +526,15 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     appendSystemPrompt: systemPrompt,
     noThemes: true,
     noPromptTemplates: true,
+    // Enforce per-file char limit on Pi SDK's AGENTS.md loading to prevent prompt bloat
+    agentsFilesOverride: (base) => ({
+      agentsFiles: base.agentsFiles.map((f) => ({
+        path: f.path,
+        content: f.content.length > config.systemPromptFileChars
+          ? f.content.slice(0, config.systemPromptFileChars) + "\n\n[... truncated ...]"
+          : f.content,
+      })),
+    }),
   });
   await resourceLoader.reload();
 
@@ -530,9 +555,11 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     restricted,
     workspace,
     userScope,
+    userId: opts?.userId,
+    anonymous: !!opts?.anonymous,
     lastAccess: Date.now(),
   });
-  console.log(`[session] created: ${sessionId} -> ${model.provider}/${model.id} (workspace: ${workspace}, restricted: ${restricted}, userScope: ${userScope})`);
+  log.info("session created", { session_id: sessionId, model: `${model.provider}/${model.id}`, workspace, restricted, user_scope: userScope });
   return entry;
 }
 
@@ -757,9 +784,9 @@ export async function startBackgroundServices() {
   // Only start the local scheduler in server mode
   if (config.cronEnabled) {
     cronService.start();
-    console.log("⏰ Cron service started (local scheduler active)");
+    log.info("cron service started", { mode: "local" });
   } else {
-    console.log("⏰ Cron service registered (sidecar proxy mode, no local scheduler)");
+    log.info("cron service registered", { mode: "sidecar-proxy" });
   }
 }
 
@@ -838,6 +865,170 @@ export function listAvailableSkills(): SkillInfo[] {
   return skills;
 }
 
+// ─── Session Handoff ────────────────────────────────
+
+export interface HandoffResult {
+  new_session_id: string;
+  summary: string;
+  workspace: string;
+  model: string;
+  restricted: boolean;
+}
+
+function findExistingSession(sessionId: string): {
+  key: string;
+  entry: CreateAgentSessionResult;
+  meta: SessionMeta;
+} {
+  // Exact match first
+  const entry = sessions.get(sessionId);
+  const meta = sessionMetas.get(sessionId);
+  if (entry && meta) return { key: sessionId, entry, meta };
+
+  // Prefix match (sessionId::workspace::restricted::userScope)
+  const matches: Array<{ key: string; entry: CreateAgentSessionResult; meta: SessionMeta }> = [];
+  for (const [key, e] of sessions.entries()) {
+    if (key === sessionId || key.startsWith(`${sessionId}::`)) {
+      const m = sessionMetas.get(key);
+      if (m) matches.push({ key, entry: e, meta: m });
+    }
+  }
+
+  if (matches.length === 0) throw new Error(`session not found: ${sessionId}`);
+  if (matches.length > 1) throw new Error(`ambiguous session_id: ${sessionId}, provide workspace/user_id`);
+  return matches[0];
+}
+
+async function generateHandoffSummary(
+  serializedConversation: string,
+  goal?: string,
+): Promise<string> {
+  const transcript = serializedConversation.slice(-50_000);
+
+  const prompt = [
+    "You are preparing a handoff summary for a fresh coding-agent session.",
+    "The transcript below is serialized reference material, not a live conversation.",
+    "Summarize it compactly. Include only facts clearly supported by the transcript:",
+    "- Overall task / user intent",
+    "- Key decisions and assumptions",
+    "- Files inspected or modified",
+    "- Commands/tests run and notable results",
+    "- Remaining work / blockers / next steps",
+    "",
+    "Keep it concise, structured, and under 1200 characters.",
+    "Do not continue the conversation. Do not address the user directly.",
+    "If a category has nothing, omit it. Output in the same language as the transcript.",
+    "",
+    goal?.trim() ? `New goal for the fresh session: ${goal.trim()}` : "",
+    "",
+    "<conversation>",
+    transcript,
+    "</conversation>",
+  ].filter(Boolean).join("\n");
+
+  // Lightweight model fallback chain (same as generateSessionTitle)
+  const summaryModels = [
+    { model: "gemini-3-flash-preview", api: "openai" },
+    { model: "claude-haiku-4-5", api: "anthropic" },
+  ];
+
+  let lastError: Error | null = null;
+
+  for (const { model, api } of summaryModels) {
+    try {
+      if (api === "anthropic") {
+        const res = await fetch(`${config.proxyUrl}/v1/messages`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": config.proxyKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1024,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`Anthropic ${model} ${res.status}: ${body.slice(0, 200)}`);
+        }
+        const result = (await res.json()) as { content?: Array<{ text?: string }> };
+        const text = result.content?.[0]?.text?.trim() || "";
+        if (text) return text;
+      } else {
+        const res = await fetch(`${config.proxyUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.proxyKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1024,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`OpenAI ${model} ${res.status}: ${body.slice(0, 200)}`);
+        }
+        const result = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const text = result.choices?.[0]?.message?.content?.trim() || "";
+        if (text) return text;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      log.error("handoff summary failed", { model, error: lastError.message });
+      continue;
+    }
+  }
+
+  if (lastError) throw lastError;
+  return "(summary unavailable)";
+}
+
+export async function handoffSession(
+  sourceSessionId: string,
+  opts?: { goal?: string },
+): Promise<HandoffResult> {
+  const { entry: sourceEntry, meta } = findExistingSession(sourceSessionId);
+  const source = sourceEntry.session;
+
+  if (source.isStreaming) {
+    throw new Error("cannot handoff while source session is streaming");
+  }
+
+  const messages = source.messages;
+  if (messages.length === 0) {
+    throw new Error("cannot handoff an empty session");
+  }
+
+  // Serialize conversation for summary
+  const llmMessages = convertToLlm(messages);
+  const serialized = serializeConversation(llmMessages);
+
+  const summary = await generateHandoffSummary(serialized, opts?.goal);
+
+  const newSessionId = randomUUID();
+  const modelStr = source.model
+    ? `${source.model.provider}/${source.model.id}`
+    : `${config.primaryProvider}/${config.primaryModel}`;
+
+  log.info("session handoff", { source: sourceSessionId, target: newSessionId, summary_len: summary.length });
+
+  return {
+    new_session_id: newSessionId,
+    summary,
+    workspace: meta.workspace,
+    model: modelStr,
+    restricted: meta.restricted,
+  };
+}
+
 // ─── Lightweight Title Generation ───────────────────
 
 export async function generateSessionTitle(
@@ -910,7 +1101,7 @@ export async function generateSessionTitle(
       }
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      console.error(`[title] ${model} failed:`, lastError.message);
+      log.error("title generation failed", { model, error: lastError.message });
       continue;
     }
   }

@@ -27,14 +27,18 @@ var wsClientUpgrader = websocket.Upgrader{
 	WriteBufferSize: 16 * 1024,
 }
 
+// EventCallback is invoked for key WebSocket lifecycle events (connect, disconnect, etc.).
+type EventCallback func(userID, event string, properties map[string]interface{})
+
 // WSHandler exposes vm-agent events/commands over browser WebSocket with ticket auth.
 type WSHandler struct {
 	pool        *ChannelPool
 	ticketStore *TicketStore
+	onEvent     EventCallback
 }
 
-func NewWSHandler(pool *ChannelPool, ticketStore *TicketStore) *WSHandler {
-	return &WSHandler{pool: pool, ticketStore: ticketStore}
+func NewWSHandler(pool *ChannelPool, ticketStore *TicketStore, onEvent EventCallback) *WSHandler {
+	return &WSHandler{pool: pool, ticketStore: ticketStore, onEvent: onEvent}
 }
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -88,12 +92,25 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Uint64("last_seq", lastSeq).
 		Msg("agent ws bridge: client connected")
 
+	if h.onEvent != nil {
+		h.onEvent(userID, "ws_oc_connected", map[string]interface{}{
+			"container": containerName,
+			"last_seq":  lastSeq,
+		})
+	}
+
 	h.runConnection(conn, channel, userID, replay, updates)
 
 	log.Info().
 		Str("user_id", userID).
 		Str("container", containerName).
 		Msg("agent ws bridge: client disconnected")
+
+	if h.onEvent != nil {
+		h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{
+			"container": containerName,
+		})
+	}
 }
 
 func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, userID string, replay []Event, updates <-chan Event) {
