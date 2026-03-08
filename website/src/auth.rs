@@ -45,6 +45,41 @@ pub async fn admin_login(db: &sqlx::PgPool, email: &str, password: &str) -> Resu
     })
 }
 
+/// Verify user credentials (any role). Same as admin_login but not restricted to admins.
+pub async fn user_login(db: &sqlx::PgPool, email: &str, password: &str) -> Result<User, AppError> {
+    let row = sqlx::query_as::<_, UserWithHash>(
+        "SELECT id, name, email, password_hash, role, created_at, updated_at FROM users WHERE email = $1",
+    )
+    .bind(email)
+    .fetch_optional(db)
+    .await?;
+
+    let user = row.ok_or(AppError::Unauthorized)?;
+    let stored = user
+        .password_hash
+        .as_deref()
+        .ok_or(AppError::Unauthorized)?;
+
+    let valid = if stored.starts_with("$2a$") || stored.starts_with("$2b$") {
+        bcrypt::verify(password, stored).unwrap_or(false)
+    } else {
+        sha256_hex(password) == stored
+    };
+
+    if !valid {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(User {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+    })
+}
+
 fn sha256_hex(input: &str) -> String {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
@@ -121,6 +156,49 @@ impl FromRequestParts<AppState> for AdminUser {
             .ok_or_else(|| Redirect::to("/admin/login"))?;
 
         Ok(AdminUser(user))
+    }
+}
+
+/// Axum extractor for any authenticated user (not admin-restricted).
+/// Redirects to /login if not authenticated.
+#[derive(Debug, Clone)]
+pub struct AuthUser {
+    pub user: User,
+    pub token: String,
+}
+
+impl FromRequestParts<AppState> for AuthUser {
+    type Rejection = Redirect;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let cookies = Cookies::from_request_parts(parts, state)
+            .await
+            .map_err(|_| Redirect::to("/login"))?;
+
+        let token = cookies
+            .get(SESSION_COOKIE)
+            .map(|c| c.value().to_string())
+            .ok_or_else(|| Redirect::to("/login"))?;
+
+        if token.is_empty() {
+            return Err(Redirect::to("/login"));
+        }
+
+        let session = crate::models::auth_session::get_session_by_token(&state.db, &token)
+            .await
+            .map_err(|_| Redirect::to("/login"))?;
+
+        let (user_id, _role) = session.ok_or_else(|| Redirect::to("/login"))?;
+
+        let user = crate::models::user::get_user(&state.db, &user_id)
+            .await
+            .map_err(|_| Redirect::to("/login"))?
+            .ok_or_else(|| Redirect::to("/login"))?;
+
+        Ok(AuthUser { user, token })
     }
 }
 
