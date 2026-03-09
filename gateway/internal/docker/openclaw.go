@@ -317,6 +317,32 @@ func (oc *OpenClawClient) ListTemplates() ([]TemplateSummary, error) {
 	return results, nil
 }
 
+// GetTemplateSummary returns the summary for a single template by name.
+func (oc *OpenClawClient) GetTemplateSummary(templateName string) (*TemplateSummary, error) {
+	manifest, _, err := oc.loadTemplate(templateName)
+	if err != nil {
+		return nil, err
+	}
+
+	agents := make([]TemplateAgentSummary, 0, len(manifest.Agents))
+	for _, a := range manifest.Agents {
+		agents = append(agents, TemplateAgentSummary{
+			ID:       a.ID,
+			Name:     a.Name,
+			Role:     a.Role,
+			IsLeader: a.IsLeader,
+		})
+	}
+
+	return &TemplateSummary{
+		Name:        manifest.Name,
+		DisplayName: manifest.DisplayName,
+		Description: manifest.Description,
+		Version:     manifest.Version,
+		Agents:      agents,
+	}, nil
+}
+
 func (oc *OpenClawClient) copyTemplateFile(containerName, sourcePath, targetPath string) error {
 	data, err := os.ReadFile(sourcePath)
 	if err != nil {

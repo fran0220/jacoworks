@@ -321,6 +321,9 @@ func main() {
 	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
 	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
 
+	// User: available teams (templates)
+	mux.Handle("GET /api/teams", authMiddleware.Authenticate(http.HandlerFunc(userTeamsHandler(s, ocClient))))
+
 	// Admin: container management
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(dockerClient)))))
 	mux.Handle("GET /api/admin/templates", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listTemplatesHandler(ocClient)))))
@@ -474,6 +477,48 @@ func listTemplatesHandler(ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
 			templates = []dockerpkg.TemplateSummary{}
 		}
 		writeJSON(w, http.StatusOK, templates)
+	}
+}
+
+// userTeamsHandler returns the templates available to the current user.
+// Unlike the admin endpoint, this checks what template is installed on the user's container.
+func userTeamsHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		// Check if user has an OpenClaw container with a template installed
+		templateName, _ := s.GetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+
+		var teams []dockerpkg.TemplateSummary
+		if templateName != "" && ocClient != nil {
+			if tmpl, err := ocClient.GetTemplateSummary(templateName); err == nil {
+				teams = append(teams, *tmpl)
+			}
+		}
+
+		// Also list all available templates so user knows what's available
+		if ocClient != nil {
+			if all, err := ocClient.ListTemplates(); err == nil {
+				seen := map[string]bool{}
+				for _, t := range teams {
+					seen[t.Name] = true
+				}
+				for _, t := range all {
+					if !seen[t.Name] {
+						teams = append(teams, t)
+					}
+				}
+			}
+		}
+
+		if teams == nil {
+			teams = []dockerpkg.TemplateSummary{}
+		}
+		writeJSON(w, http.StatusOK, teams)
 	}
 }
 

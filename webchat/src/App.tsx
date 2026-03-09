@@ -358,12 +358,14 @@ export default function App() {
         onDelete={handleDeleteSession}
         onTabChange={setActiveTab}
         teamSelector={
-          <TeamSelector
-            teams={teams}
-            activeSessionKey={activeTeamSessionKey}
-            loading={teamLoading}
-            onChange={handleTeamChange}
-          />
+          teams.length > 1 ? (
+            <TeamSelector
+              teams={teams}
+              activeSessionKey={activeTeamSessionKey}
+              loading={teamLoading}
+              onChange={handleTeamChange}
+            />
+          ) : undefined
         }
       />
       <div className="chat-main">

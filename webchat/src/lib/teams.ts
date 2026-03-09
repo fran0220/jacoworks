@@ -131,7 +131,7 @@ export function setStoredTeamSessionKey(sessionKey: string) {
 
 export async function fetchInstalledTeams(): Promise<TeamOption[]> {
   try {
-    const res = await fetch(`${GATEWAY_URL}/api/admin/templates`, {
+    const res = await fetch(`${GATEWAY_URL}/api/teams`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${AUTH_TOKEN}`,
