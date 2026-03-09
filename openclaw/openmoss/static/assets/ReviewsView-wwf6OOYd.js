@@ -1,0 +1,1 @@
+import{_ as t}from"./_plugin-vue_export-helper-DlAUqK2U.js";import{a as o,b as r,e as s}from"./index-mpiYc_FA.js";const a={},c={class:"space-y-4"};function n(d,e){return o(),r("div",c,[...e[0]||(e[0]=[s("h2",{class:"text-lg font-semibold"},"审查记录",-1),s("p",{class:"text-muted-foreground"},"审查记录页面，开发中...",-1)])])}const l=t(a,[["render",n]]);export{l as default};

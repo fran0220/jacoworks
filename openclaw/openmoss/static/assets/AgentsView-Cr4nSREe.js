@@ -1,0 +1,1 @@
+import{_ as s}from"./_plugin-vue_export-helper-DlAUqK2U.js";import{a as o,b as n,e as t}from"./index-mpiYc_FA.js";const r={},a={class:"space-y-4"};function c(d,e){return o(),n("div",a,[...e[0]||(e[0]=[t("h2",{class:"text-lg font-semibold"},"Agent 管理",-1),t("p",{class:"text-muted-foreground"},"Agent 列表页面，开发中...",-1)])])}const _=s(r,[["render",c]]);export{_ as default};
