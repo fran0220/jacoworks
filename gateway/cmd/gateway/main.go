@@ -644,7 +644,13 @@ func jamossProxyHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient) http
 			return
 		}
 
-		target := &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", info.ContainerIP, info.HostPort)}
+		if !ocClient.IsJaMOSSInstalled(info.ContainerName) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "jamoss not installed in this container"})
+			return
+		}
+
+		// JaMOSS runs on port 6565 inside the container (same host as OpenClaw)
+		target := &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", info.ContainerIP, 6565)}
 		proxy := &httputil.ReverseProxy{
 			Director: func(req *http.Request) {
 				req.URL.Scheme = target.Scheme

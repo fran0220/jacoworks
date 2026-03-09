@@ -1395,22 +1395,34 @@ func (oc *OpenClawClient) EnsureRunning(ctx context.Context, info *store.Contain
 		log.Info().Str("name", info.ContainerName).Msg("config synced on ensure running")
 	}
 
-	if err := oc.waitForContainerHealthURL(info.ContainerName, jaMOSSHealthEndpoint, 5*time.Second); err != nil {
-		startCmd := fmt.Sprintf(`
+	// Only attempt JaMOSS lifecycle if the start script is installed in the container
+	if oc.IsJaMOSSInstalled(info.ContainerName) {
+		if err := oc.waitForContainerHealthURL(info.ContainerName, jaMOSSHealthEndpoint, 5*time.Second); err != nil {
+			startCmd := fmt.Sprintf(`
 if pgrep -f "uvicorn app.main:app --host 0.0.0.0 --port 6565" >/dev/null 2>&1; then
   true
 else
   nohup %s > /data/workspace/jamoss/logs/jamoss.log 2>&1 &
 fi
 `, jaMOSSStartScript)
-		if startErr := oc.execChecked(info.ContainerName, startCmd); startErr != nil {
-			log.Warn().Err(startErr).Str("name", info.ContainerName).Msg("jamoss start failed on ensure running")
-		} else if healthErr := oc.waitForContainerHealthURL(info.ContainerName, jaMOSSHealthEndpoint, 30*time.Second); healthErr != nil {
-			log.Warn().Err(healthErr).Str("name", info.ContainerName).Msg("jamoss health check failed on ensure running")
+			if startErr := oc.execChecked(info.ContainerName, startCmd); startErr != nil {
+				log.Warn().Err(startErr).Str("name", info.ContainerName).Msg("jamoss start failed on ensure running")
+			} else if healthErr := oc.waitForContainerHealthURL(info.ContainerName, jaMOSSHealthEndpoint, 30*time.Second); healthErr != nil {
+				log.Warn().Err(healthErr).Str("name", info.ContainerName).Msg("jamoss health check failed on ensure running")
+			}
 		}
 	}
 
 	return nil
+}
+
+// IsJaMOSSInstalled checks if the JaMOSS start script exists in the container.
+func (oc *OpenClawClient) IsJaMOSSInstalled(containerName string) bool {
+	out, err := oc.client.Exec(containerName, "sh", "-c", fmt.Sprintf("test -f %s && echo yes || echo no", jaMOSSStartScript))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) == "yes"
 }
 
 // UpstreamAddr returns the WebSocket upstream address for an OpenClaw container.
