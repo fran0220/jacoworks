@@ -1,4 +1,4 @@
-import { MessageSquare, Users, Clock, Box } from "lucide-react";
+import { MessageSquare, Users, ListTodo, Box, Activity } from "lucide-react";
 import type { ChatSession } from "../types";
 import type { ActiveTab } from "../App";
 import { USER_NAME } from "../lib/config";
@@ -10,8 +10,9 @@ function stripMarkdown(text: string): string {
 const TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
   { key: "chat", label: "对话", Icon: MessageSquare },
   { key: "teams", label: "团队", Icon: Users },
-  { key: "cron", label: "任务", Icon: Clock },
+  { key: "cron", label: "任务", Icon: ListTodo },
   { key: "container", label: "容器", Icon: Box },
+  { key: "feed", label: "动态", Icon: Activity },
 ];
 
 export default function Sidebar({

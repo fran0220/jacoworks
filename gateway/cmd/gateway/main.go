@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -325,6 +327,19 @@ func main() {
 	mux.Handle("GET /api/teams", authMiddleware.Authenticate(http.HandlerFunc(userTeamsHandler(s, ocClient))))
 	mux.Handle("POST /api/teams/install", authMiddleware.Authenticate(http.HandlerFunc(installUserTeamHandler(s, ocClient, auditLogger))))
 
+	// User: JaMOSS read proxy (OpenClaw middleware)
+	jamossProxy := authMiddleware.Authenticate(http.HandlerFunc(jamossProxyHandler(s, ocClient)))
+	mux.Handle("GET /api/jamoss", jamossProxy)
+	mux.Handle("GET /api/jamoss/", jamossProxy)
+	mux.Handle("POST /api/jamoss", jamossProxy)
+	mux.Handle("POST /api/jamoss/", jamossProxy)
+	mux.Handle("PUT /api/jamoss", jamossProxy)
+	mux.Handle("PUT /api/jamoss/", jamossProxy)
+	mux.Handle("DELETE /api/jamoss", jamossProxy)
+	mux.Handle("DELETE /api/jamoss/", jamossProxy)
+	mux.Handle("PATCH /api/jamoss", jamossProxy)
+	mux.Handle("PATCH /api/jamoss/", jamossProxy)
+
 	// Admin: container management
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(dockerClient)))))
 	mux.Handle("GET /api/admin/templates", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listTemplatesHandler(ocClient)))))
@@ -585,6 +600,115 @@ func installUserTeamHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient, 
 
 		al.Log(user.ID, "team_install", "template", fmt.Sprintf("%s:%s", info.ContainerName, req.Template), r.RemoteAddr)
 		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+const jamossProxyPrefix = "/api/jamoss"
+
+func jamossProxyHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		upstreamPath, logicalPath := buildJaMOSSProxyPaths(r.URL.Path)
+		if !isAllowedJaMOSSReadPath(logicalPath) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "jamoss path not allowed"})
+			return
+		}
+
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "openclaw container not found"})
+			return
+		}
+		if info.ContainerIP == "" || info.HostPort == 0 {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw container endpoint unavailable"})
+			return
+		}
+
+		if err := ocClient.EnsureRunning(r.Context(), info); err != nil {
+			log.Warn().Err(err).Str("user_id", user.ID).Str("container", info.ContainerName).Msg("jamoss proxy: ensure running failed")
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw container unavailable"})
+			return
+		}
+
+		target := &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", info.ContainerIP, info.HostPort)}
+		proxy := &httputil.ReverseProxy{
+			Director: func(req *http.Request) {
+				req.URL.Scheme = target.Scheme
+				req.URL.Host = target.Host
+				req.URL.Path = upstreamPath
+				req.URL.RawPath = ""
+				req.Host = target.Host
+				req.Header.Del("Authorization")
+				req.Header.Set("X-Admin-Token", info.ContainerToken)
+			},
+			ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
+				log.Error().Err(err).Str("target", target.Host).Str("user_id", user.ID).Str("path", logicalPath).Msg("jamoss proxy error")
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "jamoss upstream unavailable"})
+			},
+		}
+
+		proxy.ServeHTTP(w, r)
+	}
+}
+
+func buildJaMOSSProxyPaths(requestPath string) (upstreamPath string, logicalPath string) {
+	relative := strings.TrimPrefix(requestPath, jamossProxyPrefix)
+	if relative == "" {
+		relative = "/"
+	}
+	if !strings.HasPrefix(relative, "/") {
+		relative = "/" + relative
+	}
+	clean := path.Clean(relative)
+	if clean == "." {
+		clean = "/"
+	}
+	return "/api" + clean, clean
+}
+
+func isAllowedJaMOSSReadPath(p string) bool {
+	if p == "/admin/login" {
+		return false
+	}
+	if strings.HasPrefix(p, "/admin/agents/") && strings.HasSuffix(p, "/reset-key") {
+		return false
+	}
+
+	switch {
+	case strings.HasPrefix(p, "/admin/tasks"):
+		return true
+	case strings.HasPrefix(p, "/admin/sub-tasks"):
+		return true
+	case p == "/agents":
+		return true
+	case strings.HasPrefix(p, "/scores/"):
+		return true
+	case strings.HasPrefix(p, "/review-records"):
+		return true
+	case strings.HasPrefix(p, "/logs"):
+		return true
+	case strings.HasPrefix(p, "/feed/"):
+		return true
+	case strings.HasPrefix(p, "/tasks"):
+		return true
+	case strings.HasPrefix(p, "/sub-tasks"):
+		return true
+	default:
+		return false
 	}
 }
 

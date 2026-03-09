@@ -10,11 +10,12 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Composer from "./components/Composer";
 import ContainerPanel from "./components/ContainerPanel";
-import CronPanel from "./components/CronPanel";
+import FeedPanel from "./components/FeedPanel";
+import TasksPanel from "./components/TasksPanel";
 import TeamPanel from "./components/TeamPanel";
 import SetupGate from "./components/SetupGate";
 
-export type ActiveTab = "chat" | "teams" | "cron" | "container";
+export type ActiveTab = "chat" | "teams" | "cron" | "container" | "feed";
 
 const ACTIVE_TEAM_STORAGE_KEY = "jacoworks.webchat.active-team.v1";
 
@@ -389,7 +390,8 @@ export default function App() {
           <TeamPanel activeSessionKey={activeTeamSessionKey} onSwitchTeam={handleSwitchTeamFromPanel} />
         )}
         {activeTab === "container" && <ContainerPanel />}
-        {activeTab === "cron" && <CronPanel />}
+        {activeTab === "cron" && <TasksPanel />}
+        {activeTab === "feed" && <FeedPanel />}
       </div>
     </div>
   );
