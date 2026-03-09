@@ -34,7 +34,7 @@ GIT_URL="https://github.com/git-for-windows/git/releases/download/${GIT_RELEASE}
 GIT_SHA256=""  # Not pinned: GitHub mirrors may rebuild the archive
 
 # Bun version & URL (standalone Windows x64 zip)
-BUN_VERSION="1.2.5"
+BUN_VERSION="1.3.10"
 BUN_ZIP="bun-windows-x64.zip"
 BUN_URL="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ZIP}"
 BUN_SHA256=""  # Not pinned: version-locked URL is sufficient

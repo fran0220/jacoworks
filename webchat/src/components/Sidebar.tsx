@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { MessageSquare, Box, Clock } from "lucide-react";
 import type { ChatSession } from "../types";
 import type { ActiveTab } from "../App";
@@ -21,6 +22,8 @@ export default function Sidebar({
   onNew,
   onDelete,
   onTabChange,
+  teamSelector,
+  open,
 }: {
   sessions: ChatSession[];
   activeId: string | null;
@@ -29,15 +32,19 @@ export default function Sidebar({
   onNew: () => void;
   onDelete: (id: string) => void;
   onTabChange: (tab: ActiveTab) => void;
+  teamSelector?: ReactNode;
+  open?: boolean;
 }) {
   return (
-    <div className="sidebar">
+    <div className={`sidebar${open ? " open" : ""}`}>
       <div className="sidebar-header">
         <span className="sidebar-title">JAcoworks</span>
         {activeTab === "chat" && (
           <button className="new-chat-btn" onClick={onNew}>新会话</button>
         )}
       </div>
+
+      {teamSelector && <div className="sidebar-team-slot">{teamSelector}</div>}
 
       {/* Tab navigation */}
       <div className="sidebar-tabs">

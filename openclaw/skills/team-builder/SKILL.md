@@ -143,9 +143,9 @@ for a in cfg.get('agents', {}).get('list', []):
 
 | 模型 | 适用场景 |
 |------|---------|
-| `proxy/claude-sonnet-4-6` | 日常对话、规划、审查 |
+| `proxy/gpt-5.4` | **推荐** — 通用任务、编码、规划、审查 |
+| `proxy/claude-sonnet-4-6` | 日常对话、规划 |
 | `proxy/claude-opus-4-6` | 复杂推理、架构设计 |
-| `proxy/gpt-5.4` | 通用任务、编码 |
 | `proxy/grok-4.1-fast` | 高速巡查、简单任务 |
 | `proxy/gemini-3.1-pro-preview` | 深度推理、长文分析 |
 
@@ -223,10 +223,10 @@ else:
 
 | 角色 | ID | 模型 | 职责 |
 |------|----|------|------|
-| 规划师 | planner | claude-sonnet-4-6 | 任务分解、分配、交付 (leader) |
+| 规划师 | planner | gpt-5.4 | 任务分解、分配、交付 (leader) |
 | 执行者 | executor | gpt-5.4 | 编码实现、提交成果 |
-| 审查者 | reviewer | claude-sonnet-4-6 | 质量审查、评分 |
-| 巡查者 | patrol | grok-4.1-fast | 异常监控、超时检测 |
+| 审查者 | reviewer | gpt-5.4 | 质量审查、评分 |
+| 巡查者 | patrol | gpt-5.4 | 异常监控、超时检测 |
 
 用户说 "安装 OpenMOSS 团队" 时，按上述角色创建完整团队。
 

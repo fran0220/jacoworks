@@ -1,4 +1,4 @@
-import { AUTH_TOKEN, GATEWAY_URL, OPENCLAW_TOKEN } from "./config";
+import { AUTH_TOKEN, DEFAULT_OPENCLAW_SESSION_KEY, GATEWAY_URL, OPENCLAW_TOKEN } from "./config";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected";
 
@@ -48,6 +48,7 @@ export class OpenClawClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, PendingRequest>();
   private connected = false;
+  private sessionKey = DEFAULT_OPENCLAW_SESSION_KEY;
   private disposed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
@@ -83,6 +84,30 @@ export class OpenClawClient {
 
   get isConnected() {
     return this.connected;
+  }
+
+  setSessionKey(sessionKey: string) {
+    const normalized = sessionKey.trim();
+    if (!normalized) return;
+    this.sessionKey = normalized;
+  }
+
+  getSessionKey() {
+    return this.sessionKey;
+  }
+
+  sendChat(message: string): Promise<unknown> {
+    return this.request("chat.send", {
+      sessionKey: this.sessionKey,
+      message,
+      idempotencyKey: makeID("chat"),
+    });
+  }
+
+  abortChat(): Promise<unknown> {
+    return this.request("chat.abort", {
+      sessionKey: this.sessionKey,
+    });
   }
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {

@@ -390,7 +390,11 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     );
   }
 
-  const codingTools = createCodingTools(workspace);
+  const codingTools = createCodingTools(workspace, {
+    bash: process.platform === "win32"
+      ? { commandPrefix: "export LANG=C.UTF-8; export LC_ALL=C.UTF-8" }
+      : undefined,
+  });
 
   const extensionFactories: ExtensionFactory[] = [];
 

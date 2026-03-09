@@ -5,3 +5,5 @@ export const OPENCLAW_TOKEN =
   window.__OPENCLAW_TOKEN__ ||
   window.__OPENCLAW_GATEWAY_TOKEN__ ||
   "";
+
+export const DEFAULT_OPENCLAW_SESSION_KEY = window.__OPENCLAW_SESSION_KEY__ || "agent:default:main";

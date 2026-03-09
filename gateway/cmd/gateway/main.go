@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -322,9 +323,11 @@ func main() {
 
 	// Admin: container management
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(dockerClient)))))
+	mux.Handle("GET /api/admin/templates", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listTemplatesHandler(ocClient)))))
 	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(dockerClient, s, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(dockerClient, s, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/sync-config", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(syncContainerConfigHandler(s, ocClient, auditLogger)))))
+	mux.Handle("POST /api/admin/containers/{id}/install-template", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(installTemplateHandler(s, ocClient, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/restart", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(restartContainerHandler(dockerClient, ocClient, s, auditLogger)))))
 
 	// Admin: user management (container provisioning after activation)
@@ -452,6 +455,83 @@ func listContainersHandler(client *dockerpkg.Client) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, containers)
+	}
+}
+
+func listTemplatesHandler(ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
+		templates, err := ocClient.ListTemplates()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if templates == nil {
+			templates = []dockerpkg.TemplateSummary{}
+		}
+		writeJSON(w, http.StatusOK, templates)
+	}
+}
+
+func installTemplateHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient, al *audit.Logger) http.HandlerFunc {
+	type installRequest struct {
+		Template string `json:"template"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req installRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		req.Template = strings.TrimSpace(req.Template)
+		if req.Template == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template is required"})
+			return
+		}
+
+		containerName := r.PathValue("id")
+		info, err := s.GetContainerInfoByName(r.Context(), containerName)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
+			return
+		}
+
+		if info.ContainerType != store.ContainerTypeOpenClaw {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "install-template only supported for openclaw containers"})
+			return
+		}
+
+		result, err := ocClient.InstallTemplate(r.Context(), info, req.Template)
+		if err != nil {
+			switch {
+			case errors.Is(err, dockerpkg.ErrTemplateNotFound):
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			case errors.Is(err, dockerpkg.ErrTemplatesDirNotFound):
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			default:
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+			return
+		}
+
+		al.Log(user.ID, "container_install_template", "container", fmt.Sprintf("%s:%s", containerName, req.Template), r.RemoteAddr)
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 
@@ -971,8 +1051,8 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"fal_api_key":        llm.FalAPIKey,
 			"jimeng_api_url":     llm.JimengAPIURL,
 			"jimeng_api_key":     llm.JimengAPIKey,
-			"primary_model":     llm.PrimaryModel,
-			"primary_provider":  llm.PrimaryProvider,
+			"primary_model":      llm.PrimaryModel,
+			"primary_provider":   llm.PrimaryProvider,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},

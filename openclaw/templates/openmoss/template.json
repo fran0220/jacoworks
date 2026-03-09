@@ -10,7 +10,7 @@
       "role": "planner",
       "prompt": "prompts/task-planner.md",
       "skills": ["task-planner-skill"],
-      "model": "proxy/claude-sonnet-4-6",
+      "model": "proxy/gpt-5.4",
       "isLeader": true,
       "cron": {
         "schedule": { "kind": "every", "everyMs": 900000 },
@@ -38,7 +38,7 @@
       "role": "reviewer",
       "prompt": "prompts/task-reviewer.md",
       "skills": ["task-reviewer-skill"],
-      "model": "proxy/claude-sonnet-4-6",
+      "model": "proxy/gpt-5.4",
       "isLeader": false,
       "cron": {
         "schedule": { "kind": "every", "everyMs": 900000 },
@@ -52,7 +52,7 @@
       "role": "patrol",
       "prompt": "prompts/task-patrol.md",
       "skills": ["task-patrol-skill"],
-      "model": "proxy/grok-4.1-fast",
+      "model": "proxy/gpt-5.4",
       "isLeader": false,
       "cron": {
         "schedule": { "kind": "every", "everyMs": 1800000 },

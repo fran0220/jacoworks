@@ -171,7 +171,33 @@
 
 ---
 
-## 2026-03-09: webchat = OpenClaw 专属，不接入 vm-agent
+## 2026-03-09: OpenClaw WS 代理重连循环 — 旧 JS + 缺少容器安全配置
+
+**触发**: webchat 浏览器端显示 "已连接" 但每 11 秒断开重连。Gateway 日志 "downstream read error: use of closed network connection"。
+
+**根因** (双重):
+1. **旧 webchat JS**: 部署了新的 `openclaw-client.ts` (含 connect.challenge 握手逻辑) 但没有 `npm run build` 并 rsync `chat.js` 到 jingao。浏览器加载旧 JS，不含 OpenClaw 握手代码，收到 `connect.challenge` 后不发送 `connect` 回复
+2. **缺少 `dangerouslyDisableDeviceAuth: true`**: OpenClaw 对通过代理连接的客户端要求设备配对，代理场景下无法完成配对流程
+
+**时间线分析**: 11 秒 = 1 秒健康检查 + 10 秒 OpenClaw 握手超时。OpenClaw 发送 `connect.challenge` → 等待 10 秒 → 无 `connect` 回复 → 发送 WS close (code=1000) → bridge 关闭 → webchat 重连
+
+**诊断过程**: 添加帧级 debug 日志 + close handler 到 `openclaw_bridge.go`。发现 `up→down` 有 `connect.challenge` 帧但 `down→up` 零帧，证明浏览器端完全没有发送数据
+
+**第二个 bug**: 修复握手后发现文本重复渲染 — OpenClaw 同时发送 `agent` stream (逐 token delta) 和 `chat` delta (累计快照)，两路都被渲染。修复：`event-parser.ts` 忽略 `chat` delta
+
+**修复** (4 处):
+1. `webchat/src/lib/event-parser.ts`: `chat` state=delta → `ignore` (消除重复文本)
+2. `gateway/internal/docker/openclaw.go`: GenerateConfig 添加 `dangerouslyDisableDeviceAuth: true` + `trustedProxies`
+3. `gateway/internal/docker/openclaw.go`: UpstreamAddr 优先用 DB `container_ip` (支持多主机 OpenClaw)
+4. 重新构建并部署 webchat JS: `npm run build` + rsync
+
+**参考**: [FastClaw](https://github.com/fastclaw-ai/fastclaw) — K8s 原生 OpenClaw 管理平台，其 WS 代理和容器配置是主要参考
+
+**规则**:
+- webchat 代码变更后**必须** `npm run build` + 部署 `chat.js`，否则浏览器加载旧代码
+- OpenClaw 容器代理场景**必须** `dangerouslyDisableDeviceAuth: true` + `trustedProxies`
+- OpenClaw 同时发送 `agent` stream 和 `chat` delta 两路文本，前端只能使用一路
+- 调试 WS 代理问题时，首先添加帧级日志确认数据流方向，再定位具体组件
 
 **触发**: 分析 webchat 用户流程时，发现 webchat 的 `WSClient` 只包装 `OpenClawClient`，但没有明确的架构边界声明，导致 `config.ts` OPENCLAW_TOKEN 会 fallback 到 AUTH_TOKEN（安全隐患），`selfProvisionHandler` 硬编码 vm-agent（用户无法自助获得 OpenClaw 容器）。
 
@@ -190,3 +216,21 @@
 7. AGENTS.md 和 webchat/AGENTS.md 明确 "OpenClaw 专属" 定位
 
 **规则**: webchat 和桌面端是两个独立产品入口，共享 UI 组件但连接协议完全不同。不要在 webchat 中加 vm-agent 兼容路径。
+
+## 2026-03-09: Windows 下文档生成乱码 (mojibake)
+
+**触发**: 标哥反馈 Windows 下 Agent 创建/编辑 Excel 文件全是乱码，`ä¸°å®` 形式的 UTF-8→Latin-1 mojibake。
+
+**根因分析**:
+1. 乱码模式是 UTF-8 字节被当作 Latin-1 解读（`丰` → `ä¸°`），不是 GBK 问题
+2. ExcelJS 本身写 xlsx 用 UTF-8 XML，没问题
+3. **主因**: LLM 有时通过 bash heredoc/echo/cat 创建 `.mjs` 脚本文件（而非 `write` 工具），MSYS2 bash 在 Windows 下可能破坏非 ASCII 字符编码
+4. **次因**: 捆绑的 Bun v1.2.5 有已知的 ZigString UTF-8/Latin-1 混淆 bug（oven-sh/bun#26647），影响文件路径和部分 API
+
+**修复**:
+1. SKILL.md 新增强制规则：必须用 `write` 工具创建含非 ASCII 的脚本文件，禁止 bash heredoc/echo/cat
+2. system prompt 新增 Windows 编码规则：`CRITICAL ENCODING RULE` 提示 LLM 不要通过 shell 传递 CJK 文本
+3. bash 工具在 Windows 上自动设置 `LANG=C.UTF-8` 和 `LC_ALL=C.UTF-8` commandPrefix
+4. 升级捆绑 Bun 版本 1.2.5 → 1.3.10（包含大量 Windows 修复）
+
+**规则**: 在 Windows 上，非 ASCII 文本（中日韩等）绝对不能通过 bash shell 管道传递。所有包含非 ASCII 的文件必须通过 `write` 工具（UTF-8 `writeFile`）创建，然后用纯 ASCII bash 命令执行。

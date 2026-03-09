@@ -34,6 +34,7 @@ Process office documents by writing and executing Node.js scripts. The following
 ## Script Rules
 
 - **ESM only**: use `import`, file extension `.mjs`
+- **MUST use `write` tool**: always use the `write` tool to create `.mjs` scripts — NEVER create them via bash heredoc, echo, or cat redirect. The `write` tool guarantees UTF-8 encoding; bash shell may corrupt CJK characters on Windows.
 - **Output**: place files in the user's workspace directory
 - **Cleanup**: delete the `.mjs` script after successful execution
 - **Errors**: wrap in try/catch, `console.error()` for diagnostics

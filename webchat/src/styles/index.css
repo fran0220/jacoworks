@@ -73,6 +73,45 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 }
 .new-chat-btn:hover { background: var(--accent-hover); }
 
+.sidebar-team-slot {
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.team-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.team-selector-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.team-selector-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  padding: 0.4rem 0.5rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.team-selector-input:focus { border-color: var(--accent); }
+
+.team-selector-current {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;

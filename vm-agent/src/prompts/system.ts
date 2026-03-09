@@ -62,6 +62,7 @@ function buildRuntimePrompt(opts: SystemPromptOptions): string {
     parts.push(`
 <windows_environment>
 This app bundles bash and GNU coreutils (grep, sed, find, cat, etc.) on Windows. Use bash normally — it works the same as on macOS/Linux.
+CRITICAL ENCODING RULE: When creating scripts (.mjs, .js) that contain non-ASCII text (Chinese, Japanese, etc.), you MUST use the \`write\` tool to create the file. NEVER use bash heredoc, echo, or cat redirect to create script files with non-ASCII content — the shell may corrupt the encoding on Windows, causing garbled output in generated documents (Excel, Word, CSV, etc.).
 </windows_environment>`);
   }
 

@@ -61,6 +61,35 @@ func (s *Store) UpdateBotConfig(ctx context.Context, userID, containerType strin
 	return nil
 }
 
+func (s *Store) GetContainerTemplate(ctx context.Context, userID, containerType string) (string, error) {
+	var templateName string
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(config->>'team_template', '')
+		 FROM containers WHERE user_id = $1 AND container_type = $2`,
+		userID, containerType,
+	).Scan(&templateName)
+	if err != nil {
+		return "", fmt.Errorf("get container template: %w", err)
+	}
+	return templateName, nil
+}
+
+func (s *Store) SetContainerTemplate(ctx context.Context, userID, containerType, templateName string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE containers
+		 SET config = jsonb_set(COALESCE(config, '{}'::jsonb), '{team_template}', to_jsonb($1::text), true)
+		 WHERE user_id = $2 AND container_type = $3`,
+		templateName, userID, containerType,
+	)
+	if err != nil {
+		return fmt.Errorf("set container template: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("container not found for user %s type %s", userID, containerType)
+	}
+	return nil
+}
+
 func (s *Store) UpdateAppliedConfigHash(ctx context.Context, userID, containerType, hash string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE containers SET applied_config_hash = $1, last_synced_at = $2

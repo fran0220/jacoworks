@@ -4,12 +4,19 @@ import { WSClient, type WSFrame } from "./lib/ws-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "./lib/event-parser";
 import { extractText, streamBlocksToContent, toContentItems } from "./lib/message-extract";
 import { listSessions, createSession, getSession, updateSession, deleteSession, generateTitle } from "./lib/sessions";
+import {
+  fetchInstalledTeams,
+  getCachedTeams,
+  getStoredTeamSessionKey,
+  setStoredTeamSessionKey,
+} from "./lib/teams";
 import { posthog } from "./lib/posthog";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Composer from "./components/Composer";
 import ContainerPanel from "./components/ContainerPanel";
 import CronPanel from "./components/CronPanel";
+import TeamSelector from "./components/TeamSelector";
 
 export type ActiveTab = "chat" | "container" | "cron";
 
@@ -29,6 +36,9 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [blocks, setBlocks] = useState<StreamBlock[]>([]);
+  const [teams, setTeams] = useState(() => getCachedTeams());
+  const [activeTeamSessionKey, setActiveTeamSessionKey] = useState(() => getStoredTeamSessionKey(getCachedTeams()));
+  const [teamLoading, setTeamLoading] = useState(() => getCachedTeams().length <= 1);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connState, setConnState] = useState<"disconnected" | "connecting" | "connected">("disconnected");
@@ -41,7 +51,9 @@ export default function App() {
   const streamingRef = useRef(false);
   const activeSessionRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
+  const activeTeamSessionKeyRef = useRef(activeTeamSessionKey);
   const renderTimer = useRef<number | null>(null);
+  const wsRef = useRef<WSClient | null>(null);
 
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
@@ -50,6 +62,12 @@ export default function App() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    activeTeamSessionKeyRef.current = activeTeamSessionKey;
+    setStoredTeamSessionKey(activeTeamSessionKey);
+    wsRef.current?.setSessionKey(activeTeamSessionKey);
+  }, [activeTeamSessionKey]);
 
   useEffect(
     () => () => {
@@ -114,10 +132,9 @@ export default function App() {
     setStreaming(false);
   }, []);
 
-  const wsRef = useRef<WSClient | null>(null);
-
   useEffect(() => {
     const ws = new WSClient({
+      sessionKey: activeTeamSessionKeyRef.current,
       onStateChange(state, msg) {
         setConnState(state);
         setConnMsg(msg);
@@ -181,6 +198,33 @@ export default function App() {
     ws.connect();
     return () => ws.dispose();
   }, [scheduleRender, finishStream]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTeamLoading(true);
+
+    fetchInstalledTeams()
+      .then((nextTeams) => {
+        if (cancelled) return;
+        setTeams(nextTeams);
+        setTeamLoading(false);
+
+        setActiveTeamSessionKey((prev) => {
+          if (nextTeams.some((team) => team.sessionKey === prev)) {
+            return prev;
+          }
+          return getStoredTeamSessionKey(nextTeams);
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTeamLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     listSessions()
@@ -265,19 +309,47 @@ export default function App() {
 
     updateSession(sid, { messages: updated }).catch(() => {});
 
-    wsRef.current.send("prompt", text, { session_id: sid });
-    posthog.capture("chat_message_sent", { session_id: sid });
+    wsRef.current.send("prompt", text);
+    posthog.capture("chat_message_sent", {
+      session_id: sid,
+      session_key: activeTeamSessionKeyRef.current,
+    });
   }, []);
 
   const handleAbort = useCallback(() => {
-    wsRef.current?.sendAbort(activeSessionRef.current || undefined);
+    wsRef.current?.sendAbort();
     finishStream();
   }, [finishStream]);
+
+  const handleTeamChange = useCallback(
+    (sessionKey: string) => {
+      if (sessionKey === activeTeamSessionKeyRef.current) return;
+
+      if (streamingRef.current) {
+        wsRef.current?.sendAbort();
+        finishStream();
+      }
+
+      setActiveTeamSessionKey(sessionKey);
+      setActiveSessionId(null);
+      activeSessionRef.current = null;
+      setMessages([]);
+      messagesRef.current = [];
+      setBlocks([]);
+      blocksRef.current = [];
+      streamTextRef.current = "";
+      setStreaming(false);
+      setError(null);
+      setSidebarOpen(false);
+    },
+    [finishStream],
+  );
 
   return (
     <div className="app-layout">
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <Sidebar
+        open={sidebarOpen}
         sessions={sessions}
         activeId={activeSessionId}
         activeTab={activeTab}
@@ -285,6 +357,14 @@ export default function App() {
         onNew={handleNewSession}
         onDelete={handleDeleteSession}
         onTabChange={setActiveTab}
+        teamSelector={
+          <TeamSelector
+            teams={teams}
+            activeSessionKey={activeTeamSessionKey}
+            loading={teamLoading}
+            onChange={handleTeamChange}
+          />
+        }
       />
       <div className="chat-main">
         <div className="status-bar">
