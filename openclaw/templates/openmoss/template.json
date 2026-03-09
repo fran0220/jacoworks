@@ -1,0 +1,76 @@
+{
+  "name": "openmoss",
+  "displayName": "OpenMOSS 多智能体协作团队",
+  "description": "基于 OpenMOSS 模式的多智能体协作团队，包含规划师、执行者、审查者和巡查者四个角色，通过任务调度系统自动协作完成复杂任务。",
+  "version": "1.0.0",
+  "agents": [
+    {
+      "id": "planner",
+      "name": "规划师",
+      "role": "planner",
+      "prompt": "prompts/task-planner.md",
+      "skills": ["task-planner-skill"],
+      "model": "proxy/claude-sonnet-4-6",
+      "isLeader": true,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 900000 },
+        "sessionTarget": "isolated",
+        "message": "检查任务队列，分配待分配子任务，跟进阻塞项，处理收尾交付"
+      }
+    },
+    {
+      "id": "executor",
+      "name": "执行者",
+      "role": "executor",
+      "prompt": "prompts/task-executor.md",
+      "skills": ["task-executor-skill"],
+      "model": "proxy/gpt-5.4",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 900000 },
+        "sessionTarget": "isolated",
+        "message": "检查我的子任务，继续执行进行中的任务，认领新任务"
+      }
+    },
+    {
+      "id": "reviewer",
+      "name": "审查者",
+      "role": "reviewer",
+      "prompt": "prompts/task-reviewer.md",
+      "skills": ["task-reviewer-skill"],
+      "model": "proxy/claude-sonnet-4-6",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 900000 },
+        "sessionTarget": "isolated",
+        "message": "检查待审查的子任务，逐个审查评分"
+      }
+    },
+    {
+      "id": "patrol",
+      "name": "巡查者",
+      "role": "patrol",
+      "prompt": "prompts/task-patrol.md",
+      "skills": ["task-patrol-skill"],
+      "model": "proxy/grok-4.1-fast",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 1800000 },
+        "sessionTarget": "isolated",
+        "message": "执行巡查：超时检测、卡住检测、孤儿任务、返工监控"
+      }
+    }
+  ],
+  "workspace": {
+    "sharedRoot": "/data/teams/{team_id}",
+    "files": {
+      "AGENTS.md": "workspace/AGENTS.md",
+      "RULES.md": "rules/default-rules.md"
+    }
+  },
+  "middleware": {
+    "type": "openmoss",
+    "port": 6565,
+    "database": "sqlite:///data/teams/{team_id}/tasks.db"
+  }
+}

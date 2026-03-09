@@ -1,0 +1,3 @@
+[submodule "openclaw/openmoss"]
+	path = openclaw/openmoss
+	url = https://github.com/fran0220/openmoss.git
