@@ -110,7 +110,7 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		export PATH=\$$PATH:/usr/local/go/bin && \
 		export GOTOOLCHAIN=local && \
 		export GOPROXY=https://goproxy.cn,direct && \
-		CGO_ENABLED=0 go build -ldflags='-s -w' -o /tmp/jacoworks-gateway ./cmd/gateway && \
+		CGO_ENABLED=0 go build -buildvcs=false -ldflags='-s -w' -o /tmp/jacoworks-gateway ./cmd/gateway && \
 		sudo ln -sfn $(REPO_DIR)/openclaw /opt/jacoworks/openclaw && \
 		sudo systemctl stop jacoworks-gateway && \
 		sudo mv /tmp/jacoworks-gateway /opt/jacoworks/gateway && \
