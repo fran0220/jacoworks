@@ -10,9 +10,9 @@ description: 创建和管理多 Agent 协作团队 — 在容器内自助创建�
 ## 核心能力
 
 1. **创建团队** — 根据用户需求设计角色、生成 prompts/skills、写入配置
-2. **安装预置模板** — 安装 OpenMOSS 等预定义团队模板
+2. **安装预置模板** — 安装 JaMOSS 等预定义团队模板
 3. **管理团队** — 查看、修改、删除已创建的团队
-4. **安装中间件** — 可选安装 OpenMOSS 任务调度中间件 (FastAPI, port 6565)
+4. **安装中间件** — 可选安装 JaMOSS 任务调度中间件 (FastAPI, port 6565)
 
 ## 创建团队的完整流程
 
@@ -24,7 +24,7 @@ description: 创建和管理多 Agent 协作团队 — 在容器内自助创建�
 - 谁是 leader (用户对话入口，必须恰好一个)
 - 每个角色的模型选择
 - cron 唤醒间隔 (默认 15 分钟)
-- 是否需要 OpenMOSS 任务调度中间件
+- 是否需要 JaMOSS 任务调度中间件
 
 ### Step 2: 创建 Agent 目录和文件
 
@@ -169,25 +169,25 @@ for a in cfg.get('agents', {}).get('list', []):
 
 `sessionTarget: "isolated"` — cron 唤醒使用独立会话，不干扰用户对话。
 
-## 安装 OpenMOSS 中间件（可选）
+## 安装 JaMOSS 中间件（可选）
 
-如果团队需要任务调度系统（任务拆分→分配→执行→审查→评分），可以安装 OpenMOSS：
+如果团队需要任务调度系统（任务拆分→分配→执行→审查→评分），可以安装 JaMOSS：
 
 ```bash
-# 检查 OpenMOSS 是否已安装
+# 检查 JaMOSS 是否已安装
 curl -s http://127.0.0.1:6565/api/health 2>/dev/null && echo "已安装" || echo "未安装"
 
-# 如果 /opt/openmoss 存在但服务未运行，启动它
-if [ -f /opt/openmoss/app/main.py ]; then
+# 如果 /opt/jamoss 存在但服务未运行，启动它
+if [ -f /opt/jamoss/app/main.py ]; then
   nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 6565 \
-    --app-dir /opt/openmoss > /opt/openmoss/logs/uvicorn.log 2>&1 &
+    --app-dir /opt/jamoss > /opt/jamoss/logs/uvicorn.log 2>&1 &
 fi
 ```
 
-安装了 OpenMOSS 后，为每个 agent 的 SKILL.md 添加 task-cli.py 命令说明：
+安装了 JaMOSS 后，为每个 agent 的 SKILL.md 添加 task-cli.py 命令说明：
 
 ```bash
-python3 /opt/openmoss/task-cli.py --key $OPENMOSS_API_KEY <command>
+python3 /opt/jamoss/task-cli.py --key $JAMOSS_API_KEY <command>
 ```
 
 ## 管理已有团队
@@ -217,9 +217,9 @@ else:
 
 ## 预置模板
 
-如果容器中有预置模板（`/opt/openmoss/templates/` 或管理员预装），可以直接安装：
+如果容器中有预置模板（`/opt/jamoss/templates/` 或管理员预装），可以直接安装：
 
-### OpenMOSS 四角色协作团队
+### JaMOSS 四角色协作团队
 
 | 角色 | ID | 模型 | 职责 |
 |------|----|------|------|
@@ -228,7 +228,7 @@ else:
 | 审查者 | reviewer | gpt-5.4 | 质量审查、评分 |
 | 巡查者 | patrol | gpt-5.4 | 异常监控、超时检测 |
 
-用户说 "安装 OpenMOSS 团队" 时，按上述角色创建完整团队。
+用户说 "安装 JaMOSS 团队" 时，按上述角色创建完整团队。
 
 ## 重要约束
 

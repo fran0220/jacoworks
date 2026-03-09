@@ -10,7 +10,7 @@ description: 任务执行者 Skill — 领取、执行、提交子任务
 ## 使用方式
 
 ```bash
-python3 /opt/openmoss/task-cli.py --key $OPENMOSS_API_KEY <command> [args]
+python3 /opt/jamoss/task-cli.py --key $JAMOSS_API_KEY <command> [args]
 ```
 
 ## 可用命令

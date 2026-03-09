@@ -35,9 +35,9 @@ type OpenClawClient struct {
 }
 
 const (
-	openMOSSContainerRoot  = "/opt/openmoss"
-	openMOSSStartScript    = openMOSSContainerRoot + "/start-openmoss.sh"
-	openMOSSHealthEndpoint = "http://127.0.0.1:6565/api/health"
+	jaMOSSContainerRoot  = "/opt/jamoss"
+	jaMOSSStartScript    = jaMOSSContainerRoot + "/start-jamoss.sh"
+	jaMOSSHealthEndpoint = "http://127.0.0.1:6565/api/health"
 )
 
 var (
@@ -851,8 +851,8 @@ func (oc *OpenClawClient) WriteConfig(userID, token string) error {
 		if _, sshErr := oc.client.RunSSH("mkdir", "-p", userDir+"/workspace"); sshErr != nil {
 			return fmt.Errorf("mkdir workspace dir: %w", sshErr)
 		}
-		if _, sshErr := oc.client.RunSSH("mkdir", "-p", userDir+"/workspace/openmoss/data", userDir+"/workspace/openmoss/logs"); sshErr != nil {
-			return fmt.Errorf("mkdir openmoss workspace dirs: %w", sshErr)
+		if _, sshErr := oc.client.RunSSH("mkdir", "-p", userDir+"/workspace/jamoss/data", userDir+"/workspace/jamoss/logs"); sshErr != nil {
+			return fmt.Errorf("mkdir jamoss workspace dirs: %w", sshErr)
 		}
 
 		// Install team-builder skill to default agent skills (enables self-service team creation)
@@ -1032,8 +1032,8 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 		log.Warn().Err(err).Str("name", name).Msg("openclaw container started but health check failed")
 	}
 
-	if err := oc.InstallOpenMOSS(name, userID, token); err != nil {
-		log.Warn().Err(err).Str("container", name).Str("user_id", userID).Msg("openmoss install failed during provision")
+	if err := oc.InstallJaMOSS(name, userID, token); err != nil {
+		log.Warn().Err(err).Str("container", name).Str("user_id", userID).Msg("jamoss install failed during provision")
 	}
 
 	log.Info().Str("name", name).Str("host_ip", oc.client.hostIP).Int("host_port", hostPort).Msg("openclaw container provisioned")
@@ -1119,8 +1119,11 @@ func (oc *OpenClawClient) loadTeamBuilderSkill() ([]byte, error) {
 	return nil, fmt.Errorf("team-builder SKILL.md not found")
 }
 
-func resolveOpenMOSSRoot() (string, error) {
+func resolveJaMOSSRoot() (string, error) {
 	candidates := []string{
+		filepath.Join("openclaw", "jamoss"),
+		filepath.Join("..", "openclaw", "jamoss"),
+		filepath.Join("..", "..", "openclaw", "jamoss"),
 		filepath.Join("openclaw", "openmoss"),
 		filepath.Join("..", "openclaw", "openmoss"),
 		filepath.Join("..", "..", "openclaw", "openmoss"),
@@ -1128,6 +1131,9 @@ func resolveOpenMOSSRoot() (string, error) {
 
 	if wd, err := os.Getwd(); err == nil {
 		candidates = append(candidates,
+			filepath.Join(wd, "openclaw", "jamoss"),
+			filepath.Join(wd, "..", "openclaw", "jamoss"),
+			filepath.Join(wd, "..", "..", "openclaw", "jamoss"),
 			filepath.Join(wd, "openclaw", "openmoss"),
 			filepath.Join(wd, "..", "openclaw", "openmoss"),
 			filepath.Join(wd, "..", "..", "openclaw", "openmoss"),
@@ -1137,6 +1143,10 @@ func resolveOpenMOSSRoot() (string, error) {
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		candidates = append(candidates,
+			filepath.Join(exeDir, "openclaw", "jamoss"),
+			filepath.Join(exeDir, "..", "openclaw", "jamoss"),
+			filepath.Join(exeDir, "..", "..", "openclaw", "jamoss"),
+			filepath.Join(exeDir, "..", "..", "..", "openclaw", "jamoss"),
 			filepath.Join(exeDir, "openclaw", "openmoss"),
 			filepath.Join(exeDir, "..", "openclaw", "openmoss"),
 			filepath.Join(exeDir, "..", "..", "openclaw", "openmoss"),
@@ -1161,7 +1171,7 @@ func resolveOpenMOSSRoot() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("openmoss source not found in known paths")
+	return "", fmt.Errorf("jamoss source not found in known paths")
 }
 
 func (oc *OpenClawClient) copyDirToContainer(containerName, srcDir, dstDir string) error {
@@ -1231,16 +1241,16 @@ func (oc *OpenClawClient) copyDirToContainer(containerName, srcDir, dstDir strin
 	return nil
 }
 
-func renderOpenMOSSConfig(template []byte, userID, token string) []byte {
+func renderJaMOSSConfig(template []byte, userID, token string) []byte {
 	content := string(template)
 	content = strings.ReplaceAll(content, "{team_id}", userID)
 	content = strings.ReplaceAll(content, `registration_token: "openclaw-register-2024"`, fmt.Sprintf(`registration_token: "%s"`, token))
-	content = strings.ReplaceAll(content, `path: "./data/tasks.db"`, `path: "/data/workspace/openmoss/tasks.db"`)
+	content = strings.ReplaceAll(content, `path: "./data/tasks.db"`, `path: "/data/workspace/jamoss/tasks.db"`)
 	content = strings.ReplaceAll(content, `root: "./workspace"`, `root: "/data/workspace"`)
 	return []byte(content)
 }
 
-func openMOSSStartScriptContent() []byte {
+func jaMOSSStartScriptContent() []byte {
 	return []byte(`#!/bin/sh
 set -eu
 
@@ -1249,32 +1259,32 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   PYTHON_BIN="python"
 fi
 
-cd /opt/openmoss
-mkdir -p /data/workspace/openmoss
+cd /opt/jamoss
+mkdir -p /data/workspace/jamoss
 exec "$PYTHON_BIN" -m uvicorn app.main:app --host 0.0.0.0 --port 6565
 `)
 }
 
-// InstallOpenMOSS installs and starts OpenMOSS middleware inside an OpenClaw container.
-func (oc *OpenClawClient) InstallOpenMOSS(containerName, userID, token string) error {
-	root, err := resolveOpenMOSSRoot()
+// InstallJaMOSS installs and starts JaMOSS middleware inside an OpenClaw container.
+func (oc *OpenClawClient) InstallJaMOSS(containerName, userID, token string) error {
+	root, err := resolveJaMOSSRoot()
 	if err != nil {
 		return err
 	}
 
-	if err := oc.execChecked(containerName, fmt.Sprintf("mkdir -p %s/skills /data/workspace/openmoss /data/workspace/openmoss/logs", openMOSSContainerRoot)); err != nil {
-		return fmt.Errorf("prepare openmoss directories: %w", err)
+	if err := oc.execChecked(containerName, fmt.Sprintf("mkdir -p %s/skills /data/workspace/jamoss /data/workspace/jamoss/logs", jaMOSSContainerRoot)); err != nil {
+		return fmt.Errorf("prepare jamoss directories: %w", err)
 	}
 
-	if err := oc.copyDirToContainer(containerName, filepath.Join(root, "app"), filepath.Join(openMOSSContainerRoot, "app")); err != nil {
-		return fmt.Errorf("copy openmoss app: %w", err)
+	if err := oc.copyDirToContainer(containerName, filepath.Join(root, "app"), filepath.Join(jaMOSSContainerRoot, "app")); err != nil {
+		return fmt.Errorf("copy jamoss app: %w", err)
 	}
 
 	requirements, err := os.ReadFile(filepath.Join(root, "requirements.txt"))
 	if err != nil {
 		return fmt.Errorf("read requirements.txt: %w", err)
 	}
-	if err := oc.client.copyFileToContainer(containerName, filepath.Join(openMOSSContainerRoot, "requirements.txt"), requirements); err != nil {
+	if err := oc.client.copyFileToContainer(containerName, filepath.Join(jaMOSSContainerRoot, "requirements.txt"), requirements); err != nil {
 		return fmt.Errorf("copy requirements.txt: %w", err)
 	}
 
@@ -1282,7 +1292,7 @@ func (oc *OpenClawClient) InstallOpenMOSS(containerName, userID, token string) e
 	if err != nil {
 		return fmt.Errorf("read task-cli.py: %w", err)
 	}
-	if err := oc.client.copyFileToContainer(containerName, filepath.Join(openMOSSContainerRoot, "skills", "task-cli.py"), taskCLI); err != nil {
+	if err := oc.client.copyFileToContainer(containerName, filepath.Join(jaMOSSContainerRoot, "skills", "task-cli.py"), taskCLI); err != nil {
 		return fmt.Errorf("copy task-cli.py: %w", err)
 	}
 
@@ -1290,17 +1300,17 @@ func (oc *OpenClawClient) InstallOpenMOSS(containerName, userID, token string) e
 	if err != nil {
 		return fmt.Errorf("read config.example.yaml: %w", err)
 	}
-	configYAML := renderOpenMOSSConfig(configTemplate, userID, token)
-	if err := oc.client.copyFileToContainer(containerName, filepath.Join(openMOSSContainerRoot, "config.yaml"), configYAML); err != nil {
+	configYAML := renderJaMOSSConfig(configTemplate, userID, token)
+	if err := oc.client.copyFileToContainer(containerName, filepath.Join(jaMOSSContainerRoot, "config.yaml"), configYAML); err != nil {
 		return fmt.Errorf("copy config.yaml: %w", err)
 	}
 
-	if err := oc.client.copyFileToContainer(containerName, openMOSSStartScript, openMOSSStartScriptContent()); err != nil {
-		return fmt.Errorf("copy start-openmoss.sh: %w", err)
+	if err := oc.client.copyFileToContainer(containerName, jaMOSSStartScript, jaMOSSStartScriptContent()); err != nil {
+		return fmt.Errorf("copy start-jamoss.sh: %w", err)
 	}
 
-	if err := oc.execChecked(containerName, fmt.Sprintf("chmod +x %s %s", openMOSSStartScript, filepath.Join(openMOSSContainerRoot, "skills", "task-cli.py"))); err != nil {
-		return fmt.Errorf("chmod openmoss scripts: %w", err)
+	if err := oc.execChecked(containerName, fmt.Sprintf("chmod +x %s %s", jaMOSSStartScript, filepath.Join(jaMOSSContainerRoot, "skills", "task-cli.py"))); err != nil {
+		return fmt.Errorf("chmod jamoss scripts: %w", err)
 	}
 
 	installCmd := fmt.Sprintf(`
@@ -1315,7 +1325,7 @@ fi
 
 "$PYTHON_BIN" -m pip --version >/dev/null 2>&1 || "$PYTHON_BIN" -m ensurepip --upgrade
 "$PYTHON_BIN" -m pip install --no-cache-dir --user -r %s/requirements.txt aiofiles python-multipart
-`, openMOSSContainerRoot)
+`, jaMOSSContainerRoot)
 	if err := oc.execChecked(containerName, installCmd); err != nil {
 		return fmt.Errorf("install python dependencies: %w", err)
 	}
@@ -1324,18 +1334,18 @@ fi
 if pgrep -f "uvicorn app.main:app --host 0.0.0.0 --port 6565" >/dev/null 2>&1; then
   true
 else
-  nohup %s > /data/workspace/openmoss/logs/openmoss.log 2>&1 &
+  nohup %s > /data/workspace/jamoss/logs/jamoss.log 2>&1 &
 fi
-`, openMOSSStartScript)
+`, jaMOSSStartScript)
 	if err := oc.execChecked(containerName, startCmd); err != nil {
-		return fmt.Errorf("start openmoss service: %w", err)
+		return fmt.Errorf("start jamoss service: %w", err)
 	}
 
-	if err := oc.waitForContainerHealthURL(containerName, openMOSSHealthEndpoint, 60*time.Second); err != nil {
+	if err := oc.waitForContainerHealthURL(containerName, jaMOSSHealthEndpoint, 60*time.Second); err != nil {
 		return err
 	}
 
-	log.Info().Str("container", containerName).Str("user_id", userID).Msg("openmoss middleware installed and healthy")
+	log.Info().Str("container", containerName).Str("user_id", userID).Msg("jamoss middleware installed and healthy")
 	return nil
 }
 
@@ -1385,18 +1395,18 @@ func (oc *OpenClawClient) EnsureRunning(ctx context.Context, info *store.Contain
 		log.Info().Str("name", info.ContainerName).Msg("config synced on ensure running")
 	}
 
-	if err := oc.waitForContainerHealthURL(info.ContainerName, openMOSSHealthEndpoint, 5*time.Second); err != nil {
+	if err := oc.waitForContainerHealthURL(info.ContainerName, jaMOSSHealthEndpoint, 5*time.Second); err != nil {
 		startCmd := fmt.Sprintf(`
 if pgrep -f "uvicorn app.main:app --host 0.0.0.0 --port 6565" >/dev/null 2>&1; then
   true
 else
-  nohup %s > /data/workspace/openmoss/logs/openmoss.log 2>&1 &
+  nohup %s > /data/workspace/jamoss/logs/jamoss.log 2>&1 &
 fi
-`, openMOSSStartScript)
+`, jaMOSSStartScript)
 		if startErr := oc.execChecked(info.ContainerName, startCmd); startErr != nil {
-			log.Warn().Err(startErr).Str("name", info.ContainerName).Msg("openmoss start failed on ensure running")
-		} else if healthErr := oc.waitForContainerHealthURL(info.ContainerName, openMOSSHealthEndpoint, 30*time.Second); healthErr != nil {
-			log.Warn().Err(healthErr).Str("name", info.ContainerName).Msg("openmoss health check failed on ensure running")
+			log.Warn().Err(startErr).Str("name", info.ContainerName).Msg("jamoss start failed on ensure running")
+		} else if healthErr := oc.waitForContainerHealthURL(info.ContainerName, jaMOSSHealthEndpoint, 30*time.Second); healthErr != nil {
+			log.Warn().Err(healthErr).Str("name", info.ContainerName).Msg("jamoss health check failed on ensure running")
 		}
 	}
 

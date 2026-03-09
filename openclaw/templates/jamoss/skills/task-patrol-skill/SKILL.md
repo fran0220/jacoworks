@@ -10,7 +10,7 @@ description: 任务巡查者 Skill — 定期巡查任务系统健康状态
 ## 使用方式
 
 ```bash
-python3 /opt/openmoss/task-cli.py --key $OPENMOSS_API_KEY <command> [args]
+python3 /opt/jamoss/task-cli.py --key $JAMOSS_API_KEY <command> [args]
 ```
 
 ## 可用命令

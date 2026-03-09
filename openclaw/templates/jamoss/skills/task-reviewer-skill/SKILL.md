@@ -10,7 +10,7 @@ description: 任务审查者 Skill — 审查子任务成果、评分、决定�
 ## 使用方式
 
 ```bash
-python3 /opt/openmoss/task-cli.py --key $OPENMOSS_API_KEY <command> [args]
+python3 /opt/jamoss/task-cli.py --key $JAMOSS_API_KEY <command> [args]
 ```
 
 ## 可用命令

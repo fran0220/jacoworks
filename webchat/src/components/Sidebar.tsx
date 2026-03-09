@@ -1,5 +1,4 @@
-import type { ReactNode } from "react";
-import { MessageSquare, Box, Clock } from "lucide-react";
+import { MessageSquare, Users, Clock, Box } from "lucide-react";
 import type { ChatSession } from "../types";
 import type { ActiveTab } from "../App";
 import { USER_NAME } from "../lib/config";
@@ -10,8 +9,9 @@ function stripMarkdown(text: string): string {
 
 const TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
   { key: "chat", label: "对话", Icon: MessageSquare },
-  { key: "container", label: "容器", Icon: Box },
+  { key: "teams", label: "团队", Icon: Users },
   { key: "cron", label: "任务", Icon: Clock },
+  { key: "container", label: "容器", Icon: Box },
 ];
 
 export default function Sidebar({
@@ -22,7 +22,6 @@ export default function Sidebar({
   onNew,
   onDelete,
   onTabChange,
-  teamSelector,
   open,
 }: {
   sessions: ChatSession[];
@@ -32,7 +31,6 @@ export default function Sidebar({
   onNew: () => void;
   onDelete: (id: string) => void;
   onTabChange: (tab: ActiveTab) => void;
-  teamSelector?: ReactNode;
   open?: boolean;
 }) {
   return (
@@ -43,8 +41,6 @@ export default function Sidebar({
           <button className="new-chat-btn" onClick={onNew}>新会话</button>
         )}
       </div>
-
-      {teamSelector && <div className="sidebar-team-slot">{teamSelector}</div>}
 
       {/* Tab navigation */}
       <div className="sidebar-tabs">

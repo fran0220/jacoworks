@@ -323,6 +323,7 @@ func main() {
 
 	// User: available teams (templates)
 	mux.Handle("GET /api/teams", authMiddleware.Authenticate(http.HandlerFunc(userTeamsHandler(s, ocClient))))
+	mux.Handle("POST /api/teams/install", authMiddleware.Authenticate(http.HandlerFunc(installUserTeamHandler(s, ocClient, auditLogger))))
 
 	// Admin: container management
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(dockerClient)))))
@@ -481,44 +482,109 @@ func listTemplatesHandler(ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
 }
 
 // userTeamsHandler returns the templates available to the current user.
-// Unlike the admin endpoint, this checks what template is installed on the user's container.
+// Unlike the admin endpoint, this includes the current installed template and active leader session key.
 func userTeamsHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
+	type response struct {
+		Installed        string                      `json:"installed"`
+		ActiveSessionKey string                      `json:"activeSessionKey"`
+		Available        []dockerpkg.TemplateSummary `json:"available"`
+	}
+
+	leaderSessionKey := func(tmpl *dockerpkg.TemplateSummary) string {
+		if tmpl == nil {
+			return ""
+		}
+		for _, agent := range tmpl.Agents {
+			if agent.IsLeader && strings.TrimSpace(agent.ID) != "" {
+				return fmt.Sprintf("agent:%s:main", agent.ID)
+			}
+		}
+		return ""
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
 
-		// Check if user has an OpenClaw container with a template installed
-		templateName, _ := s.GetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		available, err := ocClient.ListTemplates()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if available == nil {
+			available = []dockerpkg.TemplateSummary{}
+		}
 
-		var teams []dockerpkg.TemplateSummary
-		if templateName != "" && ocClient != nil {
-			if tmpl, err := ocClient.GetTemplateSummary(templateName); err == nil {
-				teams = append(teams, *tmpl)
+		installed, _ := s.GetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		activeSessionKey := ""
+		if installed != "" {
+			if tmpl, err := ocClient.GetTemplateSummary(installed); err == nil {
+				activeSessionKey = leaderSessionKey(tmpl)
 			}
 		}
 
-		// Also list all available templates so user knows what's available
-		if ocClient != nil {
-			if all, err := ocClient.ListTemplates(); err == nil {
-				seen := map[string]bool{}
-				for _, t := range teams {
-					seen[t.Name] = true
-				}
-				for _, t := range all {
-					if !seen[t.Name] {
-						teams = append(teams, t)
-					}
-				}
-			}
+		writeJSON(w, http.StatusOK, response{
+			Installed:        installed,
+			ActiveSessionKey: activeSessionKey,
+			Available:        available,
+		})
+	}
+}
+
+func installUserTeamHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient, al *audit.Logger) http.HandlerFunc {
+	type installRequest struct {
+		Template string `json:"template"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
 		}
 
-		if teams == nil {
-			teams = []dockerpkg.TemplateSummary{}
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
 		}
-		writeJSON(w, http.StatusOK, teams)
+
+		var req installRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		req.Template = strings.TrimSpace(req.Template)
+		if req.Template == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template is required"})
+			return
+		}
+
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "openclaw container not found"})
+			return
+		}
+
+		result, err := ocClient.InstallTemplate(r.Context(), info, req.Template)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := s.SetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw, result.Template); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "team_install", "template", fmt.Sprintf("%s:%s", info.ContainerName, req.Template), r.RemoteAddr)
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 

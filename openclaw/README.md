@@ -7,7 +7,7 @@
 ```
 openclaw/
   templates/
-    openmoss/                    # OpenMOSS 多智能体协作团队
+    jamoss/                    # JaMOSS 多智能体协作团队
       template.json              # 模板元数据 (agents, cron, models, middleware)
       prompts/                   # 各角色系统提示词
         task-planner.md
@@ -28,7 +28,7 @@ openclaw/
 ## 模板生命周期
 
 1. **安装** — 用户选择模板 → gateway 读取 template.json → 生成 agents + cron 配置写入 openclaw.json → 创建 workspace 目录 + 文件
-2. **运行** — OpenClaw cron 定时唤醒各 agent → 通过 task-cli.py 调用 OpenMOSS API 协作
+2. **运行** — OpenClaw cron 定时唤醒各 agent → 通过 task-cli.py 调用 JaMOSS API 协作
 3. **切换** — webchat 前端通过 sessionKey (`agent:<leader-id>:main`) 切换到不同团队 leader 对话
 
 ## 新增模板

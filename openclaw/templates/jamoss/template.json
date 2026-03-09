@@ -1,7 +1,7 @@
 {
-  "name": "openmoss",
-  "displayName": "OpenMOSS 多智能体协作团队",
-  "description": "基于 OpenMOSS 模式的多智能体协作团队，包含规划师、执行者、审查者和巡查者四个角色，通过任务调度系统自动协作完成复杂任务。",
+  "name": "jamoss",
+  "displayName": "JaMOSS 多智能体协作团队",
+  "description": "基于 JaMOSS 模式的多智能体协作团队，包含规划师、执行者、审查者和巡查者四个角色，通过任务调度系统自动协作完成复杂任务。",
   "version": "1.0.0",
   "agents": [
     {
@@ -69,7 +69,7 @@
     }
   },
   "middleware": {
-    "type": "openmoss",
+    "type": "jamoss",
     "port": 6565,
     "database": "sqlite:///data/teams/{team_id}/tasks.db"
   }

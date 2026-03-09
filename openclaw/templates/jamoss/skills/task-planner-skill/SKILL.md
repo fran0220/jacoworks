@@ -10,7 +10,7 @@ description: 任务规划师 Skill — 通过 CLI 工具创建任务、拆分模
 ## 使用方式
 
 ```bash
-python3 /opt/openmoss/task-cli.py --key $OPENMOSS_API_KEY <command> [args]
+python3 /opt/jamoss/task-cli.py --key $JAMOSS_API_KEY <command> [args]
 ```
 
 ## 可用命令

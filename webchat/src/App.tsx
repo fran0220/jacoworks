@@ -4,21 +4,38 @@ import { WSClient, type WSFrame } from "./lib/ws-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "./lib/event-parser";
 import { extractText, streamBlocksToContent, toContentItems } from "./lib/message-extract";
 import { listSessions, createSession, getSession, updateSession, deleteSession, generateTitle } from "./lib/sessions";
-import {
-  fetchInstalledTeams,
-  getCachedTeams,
-  getStoredTeamSessionKey,
-  setStoredTeamSessionKey,
-} from "./lib/teams";
+import { DEFAULT_OPENCLAW_SESSION_KEY, OPENCLAW_TOKEN } from "./lib/config";
 import { posthog } from "./lib/posthog";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Composer from "./components/Composer";
 import ContainerPanel from "./components/ContainerPanel";
 import CronPanel from "./components/CronPanel";
-import TeamSelector from "./components/TeamSelector";
+import TeamPanel from "./components/TeamPanel";
+import SetupGate from "./components/SetupGate";
 
-export type ActiveTab = "chat" | "container" | "cron";
+export type ActiveTab = "chat" | "teams" | "cron" | "container";
+
+const ACTIVE_TEAM_STORAGE_KEY = "jacoworks.webchat.active-team.v1";
+
+function getStoredTeamSessionKey(): string {
+  try {
+    const value = (window.localStorage.getItem(ACTIVE_TEAM_STORAGE_KEY) || "").trim();
+    return value || DEFAULT_OPENCLAW_SESSION_KEY;
+  } catch {
+    return DEFAULT_OPENCLAW_SESSION_KEY;
+  }
+}
+
+function setStoredTeamSessionKey(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return;
+  try {
+    window.localStorage.setItem(ACTIVE_TEAM_STORAGE_KEY, normalized);
+  } catch {
+    // ignore storage failures
+  }
+}
 
 function isContentEvent(event: ParsedEvent): boolean {
   return (
@@ -36,9 +53,7 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [blocks, setBlocks] = useState<StreamBlock[]>([]);
-  const [teams, setTeams] = useState(() => getCachedTeams());
-  const [activeTeamSessionKey, setActiveTeamSessionKey] = useState(() => getStoredTeamSessionKey(getCachedTeams()));
-  const [teamLoading, setTeamLoading] = useState(() => getCachedTeams().length <= 1);
+  const [activeTeamSessionKey, setActiveTeamSessionKey] = useState(() => getStoredTeamSessionKey());
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connState, setConnState] = useState<"disconnected" | "connecting" | "connected">("disconnected");
@@ -133,6 +148,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!OPENCLAW_TOKEN) return;
+
     const ws = new WSClient({
       sessionKey: activeTeamSessionKeyRef.current,
       onStateChange(state, msg) {
@@ -196,35 +213,11 @@ export default function App() {
 
     wsRef.current = ws;
     ws.connect();
-    return () => ws.dispose();
-  }, [scheduleRender, finishStream]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setTeamLoading(true);
-
-    fetchInstalledTeams()
-      .then((nextTeams) => {
-        if (cancelled) return;
-        setTeams(nextTeams);
-        setTeamLoading(false);
-
-        setActiveTeamSessionKey((prev) => {
-          if (nextTeams.some((team) => team.sessionKey === prev)) {
-            return prev;
-          }
-          return getStoredTeamSessionKey(nextTeams);
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setTeamLoading(false);
-      });
-
     return () => {
-      cancelled = true;
+      ws.dispose();
+      wsRef.current = null;
     };
-  }, []);
+  }, [scheduleRender, finishStream]);
 
   useEffect(() => {
     listSessions()
@@ -345,6 +338,23 @@ export default function App() {
     [finishStream],
   );
 
+  const handleSwitchTeamFromPanel = useCallback(
+    (sessionKey: string) => {
+      if (sessionKey === activeTeamSessionKeyRef.current) {
+        setActiveTab("chat");
+        setSidebarOpen(false);
+        return;
+      }
+      handleTeamChange(sessionKey);
+      setActiveTab("chat");
+    },
+    [handleTeamChange],
+  );
+
+  if (!OPENCLAW_TOKEN) {
+    return <SetupGate />;
+  }
+
   return (
     <div className="app-layout">
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
@@ -356,21 +366,14 @@ export default function App() {
         onSelect={handleSelectSession}
         onNew={handleNewSession}
         onDelete={handleDeleteSession}
-        onTabChange={setActiveTab}
-        teamSelector={
-          teams.length > 1 ? (
-            <TeamSelector
-              teams={teams}
-              activeSessionKey={activeTeamSessionKey}
-              loading={teamLoading}
-              onChange={handleTeamChange}
-            />
-          ) : undefined
-        }
+        onTabChange={(tab) => {
+          setActiveTab(tab);
+          setSidebarOpen(false);
+        }}
       />
       <div className="chat-main">
         <div className="status-bar">
-          <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)} style={{ padding: "0.25rem" }}>
+          <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
             ☰
           </button>
           <span className={`status-dot ${connState}`} />
@@ -381,6 +384,9 @@ export default function App() {
             <ChatView messages={messages} blocks={blocks} streaming={streaming} error={error} />
             <Composer disabled={connState !== "connected"} streaming={streaming} onSend={handleSend} onAbort={handleAbort} />
           </>
+        )}
+        {activeTab === "teams" && (
+          <TeamPanel activeSessionKey={activeTeamSessionKey} onSwitchTeam={handleSwitchTeamFromPanel} />
         )}
         {activeTab === "container" && <ContainerPanel />}
         {activeTab === "cron" && <CronPanel />}
