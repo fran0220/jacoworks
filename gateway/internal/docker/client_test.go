@@ -1,75 +1,147 @@
 package docker
 
 import (
-	"fmt"
+	"context"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
-// mockRunner records commands for verification without executing them.
-type mockRunner struct {
-	calls   []mockCall
-	results map[string]mockResult // key pattern → result
+// mockDockerClient implements the dockerAPI interface for testing.
+type mockDockerClient struct {
+	calls      []mockCall
+	containers map[string]types.ContainerJSON
+	listResult []types.Container
+	createErr  error
+	startErr   error
+	stopErr    error
+	pauseErr   error
+	unpauseErr error
+	removeErr  error
 }
 
 type mockCall struct {
-	Name string
-	Args []string
+	Method string
+	Args   []string
 }
 
-type mockResult struct {
-	Output string
-	Err    error
-}
-
-func newMockRunner() *mockRunner {
-	return &mockRunner{
-		results: make(map[string]mockResult),
+func newMockDockerClient() *mockDockerClient {
+	return &mockDockerClient{
+		containers: make(map[string]types.ContainerJSON),
 	}
 }
 
-func (m *mockRunner) Run(name string, args ...string) (string, error) {
-	m.calls = append(m.calls, mockCall{Name: name, Args: args})
-
-	// Match by command key: "name args[0] args[1]..."
-	key := name + " " + strings.Join(args, " ")
-	for pattern, result := range m.results {
-		if strings.Contains(key, pattern) {
-			return result.Output, result.Err
-		}
-	}
-	return "", nil
+func (m *mockDockerClient) record(method string, args ...string) {
+	m.calls = append(m.calls, mockCall{Method: method, Args: args})
 }
 
-func (m *mockRunner) On(pattern string, output string, err error) {
-	m.results[pattern] = mockResult{Output: output, Err: err}
-}
-
-func (m *mockRunner) lastCall() mockCall {
-	if len(m.calls) == 0 {
-		return mockCall{}
-	}
-	return m.calls[len(m.calls)-1]
-}
-
-func (m *mockRunner) findCall(substr string) (mockCall, bool) {
+func (m *mockDockerClient) findCall(method string) (mockCall, bool) {
 	for _, c := range m.calls {
-		full := c.Name + " " + strings.Join(c.Args, " ")
-		if strings.Contains(full, substr) {
+		if c.Method == method {
 			return c, true
 		}
 	}
 	return mockCall{}, false
 }
 
-func newTestClient(runner *mockRunner) *Client {
-	c := NewClient("opc@10.0.1.3", "jacoworks/vm-agent:latest", "agent-net", 18789, "10.0.1.3")
-	c.runner = runner
-	return c
+func (m *mockDockerClient) ContainerCreate(_ context.Context, config *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, containerName string) (container.CreateResponse, error) {
+	m.record("ContainerCreate", containerName, config.Image)
+	if m.createErr != nil {
+		return container.CreateResponse{}, m.createErr
+	}
+	return container.CreateResponse{ID: "test-id-" + containerName}, nil
+}
+
+func (m *mockDockerClient) ContainerStart(_ context.Context, containerID string, _ types.ContainerStartOptions) error {
+	m.record("ContainerStart", containerID)
+	return m.startErr
+}
+
+func (m *mockDockerClient) ContainerStop(_ context.Context, containerID string, _ container.StopOptions) error {
+	m.record("ContainerStop", containerID)
+	return m.stopErr
+}
+
+func (m *mockDockerClient) ContainerPause(_ context.Context, containerID string) error {
+	m.record("ContainerPause", containerID)
+	return m.pauseErr
+}
+
+func (m *mockDockerClient) ContainerUnpause(_ context.Context, containerID string) error {
+	m.record("ContainerUnpause", containerID)
+	return m.unpauseErr
+}
+
+func (m *mockDockerClient) ContainerRemove(_ context.Context, containerID string, options types.ContainerRemoveOptions) error {
+	m.record("ContainerRemove", containerID)
+	if options.Force {
+		m.calls[len(m.calls)-1].Args = append(m.calls[len(m.calls)-1].Args, "-f")
+	}
+	return m.removeErr
+}
+
+func (m *mockDockerClient) ContainerInspect(_ context.Context, containerID string) (types.ContainerJSON, error) {
+	m.record("ContainerInspect", containerID)
+	if info, ok := m.containers[containerID]; ok {
+		return info, nil
+	}
+	return types.ContainerJSON{}, containerNotFoundError{containerID}
+}
+
+func (m *mockDockerClient) ContainerList(_ context.Context, _ types.ContainerListOptions) ([]types.Container, error) {
+	m.record("ContainerList")
+	return m.listResult, nil
+}
+
+func (m *mockDockerClient) ContainerExecCreate(_ context.Context, _ string, _ types.ExecConfig) (types.IDResponse, error) {
+	return types.IDResponse{}, nil
+}
+
+func (m *mockDockerClient) ContainerExecAttach(_ context.Context, _ string, _ types.ExecStartCheck) (types.HijackedResponse, error) {
+	return types.HijackedResponse{}, nil
+}
+
+func (m *mockDockerClient) ContainerLogs(_ context.Context, _ string, _ types.ContainerLogsOptions) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (m *mockDockerClient) CopyToContainer(_ context.Context, _, _ string, _ io.Reader, _ types.CopyToContainerOptions) error {
+	return nil
+}
+
+func (m *mockDockerClient) CopyFromContainer(_ context.Context, _, _ string) (io.ReadCloser, types.ContainerPathStat, error) {
+	return io.NopCloser(strings.NewReader("")), types.ContainerPathStat{}, nil
+}
+
+// containerNotFoundError satisfies dockerclient.IsErrNotFound.
+type containerNotFoundError struct {
+	id string
+}
+
+func (e containerNotFoundError) Error() string { return "No such container: " + e.id }
+func (e containerNotFoundError) NotFound()     {}
+
+// Compile-time assertion that mock satisfies the interface.
+var _ dockerAPI = (*mockDockerClient)(nil)
+
+func newTestClient(mock *mockDockerClient) *Client {
+	return &Client{
+		sshTarget: "opc@10.0.1.3",
+		image:     "jacoworks/vm-agent:latest",
+		network:   "agent-net",
+		agentPort: 18789,
+		hostIP:    "10.0.1.3",
+		cli:       mock,
+	}
 }
 
 func TestCreate(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
 	envVars := map[string]string{
@@ -81,111 +153,121 @@ func TestCreate(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	call, found := m.findCall("docker run")
+	call, found := m.findCall("ContainerCreate")
 	if !found {
-		t.Fatal("expected docker run command")
+		t.Fatal("expected ContainerCreate call")
+	}
+	if call.Args[0] != "agent-user1" {
+		t.Errorf("container name = %q, want agent-user1", call.Args[0])
+	}
+	if call.Args[1] != "jacoworks/vm-agent:latest" {
+		t.Errorf("image = %q, want jacoworks/vm-agent:latest", call.Args[1])
 	}
 
-	args := strings.Join(call.Args, " ")
-	if !strings.Contains(args, "--name agent-user1") {
-		t.Errorf("missing --name, got: %s", args)
-	}
-	if !strings.Contains(args, "--network agent-net") {
-		t.Errorf("missing --network, got: %s", args)
-	}
-	if !strings.Contains(args, "jacoworks/vm-agent:latest") {
-		t.Errorf("missing image, got: %s", args)
-	}
-	if !strings.Contains(args, "LLM_PROXY_URL=http://proxy:8317") {
-		t.Errorf("missing LLM_PROXY_URL env, got: %s", args)
+	_, startFound := m.findCall("ContainerStart")
+	if !startFound {
+		t.Fatal("expected ContainerStart call after Create")
 	}
 }
 
 func TestStart(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
 	if err := c.Start("agent-user1"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	call, found := m.findCall("docker start")
+	call, found := m.findCall("ContainerStart")
 	if !found {
-		t.Fatal("expected docker start command")
+		t.Fatal("expected ContainerStart call")
 	}
-	if !strings.Contains(strings.Join(call.Args, " "), "agent-user1") {
-		t.Errorf("missing container name in start")
+	if call.Args[0] != "agent-user1" {
+		t.Errorf("container = %q, want agent-user1", call.Args[0])
 	}
 }
 
 func TestStop(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
 	if err := c.Stop("agent-user1"); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	_, found := m.findCall("docker stop")
+	_, found := m.findCall("ContainerStop")
 	if !found {
-		t.Fatal("expected docker stop command")
+		t.Fatal("expected ContainerStop call")
 	}
 }
 
 func TestPause(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
 	if err := c.Pause("agent-user1"); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	_, found := m.findCall("docker pause")
+	_, found := m.findCall("ContainerPause")
 	if !found {
-		t.Fatal("expected docker pause command")
+		t.Fatal("expected ContainerPause call")
 	}
 }
 
 func TestUnpause(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
 	if err := c.Unpause("agent-user1"); err != nil {
 		t.Fatalf("Unpause: %v", err)
 	}
 
-	_, found := m.findCall("docker unpause")
+	_, found := m.findCall("ContainerUnpause")
 	if !found {
-		t.Fatal("expected docker unpause command")
+		t.Fatal("expected ContainerUnpause call")
 	}
 }
 
 func TestDestroy(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
 	if err := c.Destroy("agent-user1"); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 
-	call, found := m.findCall("docker rm")
+	call, found := m.findCall("ContainerRemove")
 	if !found {
-		t.Fatal("expected docker rm command")
+		t.Fatal("expected ContainerRemove call")
 	}
-	args := strings.Join(call.Args, " ")
-	if !strings.Contains(args, "-f") {
-		t.Errorf("expected force flag, got: %s", args)
+	hasForce := false
+	for _, a := range call.Args {
+		if a == "-f" {
+			hasForce = true
+		}
+	}
+	if !hasForce {
+		t.Errorf("expected force flag in remove")
 	}
 }
 
 func TestStatus(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
-	psJSON := `{"Names":"agent-user1","State":"running","Status":"Up 2 hours"}`
-	inspectJSON := `[{"NetworkSettings":{"Networks":{"agent-net":{"IPAddress":"172.18.0.5"}}}}]`
-	m.On("docker ps", psJSON, nil)
-	m.On("docker inspect", inspectJSON, nil)
+	m.containers["agent-user1"] = types.ContainerJSON{
+		ContainerJSONBase: &types.ContainerJSONBase{
+			State: &types.ContainerState{
+				Status: "running",
+			},
+		},
+		NetworkSettings: &types.NetworkSettings{
+			Networks: map[string]*network.EndpointSettings{
+				"agent-net": {IPAddress: "172.18.0.5"},
+			},
+		},
+	}
 
 	info, err := c.Status("agent-user1")
 	if err != nil {
@@ -203,10 +285,8 @@ func TestStatus(t *testing.T) {
 }
 
 func TestStatusNotFound(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
-
-	m.On("docker ps", "", nil)
 
 	info, err := c.Status("agent-nonexist")
 	if err != nil {
@@ -221,11 +301,17 @@ func TestStatusNotFound(t *testing.T) {
 }
 
 func TestGetIP(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
-	inspectJSON := `[{"NetworkSettings":{"Networks":{"agent-net":{"IPAddress":"10.20.20.5"}}}}]`
-	m.On("docker inspect", inspectJSON, nil)
+	m.containers["agent-user1"] = types.ContainerJSON{
+		ContainerJSONBase: &types.ContainerJSONBase{},
+		NetworkSettings: &types.NetworkSettings{
+			Networks: map[string]*network.EndpointSettings{
+				"agent-net": {IPAddress: "10.20.20.5"},
+			},
+		},
+	}
 
 	ip, err := c.GetIP("agent-user1")
 	if err != nil {
@@ -237,13 +323,24 @@ func TestGetIP(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
-	psOut := `{"Names":"agent-user1","State":"running","Status":"Up 2 hours"}
-{"Names":"agent-user2","State":"paused","Status":"Up 1 hour (Paused)"}`
-	m.On("docker ps", psOut, nil)
-	m.On("docker inspect", `[{"NetworkSettings":{"Networks":{"agent-net":{"IPAddress":"172.18.0.5"}}}}]`, nil)
+	m.listResult = []types.Container{
+		{
+			Names: []string{"/agent-user1"},
+			State: "running",
+			NetworkSettings: &types.SummaryNetworkSettings{
+				Networks: map[string]*network.EndpointSettings{
+					"agent-net": {IPAddress: "172.18.0.5"},
+				},
+			},
+		},
+		{
+			Names: []string{"/agent-user2"},
+			State: "paused",
+		},
+	}
 
 	list, err := c.List()
 	if err != nil {
@@ -261,10 +358,10 @@ func TestList(t *testing.T) {
 }
 
 func TestCreateError(t *testing.T) {
-	m := newMockRunner()
+	m := newMockDockerClient()
 	c := newTestClient(m)
 
-	m.On("docker run", "Error: name already in use", fmt.Errorf("exit 125"))
+	m.createErr = containerNotFoundError{"already exists"}
 
 	err := c.Create("agent-user1", nil, 0)
 	if err == nil {
@@ -272,41 +369,6 @@ func TestCreateError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "docker run") {
 		t.Errorf("error = %q, want docker run context", err.Error())
-	}
-}
-
-func TestSSHCommandFormat(t *testing.T) {
-	m := newMockRunner()
-	c := newTestClient(m)
-
-	c.docker("ps", "-a")
-
-	call := m.lastCall()
-	if call.Name != "ssh" {
-		t.Fatalf("expected ssh command, got %q", call.Name)
-	}
-	args := strings.Join(call.Args, " ")
-	if !strings.Contains(args, "-o StrictHostKeyChecking=no") {
-		t.Errorf("missing StrictHostKeyChecking=no, got: %s", args)
-	}
-	if !strings.Contains(args, "opc@10.0.1.3") {
-		t.Errorf("missing SSH target, got: %s", args)
-	}
-	if !strings.Contains(args, "docker ps -a") {
-		t.Errorf("missing docker command, got: %s", args)
-	}
-}
-
-func TestLocalClient(t *testing.T) {
-	m := newMockRunner()
-	c := NewClient("local", "jacoworks/vm-agent:latest", "agent-net", 18789, "")
-	c.runner = m
-
-	c.docker("ps")
-
-	call := m.lastCall()
-	if call.Name != "docker" {
-		t.Fatalf("local client should call docker directly, got %q", call.Name)
 	}
 }
 

@@ -1,12 +1,22 @@
 package docker
 
 import (
-	"encoding/json"
+	"archive/tar"
+	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"net"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog/log"
 )
 
@@ -17,84 +27,156 @@ type ContainerInfo struct {
 	IP     string
 }
 
-// CommandRunner abstracts shell command execution for testability.
-type CommandRunner interface {
-	Run(name string, args ...string) (string, error)
+// dockerAPI defines the subset of Docker client API used by this package.
+type dockerAPI interface {
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, containerID string, options types.ContainerStartOptions) error
+	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
+	ContainerPause(ctx context.Context, containerID string) error
+	ContainerUnpause(ctx context.Context, containerID string) error
+	ContainerRemove(ctx context.Context, containerID string, options types.ContainerRemoveOptions) error
+	ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error)
+	ContainerList(ctx context.Context, options types.ContainerListOptions) ([]types.Container, error)
+	ContainerExecCreate(ctx context.Context, container string, config types.ExecConfig) (types.IDResponse, error)
+	ContainerExecAttach(ctx context.Context, execID string, config types.ExecStartCheck) (types.HijackedResponse, error)
+	ContainerLogs(ctx context.Context, container string, options types.ContainerLogsOptions) (io.ReadCloser, error)
+	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options types.CopyToContainerOptions) error
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, types.ContainerPathStat, error)
 }
 
-// execRunner is the default CommandRunner using os/exec.
-type execRunner struct{}
-
-func (r *execRunner) Run(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
-// Client manages Docker containers via SSH to a remote host.
+// Client manages Docker containers via the Docker SDK.
 type Client struct {
 	sshTarget string // e.g. "opc@10.0.1.3"
 	image     string // e.g. "jacoworks/vm-agent:latest"
 	network   string // e.g. "agent-net"
 	agentPort int    // vm-agent port (default 18789)
 	hostIP    string // WireGuard IP to bind ports (e.g. "10.0.1.3")
-	runner    CommandRunner
+	cli       dockerAPI
 }
 
 func NewClient(sshTarget, image, network string, agentPort int, hostIP string) *Client {
-	return &Client{
+	c := &Client{
 		sshTarget: sshTarget,
 		image:     image,
 		network:   network,
 		agentPort: agentPort,
 		hostIP:    hostIP,
-		runner:    &execRunner{},
 	}
+
+	var opts []dockerclient.Opt
+	if sshTarget == "" || sshTarget == "local" {
+		opts = append(opts, dockerclient.FromEnv)
+	} else {
+		opts = append(opts,
+			dockerclient.WithHost("http://docker"),
+			dockerclient.WithDialContext(c.sshDialContext),
+		)
+	}
+	opts = append(opts, dockerclient.WithAPIVersionNegotiation())
+
+	cli, err := dockerclient.NewClientWithOpts(opts...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create docker client")
+	}
+	c.cli = cli
+	return c
 }
 
-// ssh runs a command on the remote host (or locally if sshTarget is empty/"local").
-func (c *Client) ssh(args ...string) (string, error) {
+// sshDialContext creates a connection to the remote Docker daemon via SSH.
+// It spawns "ssh user@host docker system dial-stdio" and returns a net.Conn
+// backed by the SSH process's stdin/stdout.
+func (c *Client) sshDialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	args := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ConnectTimeout=10",
+		c.sshTarget,
+		"docker", "system", "dial-stdio",
+	}
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("ssh stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("ssh stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("ssh start: %w", err)
+	}
+	return &sshConn{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+}
+
+// sshConn wraps an SSH subprocess as a net.Conn.
+type sshConn struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+}
+
+func (c *sshConn) Read(p []byte) (int, error)  { return c.stdout.Read(p) }
+func (c *sshConn) Write(p []byte) (int, error) { return c.stdin.Write(p) }
+func (c *sshConn) Close() error {
+	_ = c.stdin.Close()
+	_ = c.stdout.Close()
+	return c.cmd.Wait()
+}
+func (c *sshConn) LocalAddr() net.Addr                { return &net.UnixAddr{Name: "ssh", Net: "ssh"} }
+func (c *sshConn) RemoteAddr() net.Addr               { return &net.UnixAddr{Name: "ssh", Net: "ssh"} }
+func (c *sshConn) SetDeadline(_ time.Time) error       { return nil }
+func (c *sshConn) SetReadDeadline(_ time.Time) error   { return nil }
+func (c *sshConn) SetWriteDeadline(_ time.Time) error  { return nil }
+
+// RunSSH runs a command on the remote host via SSH.
+// Deprecated: Use Docker SDK methods or Exec instead. Kept for openclaw config writing.
+func (c *Client) RunSSH(args ...string) (string, error) {
 	if c.sshTarget == "" || c.sshTarget == "local" {
-		return c.runner.Run("bash", append([]string{"-c"}, strings.Join(args, " "))...)
+		cmd := exec.Command("bash", append([]string{"-c"}, strings.Join(args, " "))...)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
 	}
 	cmdArgs := append([]string{"-o", "StrictHostKeyChecking=no", c.sshTarget}, args...)
-	return c.runner.Run("ssh", cmdArgs...)
-}
-
-// docker runs a docker command on the remote host.
-func (c *Client) docker(args ...string) (string, error) {
-	if c.sshTarget == "" || c.sshTarget == "local" {
-		return c.runner.Run("docker", args...)
-	}
-	cmdArgs := append([]string{"-o", "StrictHostKeyChecking=no", c.sshTarget, "docker"}, args...)
-	return c.runner.Run("ssh", cmdArgs...)
+	cmd := exec.Command("ssh", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
 // Create creates and starts a new container from the configured image.
-// Environment variables are injected at creation time via -e flags.
-// If hostPort > 0, the container's agentPort is mapped to hostIP:hostPort.
 func (c *Client) Create(name string, envVars map[string]string, hostPort int) error {
 	log.Info().Str("name", name).Str("image", c.image).Int("host_port", hostPort).Msg("creating container")
+	ctx := context.Background()
 
-	args := []string{
-		"run", "-d",
-		"--name", name,
-		"--network", c.network,
-		"--restart", "unless-stopped",
-	}
-	// Bind to WireGuard IP only for security
-	if hostPort > 0 {
-		bindAddr := fmt.Sprintf("%s:%d:%d", c.hostIP, hostPort, c.agentPort)
-		args = append(args, "-p", bindAddr)
-	}
+	var env []string
 	for k, v := range envVars {
-		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
-	args = append(args, c.image)
 
-	_, err := c.docker(args...)
+	containerCfg := &container.Config{
+		Image: c.image,
+		Env:   env,
+	}
+
+	hostCfg := &container.HostConfig{
+		NetworkMode:   container.NetworkMode(c.network),
+		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+	}
+
+	if hostPort > 0 {
+		port := nat.Port(fmt.Sprintf("%d/tcp", c.agentPort))
+		hostCfg.PortBindings = nat.PortMap{
+			port: []nat.PortBinding{
+				{HostIP: c.hostIP, HostPort: fmt.Sprintf("%d", hostPort)},
+			},
+		}
+	}
+
+	resp, err := c.cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
 	if err != nil {
 		return fmt.Errorf("docker run %s: %w", name, err)
+	}
+
+	if err := c.cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("docker start %s: %w", name, err)
 	}
 	return nil
 }
@@ -102,8 +184,7 @@ func (c *Client) Create(name string, envVars map[string]string, hostPort int) er
 // Start starts a stopped container.
 func (c *Client) Start(name string) error {
 	log.Info().Str("name", name).Msg("starting container")
-	_, err := c.docker("start", name)
-	if err != nil {
+	if err := c.cli.ContainerStart(context.Background(), name, types.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker start %s: %w", name, err)
 	}
 	return nil
@@ -112,8 +193,7 @@ func (c *Client) Start(name string) error {
 // Stop stops a running container.
 func (c *Client) Stop(name string) error {
 	log.Info().Str("name", name).Msg("stopping container")
-	_, err := c.docker("stop", name)
-	if err != nil {
+	if err := c.cli.ContainerStop(context.Background(), name, container.StopOptions{}); err != nil {
 		return fmt.Errorf("docker stop %s: %w", name, err)
 	}
 	return nil
@@ -122,8 +202,7 @@ func (c *Client) Stop(name string) error {
 // Pause pauses a running container (lightweight freeze).
 func (c *Client) Pause(name string) error {
 	log.Info().Str("name", name).Msg("pausing container")
-	_, err := c.docker("pause", name)
-	if err != nil {
+	if err := c.cli.ContainerPause(context.Background(), name); err != nil {
 		return fmt.Errorf("docker pause %s: %w", name, err)
 	}
 	return nil
@@ -132,8 +211,7 @@ func (c *Client) Pause(name string) error {
 // Unpause resumes a paused container.
 func (c *Client) Unpause(name string) error {
 	log.Info().Str("name", name).Msg("unpausing container")
-	_, err := c.docker("unpause", name)
-	if err != nil {
+	if err := c.cli.ContainerUnpause(context.Background(), name); err != nil {
 		return fmt.Errorf("docker unpause %s: %w", name, err)
 	}
 	return nil
@@ -178,137 +256,111 @@ func (c *Client) Unfreeze(name string) error {
 // Destroy force-removes a container.
 func (c *Client) Destroy(name string) error {
 	log.Warn().Str("name", name).Msg("destroying container")
-	_, err := c.docker("rm", "-f", name)
-	if err != nil {
+	if err := c.cli.ContainerRemove(context.Background(), name, types.ContainerRemoveOptions{Force: true}); err != nil {
 		return fmt.Errorf("docker rm %s: %w", name, err)
 	}
 	return nil
 }
 
-// dockerPSJSON represents the JSON output of `docker ps --format json`.
-type dockerPSJSON struct {
-	Names  string `json:"Names"`
-	State  string `json:"State"`  // running, paused, exited
-	Status string `json:"Status"` // human-readable like "Up 2 hours"
-}
-
 // Status returns the status of a specific container.
 // Returns ContainerInfo with Status="not_found" if the container does not exist.
 func (c *Client) Status(name string) (*ContainerInfo, error) {
-	out, err := c.docker("ps", "-a", "--filter", "name=^/"+name+"$", "--format", "json")
+	info, err := c.cli.ContainerInspect(context.Background(), name)
 	if err != nil {
-		return nil, fmt.Errorf("docker ps %s: %w", name, err)
-	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return &ContainerInfo{Name: name, Status: "not_found"}, nil
-	}
-
-	// docker ps --format json outputs one JSON object per line
-	line := strings.SplitN(out, "\n", 2)[0]
-	var ps dockerPSJSON
-	if err := json.Unmarshal([]byte(line), &ps); err != nil {
-		return nil, fmt.Errorf("parse docker ps json: %w", err)
+		if dockerclient.IsErrNotFound(err) {
+			return &ContainerInfo{Name: name, Status: "not_found"}, nil
+		}
+		return nil, fmt.Errorf("docker inspect %s: %w", name, err)
 	}
 
-	ip := ""
-	if ps.State == "running" {
-		ip, _ = c.getIPByInspect(name)
+	status := "unknown"
+	if info.State != nil {
+		status = info.State.Status
 	}
 
-	return &ContainerInfo{
-		Name:   name,
-		Status: ps.State,
-		IP:     ip,
-	}, nil
+	ip := c.extractIP(info)
+	return &ContainerInfo{Name: name, Status: status, IP: ip}, nil
 }
 
 // GetIP returns the container's IP address on the configured network.
 func (c *Client) GetIP(name string) (string, error) {
-	ip, err := c.getIPByInspect(name)
+	info, err := c.cli.ContainerInspect(context.Background(), name)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("docker inspect %s: %w", name, err)
 	}
+	ip := c.extractIP(info)
 	if ip == "" {
 		return "", fmt.Errorf("container %s has no IP", name)
 	}
 	return ip, nil
 }
 
-func (c *Client) getIPByInspect(name string) (string, error) {
-	out, err := c.docker("inspect", name)
-	if err != nil {
-		return "", fmt.Errorf("docker inspect %s: %w", name, err)
+// extractIP gets the container IP from inspect data.
+func (c *Client) extractIP(info types.ContainerJSON) string {
+	if info.NetworkSettings == nil || info.NetworkSettings.Networks == nil {
+		return ""
 	}
-	// Parse JSON output to extract IP from NetworkSettings
-	var containers []struct {
-		NetworkSettings struct {
-			Networks map[string]struct {
-				IPAddress string `json:"IPAddress"`
-			} `json:"Networks"`
-		} `json:"NetworkSettings"`
+	if ep, ok := info.NetworkSettings.Networks[c.network]; ok && ep.IPAddress != "" {
+		return ep.IPAddress
 	}
-	if err := json.Unmarshal([]byte(out), &containers); err != nil {
-		return "", fmt.Errorf("parse docker inspect json: %w", err)
-	}
-	if len(containers) == 0 {
-		return "", fmt.Errorf("container %s not found", name)
-	}
-	for _, net := range containers[0].NetworkSettings.Networks {
-		if net.IPAddress != "" {
-			return net.IPAddress, nil
+	for _, ep := range info.NetworkSettings.Networks {
+		if ep.IPAddress != "" {
+			return ep.IPAddress
 		}
 	}
-	return "", nil
+	return ""
 }
 
-// List returns all containers matching the "agent-" prefix.
+// List returns all managed containers.
+// The Freezer's own prefix filter handles per-type selection.
 func (c *Client) List() ([]ContainerInfo, error) {
-	out, err := c.docker("ps", "-a", "--filter", "name=agent-", "--format", "json")
+	containers, err := c.cli.ContainerList(context.Background(), types.ContainerListOptions{
+		All: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("docker ps: %w", err)
 	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return nil, nil
-	}
 
-	var containers []ContainerInfo
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var ps dockerPSJSON
-		if err := json.Unmarshal([]byte(line), &ps); err != nil {
-			log.Warn().Err(err).Str("line", line).Msg("skip unparseable docker ps line")
-			continue
+	var result []ContainerInfo
+	for _, ct := range containers {
+		name := ""
+		if len(ct.Names) > 0 {
+			name = strings.TrimPrefix(ct.Names[0], "/")
 		}
 
 		ip := ""
-		if ps.State == "running" {
-			ip, _ = c.getIPByInspect(ps.Names)
+		if ct.State == "running" && ct.NetworkSettings != nil {
+			if ep, ok := ct.NetworkSettings.Networks[c.network]; ok && ep.IPAddress != "" {
+				ip = ep.IPAddress
+			} else {
+				for _, ep := range ct.NetworkSettings.Networks {
+					if ep.IPAddress != "" {
+						ip = ep.IPAddress
+						break
+					}
+				}
+			}
 		}
 
-		containers = append(containers, ContainerInfo{
-			Name:   ps.Names,
-			Status: ps.State,
+		result = append(result, ContainerInfo{
+			Name:   name,
+			Status: ct.State,
 			IP:     ip,
 		})
 	}
-	return containers, nil
+	return result, nil
 }
 
 // WaitForHealth polls the agent health endpoint until ready.
 func (c *Client) WaitForHealth(ip string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	healthURL := fmt.Sprintf("http://%s:%d/health", ip, c.agentPort)
+	healthURL := fmt.Sprintf("http://%s:%d/healthz", ip, c.agentPort)
 	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 --max-time 5 %s", healthURL)
 
 	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
 
 	for time.Now().Before(deadline) {
-		out, err := c.ssh(curlCmd)
+		out, err := c.RunSSH(curlCmd)
 		if err == nil {
 			code := strings.TrimSpace(strings.Trim(out, "'"))
 			if code == "200" {
@@ -322,9 +374,53 @@ func (c *Client) WaitForHealth(ip string, timeout time.Duration) error {
 }
 
 // Exec runs a command inside a container via docker exec.
-func (c *Client) Exec(container string, args ...string) (string, error) {
-	dockerArgs := append([]string{"exec", container}, args...)
-	return c.docker(dockerArgs...)
+func (c *Client) Exec(containerName string, args ...string) (string, error) {
+	ctx := context.Background()
+
+	execCfg := types.ExecConfig{
+		Cmd:          args,
+		AttachStdout: true,
+		AttachStderr: true,
+	}
+
+	resp, err := c.cli.ContainerExecCreate(ctx, containerName, execCfg)
+	if err != nil {
+		return "", fmt.Errorf("exec create %s: %w", containerName, err)
+	}
+
+	attach, err := c.cli.ContainerExecAttach(ctx, resp.ID, types.ExecStartCheck{})
+	if err != nil {
+		return "", fmt.Errorf("exec attach %s: %w", containerName, err)
+	}
+	defer attach.Close()
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, attach.Reader); err != nil {
+		return "", fmt.Errorf("exec read %s: %w", containerName, err)
+	}
+
+	output := stripDockerStreamHeaders(buf.Bytes())
+	return strings.TrimSpace(output), nil
+}
+
+// stripDockerStreamHeaders strips the 8-byte multiplexed stream headers
+// from Docker exec output when TTY is not allocated.
+func stripDockerStreamHeaders(data []byte) string {
+	var result []byte
+	for len(data) >= 8 {
+		// Header: [stream_type(1), 0, 0, 0, size(4)]
+		size := int(data[4])<<24 | int(data[5])<<16 | int(data[6])<<8 | int(data[7])
+		data = data[8:]
+		if size > len(data) {
+			size = len(data)
+		}
+		result = append(result, data[:size]...)
+		data = data[size:]
+	}
+	if len(result) == 0 {
+		return string(data)
+	}
+	return string(result)
 }
 
 // ─── Memory Sync ───────────────────────────────────
@@ -356,30 +452,19 @@ func containerToCanonicalPath(containerPath string) string {
 	return rel
 }
 
-// PushMemoryFiles writes memory files into a container using docker cp.
+// PushMemoryFiles writes memory files into a container using the Docker SDK.
 func (c *Client) PushMemoryFiles(containerName string, files map[string]string) error {
 	if len(files) == 0 {
 		return nil
 	}
 
-	c.docker("exec", containerName, "mkdir", "-p", containerWorkspace+"/memory")
+	c.Exec(containerName, "mkdir", "-p", containerWorkspace+"/memory")
 
 	for canonical, content := range files {
 		containerPath := canonicalToContainerPath(canonical)
 
-		tmpFile := fmt.Sprintf("/tmp/_mem_%s_%s", containerName,
-			strings.ReplaceAll(strings.ReplaceAll(canonical, "/", "_"), ".", "_"))
-
-		writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s",
-			strings.ReplaceAll(content, "'", "'\\''"), tmpFile)
-		if _, err := c.ssh(writeCmd); err != nil {
-			log.Warn().Err(err).Str("file", canonical).Msg("push memory: write temp failed")
-			continue
-		}
-
-		cpCmd := fmt.Sprintf("docker cp %s %s:%s && rm -f %s", tmpFile, containerName, containerPath, tmpFile)
-		if _, err := c.ssh(cpCmd); err != nil {
-			log.Warn().Err(err).Str("file", canonical).Msg("push memory: docker cp failed")
+		if err := c.copyFileToContainer(containerName, containerPath, []byte(content)); err != nil {
+			log.Warn().Err(err).Str("file", canonical).Msg("push memory: copy failed")
 			continue
 		}
 	}
@@ -393,7 +478,7 @@ func (c *Client) PullMemoryFiles(containerName string) (map[string]string, error
 	files := make(map[string]string)
 
 	memPath := containerWorkspace + "/MEMORY.md"
-	if content, err := c.docker("exec", containerName, "cat", memPath); err == nil {
+	if content, err := c.readFileFromContainer(containerName, memPath); err == nil {
 		content = strings.TrimSpace(content)
 		if content != "" {
 			files["MEMORY.md"] = content
@@ -401,14 +486,14 @@ func (c *Client) PullMemoryFiles(containerName string) (map[string]string, error
 	}
 
 	listCmd := fmt.Sprintf("ls -1 %s/memory/*.md 2>/dev/null", containerWorkspace)
-	out, err := c.docker("exec", containerName, "sh", "-c", listCmd)
+	out, err := c.Exec(containerName, "sh", "-c", listCmd)
 	if err == nil && strings.TrimSpace(out) != "" {
 		for _, line := range strings.Split(out, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || !strings.HasSuffix(line, ".md") {
 				continue
 			}
-			content, err := c.docker("exec", containerName, "cat", line)
+			content, err := c.readFileFromContainer(containerName, line)
 			if err != nil {
 				continue
 			}
@@ -430,27 +515,15 @@ func (c *Client) PushSkillFiles(containerName string, files map[string]string) e
 		return nil
 	}
 
-	c.docker("exec", containerName, "mkdir", "-p", containerSkillsDir)
+	c.Exec(containerName, "mkdir", "-p", containerSkillsDir)
 
 	for relPath, content := range files {
 		fullPath := containerSkillsDir + "/" + relPath
 		dir := fullPath[:strings.LastIndex(fullPath, "/")]
+		c.Exec(containerName, "mkdir", "-p", dir)
 
-		c.docker("exec", containerName, "mkdir", "-p", dir)
-
-		tmpFile := fmt.Sprintf("/tmp/_skill_%s_%s", containerName,
-			strings.ReplaceAll(strings.ReplaceAll(relPath, "/", "_"), ".", "_"))
-
-		writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s",
-			strings.ReplaceAll(content, "'", "'\\''"), tmpFile)
-		if _, err := c.ssh(writeCmd); err != nil {
-			log.Warn().Err(err).Str("file", relPath).Msg("push skill: write temp failed")
-			continue
-		}
-
-		cpCmd := fmt.Sprintf("docker cp %s %s:%s && rm -f %s", tmpFile, containerName, fullPath, tmpFile)
-		if _, err := c.ssh(cpCmd); err != nil {
-			log.Warn().Err(err).Str("file", relPath).Msg("push skill: docker cp failed")
+		if err := c.copyFileToContainer(containerName, fullPath, []byte(content)); err != nil {
+			log.Warn().Err(err).Str("file", relPath).Msg("push skill: copy failed")
 			continue
 		}
 	}
@@ -459,24 +532,85 @@ func (c *Client) PushSkillFiles(containerName string, files map[string]string) e
 	return nil
 }
 
+// copyFileToContainer copies a single file into a container using CopyToContainer.
+func (c *Client) copyFileToContainer(containerName, filePath string, content []byte) error {
+	ctx := context.Background()
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Name: filePath,
+		Mode: 0644,
+		Size: int64(len(content)),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("tar header: %w", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		return fmt.Errorf("tar write: %w", err)
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("tar close: %w", err)
+	}
+
+	return c.cli.CopyToContainer(ctx, containerName, "/", &buf, types.CopyToContainerOptions{})
+}
+
+// readFileFromContainer reads a single file from a container using CopyFromContainer.
+func (c *Client) readFileFromContainer(containerName, filePath string) (string, error) {
+	ctx := context.Background()
+
+	reader, _, err := c.cli.CopyFromContainer(ctx, containerName, filePath)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+
+	tr := tar.NewReader(reader)
+	if _, err := tr.Next(); err != nil {
+		return "", fmt.Errorf("tar read: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, tr); err != nil {
+		return "", fmt.Errorf("read file: %w", err)
+	}
+	return buf.String(), nil
+}
+
 // ContainerLogs returns the last N lines of stderr logs from a container.
 func (c *Client) ContainerLogs(containerName string, lines int) (string, error) {
 	if lines <= 0 || lines > 1000 {
 		lines = 200
 	}
-	return c.docker("logs", "--tail", fmt.Sprintf("%d", lines), containerName)
+	ctx := context.Background()
+	reader, err := c.cli.ContainerLogs(ctx, containerName, types.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       fmt.Sprintf("%d", lines),
+	})
+	if err != nil {
+		return "", fmt.Errorf("docker logs %s: %w", containerName, err)
+	}
+	defer reader.Close()
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, reader); err != nil {
+		return "", fmt.Errorf("read logs %s: %w", containerName, err)
+	}
+	return stripDockerStreamHeaders(buf.Bytes()), nil
 }
 
 // WaitForHealthPort polls the agent health endpoint via host port mapping until ready.
 func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	healthURL := fmt.Sprintf("http://%s:%d/health", c.hostIP, hostPort)
+	healthURL := fmt.Sprintf("http://%s:%d/healthz", c.hostIP, hostPort)
 	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 --max-time 5 %s", healthURL)
 
 	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
 
 	for time.Now().Before(deadline) {
-		out, err := c.ssh(curlCmd)
+		out, err := c.RunSSH(curlCmd)
 		if err == nil {
 			code := strings.TrimSpace(strings.Trim(out, "'"))
 			if code == "200" {
@@ -493,7 +627,6 @@ func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
 func (c *Client) ProvisionContainer(name, containerToken string, envVars map[string]string, hostPort int) (string, error) {
 	log.Info().Str("name", name).Str("image", c.image).Msg("provisioning container")
 
-	// Merge all env vars including the container token
 	allEnv := make(map[string]string, len(envVars)+1)
 	for k, v := range envVars {
 		allEnv[k] = v
@@ -504,7 +637,6 @@ func (c *Client) ProvisionContainer(name, containerToken string, envVars map[str
 		return "", fmt.Errorf("create: %w", err)
 	}
 
-	// Wait for container to start
 	time.Sleep(3 * time.Second)
 
 	ip, err := c.GetIP(name)

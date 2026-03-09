@@ -92,6 +92,8 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
+		log.Info().Str("user_id", userID).Str("container", info.ContainerName).Str("ip", info.ContainerIP).Int("port", info.HostPort).Msg("openclaw ws: ensuring container is running")
+
 		// EnsureRunning before handing off
 		if err := h.openclawBridge.EnsureRunning(r.Context(), info, userID); err != nil {
 			log.Error().Err(err).Str("container", info.ContainerName).Msg("openclaw ws: container unavailable")

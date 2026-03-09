@@ -185,4 +185,50 @@ impl GatewayClient {
             .await
             .map_err(|e| AppError::Internal(format!("parse logs failed: {e}")))
     }
+
+    pub async fn sync_container_config(&self, container_name: &str) -> Result<(), AppError> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/admin/containers/{}/sync-config",
+                self.base_url, container_name
+            ))
+            .header("Authorization", format!("Bearer {}", self.admin_token))
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("sync config failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "sync config failed ({status}): {body}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn restart_container(&self, container_name: &str) -> Result<(), AppError> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/admin/containers/{}/restart",
+                self.base_url, container_name
+            ))
+            .header("Authorization", format!("Bearer {}", self.admin_token))
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("restart container failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "restart container failed ({status}): {body}"
+            )));
+        }
+        Ok(())
+    }
 }

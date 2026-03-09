@@ -1,9 +1,11 @@
 pub mod audit;
+pub mod bots;
 pub mod containers;
 pub mod dashboard;
 pub mod feedback;
 pub mod invites;
 pub mod logs;
+pub mod providers;
 pub mod releases;
 pub mod settings;
 pub mod skills;
@@ -45,6 +47,23 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/containers", get(containers::list))
         .route("/containers/{id}/start", post(containers::start))
         .route("/containers/{id}/stop", post(containers::stop))
+        .route("/bots", get(bots::list))
+        .route("/bots/{name}/sync", post(bots::sync_config))
+        .route("/bots/{name}/restart", post(bots::restart))
+        .route("/bots/{name}/logs", get(bots::logs))
+        .route(
+            "/providers",
+            get(providers::list).post(providers::upsert_provider_handler),
+        )
+        .route(
+            "/providers/{key}/delete",
+            post(providers::delete_provider_handler),
+        )
+        .route("/providers/models", post(providers::upsert_model_handler))
+        .route(
+            "/providers/models/{id}/delete",
+            post(providers::delete_model_handler),
+        )
         .route("/feedback", get(feedback::list))
         .route("/feedback/{id}/reply", post(feedback::reply))
         .route("/feedback/{id}/status", post(feedback::update_status))

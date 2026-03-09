@@ -2,11 +2,16 @@ package docker
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/go-connections/nat"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 	"github.com/rs/zerolog/log"
@@ -17,15 +22,22 @@ type OpenClawClient struct {
 	client   *Client
 	dataRoot string
 	getLLM   func() config.LLMConfig
+	store    *store.Store
 }
 
 // NewOpenClawClient creates a new OpenClawClient.
-func NewOpenClawClient(client *Client, dataRoot string, getLLM func() config.LLMConfig) *OpenClawClient {
+func NewOpenClawClient(client *Client, dataRoot string, getLLM func() config.LLMConfig, s *store.Store) *OpenClawClient {
 	return &OpenClawClient{
 		client:   client,
 		dataRoot: dataRoot,
 		getLLM:   getLLM,
+		store:    s,
 	}
+}
+
+// DockerClient returns the underlying Docker client for direct container operations.
+func (oc *OpenClawClient) DockerClient() *Client {
+	return oc.client
 }
 
 // openclawConfig is the JSON structure for openclaw.json.
@@ -126,6 +138,7 @@ type openclawControlUI struct {
 }
 
 // GenerateConfig generates openclaw.json content as JSON bytes.
+// Deprecated: Use GenerateConfigFromDB which reads providers/models from DB.
 func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]byte, error) {
 	primaryModel := "proxy/gpt-5.4"
 	if llm.PrimaryModel != "" {
@@ -182,7 +195,6 @@ func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]
 					"http://127.0.0.1:18789",
 					fmt.Sprintf("http://%s:%d", oc.client.hostIP, oc.client.agentPort),
 				},
-				DangerouslyDisableDeviceAuth: true,
 			},
 			TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
 		},
@@ -191,37 +203,219 @@ func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
-// WriteConfig generates and writes openclaw.json to the host filesystem via SSH.
-func (oc *OpenClawClient) WriteConfig(userID, token string) error {
+// GenerateConfigFromDB generates openclaw.json from DB-backed providers and models.
+// Falls back to the hardcoded GenerateConfig if the DB query fails or returns no providers.
+func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, token string) ([]byte, error) {
+	if oc.store == nil {
+		llm := oc.getLLM()
+		return oc.GenerateConfig(token, llm)
+	}
+
+	providers, err := oc.store.ListProviders(ctx)
+	if err != nil || len(providers) == 0 {
+		if err != nil {
+			log.Warn().Err(err).Msg("openclaw config: DB providers query failed, using hardcoded fallback")
+		} else {
+			log.Warn().Msg("openclaw config: no providers in DB, using hardcoded fallback")
+		}
+		llm := oc.getLLM()
+		return oc.GenerateConfig(token, llm)
+	}
+
 	llm := oc.getLLM()
-	data, err := oc.GenerateConfig(token, llm)
+
+	// Build providers map from DB
+	ocProviders := make(map[string]openclawProvider)
+	for _, p := range providers {
+		if !p.Enabled {
+			continue
+		}
+
+		models, err := oc.store.ListModelsByProvider(ctx, p.Key)
+		if err != nil {
+			log.Warn().Err(err).Str("provider", p.Key).Msg("openclaw config: list models failed, skipping provider")
+			continue
+		}
+
+		var ocModels []openclawModel
+		for _, m := range models {
+			if !m.Enabled {
+				continue
+			}
+			ocModels = append(ocModels, openclawModel{
+				ID:            m.ModelID,
+				Name:          m.DisplayName,
+				ContextWindow: m.ContextWindow,
+				MaxTokens:     m.MaxTokens,
+				Reasoning:     m.Reasoning,
+			})
+		}
+
+		if len(ocModels) == 0 {
+			continue
+		}
+
+		// Resolve API key: use the ref to look up from system_settings
+		apiKey := "${LLM_PROXY_KEY}"
+		if p.APIKeyRef != "" && p.APIKeyRef != "llm_proxy_key" {
+			if val, err := oc.store.GetSetting(ctx, p.APIKeyRef); err == nil && val != "" {
+				apiKey = val
+			}
+		}
+
+		// Resolve base URL: use provider's base_url, falling back to proxy
+		baseURL := p.BaseURL
+		if baseURL == "" {
+			baseURL = llm.ProxyURL + "/v1"
+		}
+
+		ocProviders[p.Key] = openclawProvider{
+			BaseURL: baseURL,
+			APIKey:  apiKey,
+			API:     p.APIType,
+			Models:  ocModels,
+		}
+	}
+
+	if len(ocProviders) == 0 {
+		log.Warn().Msg("openclaw config: no enabled providers with models, using hardcoded fallback")
+		return oc.GenerateConfig(token, llm)
+	}
+
+	// Determine primary model
+	primaryModel := "proxy/gpt-5.4"
+	if llm.PrimaryModel != "" {
+		if strings.Contains(llm.PrimaryModel, "/") {
+			primaryModel = llm.PrimaryModel
+		} else {
+			primaryModel = "proxy/" + llm.PrimaryModel
+		}
+	}
+
+	cfg := openclawConfig{
+		Models: openclawModels{
+			Mode:      "merge",
+			Providers: ocProviders,
+		},
+		Agents: openclawAgents{
+			Defaults: openclawAgentDefaults{
+				Model:     openclawModelRef{Primary: primaryModel},
+				Workspace: "/data/workspace",
+				Compaction: openclawCompaction{
+					Mode:               "safeguard",
+					ReserveTokensFloor: 32768,
+					MemoryFlush: openclawMemoryFlush{
+						Enabled:             true,
+						SoftThresholdTokens: 6000,
+					},
+				},
+				Sandbox: openclawSandbox{Mode: "off"},
+			},
+		},
+		Tools:    openclawTools{Deny: []string{"gateway"}},
+		Commands: openclawCommands{Native: "auto", NativeSkills: "auto", Restart: true},
+		Session:  openclawSession{DMScope: "per-channel-peer", Reset: openclawResetMode{Mode: "idle"}},
+		Gateway: openclawGateway{
+			Port: 18789,
+			Bind: "lan",
+			Auth: openclawAuth{Mode: "token", Token: token},
+			ControlUI: openclawControlUI{
+				AllowedOrigins: []string{
+					"http://localhost:18789",
+					"http://127.0.0.1:18789",
+					fmt.Sprintf("http://%s:%d", oc.client.hostIP, oc.client.agentPort),
+				},
+			},
+			TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
+		},
+	}
+
+	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// WriteConfig generates and writes openclaw.json into the container via Docker SDK.
+func (oc *OpenClawClient) WriteConfig(userID, token string) error {
+	ctx := context.Background()
+
+	data, err := oc.GenerateConfigFromDB(ctx, token)
 	if err != nil {
 		return fmt.Errorf("generate openclaw config: %w", err)
 	}
 
+	// Write config to host bind-mount directory via SSH (container doesn't exist yet at this point)
 	userDir := fmt.Sprintf("%s/%s", oc.dataRoot, userID)
-	configDir := userDir + "/.openclaw"
+	{
+		configDir := userDir + "/.openclaw"
 
-	if _, err := oc.client.ssh("mkdir", "-p", configDir); err != nil {
-		return fmt.Errorf("mkdir config dir: %w", err)
-	}
-	if _, err := oc.client.ssh("mkdir", "-p", userDir+"/workspace"); err != nil {
-		return fmt.Errorf("mkdir workspace dir: %w", err)
-	}
+		if _, sshErr := oc.client.RunSSH("mkdir", "-p", configDir); sshErr != nil {
+			return fmt.Errorf("mkdir config dir: %w", sshErr)
+		}
+		if _, sshErr := oc.client.RunSSH("mkdir", "-p", userDir+"/workspace"); sshErr != nil {
+			return fmt.Errorf("mkdir workspace dir: %w", sshErr)
+		}
 
-	configPath := configDir + "/openclaw.json"
-	escaped := strings.ReplaceAll(string(data), "'", "'\\''")
-	writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s", escaped, configPath)
-	if _, err := oc.client.ssh("bash", "-c", fmt.Sprintf("'%s'", writeCmd)); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
+		hostConfigPath := configDir + "/openclaw.json"
+		escaped := strings.ReplaceAll(string(data), "'", "'\\''")
+		writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s", escaped, hostConfigPath)
+		if _, sshErr := oc.client.RunSSH("bash", "-c", fmt.Sprintf("'%s'", writeCmd)); sshErr != nil {
+			return fmt.Errorf("write config: %w", sshErr)
+		}
 
-	if _, err := oc.client.ssh("chown", "-R", "1000:1000", userDir); err != nil {
-		return fmt.Errorf("chown user dir: %w", err)
-	}
+		if _, sshErr := oc.client.RunSSH("chown", "-R", "1000:1000", userDir); sshErr != nil {
+			return fmt.Errorf("chown user dir: %w", sshErr)
+		}
 
-	log.Info().Str("user_id", userID).Str("path", configPath).Msg("openclaw config written")
+		log.Info().Str("user_id", userID).Str("path", hostConfigPath).Msg("openclaw config written to host")
+	}
 	return nil
+}
+
+// SyncConfig writes openclaw.json into a running container via docker copy.
+// Uses content-hash comparison to skip writes when config hasn't changed.
+// Returns true if config was actually written.
+func (oc *OpenClawClient) SyncConfig(ctx context.Context, info *store.ContainerInfo) (bool, error) {
+	data, err := oc.GenerateConfigFromDB(ctx, info.ContainerToken)
+	if err != nil {
+		return false, fmt.Errorf("generate config: %w", err)
+	}
+
+	hash := sha256hex(data)
+
+	// Check if the container already has this config applied
+	if oc.store != nil {
+		botCfg, _ := oc.store.GetBotConfig(ctx, info.UserID, info.ContainerType)
+		_ = botCfg // we only need applied_config_hash, checked via direct query
+		var appliedHash string
+		_ = oc.store.Pool().QueryRow(ctx,
+			`SELECT COALESCE(applied_config_hash, '') FROM containers WHERE user_id = $1 AND container_type = $2`,
+			info.UserID, info.ContainerType,
+		).Scan(&appliedHash)
+		if hash == appliedHash && appliedHash != "" {
+			return false, nil
+		}
+	}
+
+	// Write config into the running container
+	configPath := "/home/node/.openclaw/openclaw.json"
+	if err := oc.client.copyFileToContainer(info.ContainerName, configPath, data); err != nil {
+		return false, fmt.Errorf("copy config to container: %w", err)
+	}
+
+	// Update applied_config_hash in DB
+	if oc.store != nil {
+		if err := oc.store.UpdateAppliedConfigHash(ctx, info.UserID, info.ContainerType, hash); err != nil {
+			log.Warn().Err(err).Str("user_id", info.UserID).Msg("openclaw sync: update applied hash failed")
+		}
+	}
+
+	log.Info().Str("container", info.ContainerName).Str("hash", hash[:12]).Msg("openclaw config synced")
+	return true, nil
+}
+
+// sha256hex computes the hex-encoded SHA-256 hash of data.
+func sha256hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h)
 }
 
 // ContainerEnvVars builds the environment variables map for an OpenClaw container.
@@ -257,34 +451,61 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 		return "", fmt.Errorf("write config: %w", err)
 	}
 
+	ctx := context.Background()
 	userDir := fmt.Sprintf("%s/%s", oc.dataRoot, userID)
-
-	args := []string{
-		"run", "-d",
-		"--name", name,
-		"--restart", "unless-stopped",
-		"--label", "jacoworks.managed=true",
-		"--label", "jacoworks.type=openclaw",
-		"--label", fmt.Sprintf("jacoworks.user_id=%s", userID),
-		"--health-cmd", "curl -fsS http://127.0.0.1:18789/healthz || exit 1",
-		"--health-interval", "30s",
-		"--health-timeout", "5s",
-		"--health-retries", "3",
-		"-v", fmt.Sprintf("%s/.openclaw:/home/node/.openclaw", userDir),
-		"-v", fmt.Sprintf("%s/workspace:/data/workspace", userDir),
-		"-p", fmt.Sprintf("%d:18789", hostPort),
-	}
 
 	envVars := oc.ContainerEnvVars()
 	envVars["OPENCLAW_GATEWAY_TOKEN"] = token
+	var env []string
 	for k, v := range envVars {
-		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	args = append(args, oc.client.image)
+	port := nat.Port("18789/tcp")
+	containerCfg := &container.Config{
+		Image: oc.client.image,
+		Env:   env,
+		Labels: map[string]string{
+			"jacoworks.managed": "true",
+			"jacoworks.type":    "openclaw",
+			"jacoworks.user_id": userID,
+		},
+		Healthcheck: &container.HealthConfig{
+			Test:     []string{"CMD-SHELL", "curl -fsS http://127.0.0.1:18789/healthz || exit 1"},
+			Interval: 30 * time.Second,
+			Timeout:  5 * time.Second,
+			Retries:  3,
+		},
+	}
 
-	if _, err := oc.client.docker(args...); err != nil {
+	hostCfg := &container.HostConfig{
+		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+		PortBindings: nat.PortMap{
+			port: []nat.PortBinding{
+				{HostPort: fmt.Sprintf("%d", hostPort)},
+			},
+		},
+		Mounts: []mount.Mount{
+			{
+				Type:   mount.TypeBind,
+				Source: fmt.Sprintf("%s/.openclaw", userDir),
+				Target: "/home/node/.openclaw",
+			},
+			{
+				Type:   mount.TypeBind,
+				Source: fmt.Sprintf("%s/workspace", userDir),
+				Target: "/data/workspace",
+			},
+		},
+	}
+
+	resp, err := oc.client.cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
+	if err != nil {
 		return "", fmt.Errorf("docker run %s: %w", name, err)
+	}
+
+	if err := oc.client.cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		return "", fmt.Errorf("docker start %s: %w", name, err)
 	}
 
 	time.Sleep(3 * time.Second)
@@ -306,7 +527,7 @@ func (oc *OpenClawClient) waitForHealthURL(url string, timeout time.Duration) er
 	log.Debug().Str("url", url).Dur("timeout", timeout).Msg("waiting for openclaw health")
 
 	for time.Now().Before(deadline) {
-		out, err := oc.client.ssh(curlCmd)
+		out, err := oc.client.RunSSH(curlCmd)
 		if err == nil {
 			code := strings.TrimSpace(strings.Trim(out, "'"))
 			if code == "200" {
@@ -320,6 +541,7 @@ func (oc *OpenClawClient) waitForHealthURL(url string, timeout time.Duration) er
 }
 
 // EnsureRunning checks the container status and brings it to a running state.
+// After the container is healthy, it syncs config if needed.
 func (oc *OpenClawClient) EnsureRunning(ctx context.Context, info *store.ContainerInfo) error {
 	status, err := oc.client.Status(info.ContainerName)
 	if err != nil {
@@ -328,20 +550,21 @@ func (oc *OpenClawClient) EnsureRunning(ctx context.Context, info *store.Contain
 
 	healthURL := fmt.Sprintf("http://%s:%d/healthz", oc.client.hostIP, info.HostPort)
 
+	var healthErr error
 	switch status.Status {
 	case "running":
-		return oc.waitForHealthURL(healthURL, 15*time.Second)
+		healthErr = oc.waitForHealthURL(healthURL, 15*time.Second)
 	case "paused":
 		if err := oc.client.Unpause(info.ContainerName); err != nil {
 			return fmt.Errorf("unpause: %w", err)
 		}
-		return oc.waitForHealthURL(healthURL, 30*time.Second)
+		healthErr = oc.waitForHealthURL(healthURL, 30*time.Second)
 	case "exited":
 		if err := oc.client.Start(info.ContainerName); err != nil {
 			return fmt.Errorf("start: %w", err)
 		}
 		time.Sleep(2 * time.Second)
-		return oc.waitForHealthURL(healthURL, 30*time.Second)
+		healthErr = oc.waitForHealthURL(healthURL, 30*time.Second)
 	case "not_found":
 		log.Info().Str("name", info.ContainerName).Str("user_id", info.UserID).Msg("openclaw container not found, reprovisioning")
 		if _, err := oc.Provision(info.ContainerName, info.UserID, info.ContainerToken, info.HostPort); err != nil {
@@ -351,6 +574,19 @@ func (oc *OpenClawClient) EnsureRunning(ctx context.Context, info *store.Contain
 	default:
 		return fmt.Errorf("container %s in unexpected state: %s", info.ContainerName, status.Status)
 	}
+
+	if healthErr != nil {
+		return healthErr
+	}
+
+	// Sync config after container is running and healthy
+	if changed, err := oc.SyncConfig(ctx, info); err != nil {
+		log.Warn().Err(err).Str("name", info.ContainerName).Msg("config sync failed after ensure running")
+	} else if changed {
+		log.Info().Str("name", info.ContainerName).Msg("config synced on ensure running")
+	}
+
+	return nil
 }
 
 // UpstreamAddr returns the WebSocket upstream address for an OpenClaw container.

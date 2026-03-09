@@ -96,6 +96,20 @@ func (s *Store) GetUserIDByContainerName(ctx context.Context, containerName stri
 	return userID, err
 }
 
+// GetContainerInfoByName looks up full container info by container_name.
+func (s *Store) GetContainerInfoByName(ctx context.Context, containerName string) (*ContainerInfo, error) {
+	info := &ContainerInfo{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent')
+		 FROM containers WHERE container_name = $1`,
+		containerName,
+	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType)
+	if err != nil {
+		return nil, fmt.Errorf("get container info by name: %w", err)
+	}
+	return info, nil
+}
+
 // GetUserByContainerToken looks up the user who owns a container by its token.
 // Used for container-initiated API calls (e.g. game deploy from vm-agent container).
 func (s *Store) GetUserByContainerToken(ctx context.Context, token string) (*User, error) {

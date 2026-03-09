@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	dockerpkg "github.com/fran0220/jacoworks/gateway/internal/docker"
+	ocpkg "github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -32,9 +33,10 @@ import (
 // OpenClawBridge handles a single webchat ↔ OpenClaw WS session.
 // It transparently proxies all frames between webchat and OpenClaw.
 type OpenClawBridge struct {
-	store   *store.Store
-	oc      *dockerpkg.OpenClawClient
-	freezer Freezer
+	store           *store.Store
+	oc              *dockerpkg.OpenClawClient
+	freezer         Freezer
+	autoPairEnabled bool
 }
 
 func NewOpenClawBridge(s *store.Store, oc *dockerpkg.OpenClawClient, freezer Freezer) *OpenClawBridge {
@@ -43,6 +45,11 @@ func NewOpenClawBridge(s *store.Store, oc *dockerpkg.OpenClawClient, freezer Fre
 		oc:      oc,
 		freezer: freezer,
 	}
+}
+
+// SetAutoPairEnabled enables or disables automatic device pairing on new sessions.
+func (b *OpenClawBridge) SetAutoPairEnabled(enabled bool) {
+	b.autoPairEnabled = enabled
 }
 
 // ServeSession handles one webchat client for an OpenClaw container.
@@ -73,6 +80,16 @@ func (b *OpenClawBridge) ServeSession(downstream *websocket.Conn, info *store.Co
 		Str("container", info.ContainerName).
 		Str("upstream", upstreamURL).
 		Msg("openclaw bridge: connected")
+
+	// Start auto-pairer in background to approve pending device pair requests
+	if b.autoPairEnabled {
+		go func() {
+			pairer := ocpkg.NewAutoPairer(upstreamURL, info.ContainerToken)
+			if err := pairer.ApproveAll(context.Background()); err != nil {
+				log.Warn().Err(err).Str("container", info.ContainerName).Msg("auto-pairing failed")
+			}
+		}()
+	}
 
 	sess := &ocSession{
 		downstream: downstream,

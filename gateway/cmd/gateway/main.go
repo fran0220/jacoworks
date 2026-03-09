@@ -186,7 +186,7 @@ func main() {
 			cfg.OpenClaw.Port,
 			cfg.OpenClaw.HostIP,
 		)
-		ocClient = dockerpkg.NewOpenClawClient(ocDockerClient, cfg.OpenClaw.DataRoot, cfg.GetLLM)
+		ocClient = dockerpkg.NewOpenClawClient(ocDockerClient, cfg.OpenClaw.DataRoot, cfg.GetLLM, s)
 		ocFreezer = dockerpkg.NewFreezerWithPrefix(ocDockerClient, "oc-", 30*time.Minute, 2*time.Hour, 5*time.Minute)
 		ocFreezer.Start()
 		defer ocFreezer.Stop()
@@ -233,6 +233,7 @@ func main() {
 	// OpenClaw bridge for cloud containers
 	if ocClient != nil {
 		openclawBridge := agent.NewOpenClawBridge(s, ocClient, ocFreezer)
+		openclawBridge.SetAutoPairEnabled(true)
 		wsHandler.SetOpenClawBridge(openclawBridge)
 	}
 
@@ -323,6 +324,8 @@ func main() {
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(dockerClient)))))
 	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(dockerClient, s, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(dockerClient, s, auditLogger)))))
+	mux.Handle("POST /api/admin/containers/{id}/sync-config", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(syncContainerConfigHandler(s, ocClient, auditLogger)))))
+	mux.Handle("POST /api/admin/containers/{id}/restart", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(restartContainerHandler(dockerClient, ocClient, s, auditLogger)))))
 
 	// Admin: user management (container provisioning after activation)
 	mux.Handle("POST /api/admin/provision", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(provisionContainerHandler(s, dockerClient, auditLogger, cfg)))))
@@ -483,6 +486,75 @@ func stopContainerHandler(client *dockerpkg.Client, s *store.Store, al *audit.Lo
 		}
 		al.Log(user.ID, "container_stop", "container", id, r.RemoteAddr)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "container": id})
+	}
+}
+
+func syncContainerConfigHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		user := auth.GetUser(r.Context())
+
+		info, err := s.GetContainerInfoByName(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
+			return
+		}
+
+		if info.ContainerType != store.ContainerTypeOpenClaw {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync-config only supported for openclaw containers"})
+			return
+		}
+
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
+		changed, err := ocClient.SyncConfig(r.Context(), info)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "container_sync_config", "container", id, r.RemoteAddr)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"container": id,
+			"changed":   changed,
+		})
+	}
+}
+
+func restartContainerHandler(vmClient *dockerpkg.Client, ocClient *dockerpkg.OpenClawClient, s *store.Store, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		user := auth.GetUser(r.Context())
+
+		// Determine which docker client to use based on container type
+		info, err := s.GetContainerInfoByName(r.Context(), id)
+		var client *dockerpkg.Client
+		if err == nil && info.ContainerType == store.ContainerTypeOpenClaw && ocClient != nil {
+			client = ocClient.DockerClient()
+		} else {
+			client = vmClient
+		}
+
+		if err := client.Stop(id); err != nil {
+			log.Warn().Err(err).Str("container", id).Msg("restart: stop failed (may already be stopped)")
+		}
+
+		time.Sleep(2 * time.Second)
+
+		if err := client.Start(id); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": fmt.Sprintf("start failed: %s", err.Error())})
+			return
+		}
+
+		if err := s.UpdateContainerStatusByName(r.Context(), id, "running"); err != nil {
+			log.Warn().Err(err).Str("container", id).Msg("restart: update status failed")
+		}
+
+		al.Log(user.ID, "container_restart", "container", id, r.RemoteAddr)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "restarted", "container": id})
 	}
 }
 

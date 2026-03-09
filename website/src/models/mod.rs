@@ -3,6 +3,7 @@ pub mod auth_session;
 pub mod feedback;
 pub mod game;
 pub mod invite;
+pub mod provider;
 pub mod release;
 pub mod session;
 pub mod skill;
