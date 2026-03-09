@@ -98,9 +98,9 @@ push-skills: ## 推送 vm-agent/skills/ 到网关 (system skills)
 
 deploy: deploy-gateway deploy-website push-skills ## 部署所有服务到 jingao
 
-deploy-sync: ## 同步代码到 jingao (git pull)
+deploy-sync: ## 同步代码到 jingao (git pull + submodule)
 	@echo "📥 同步代码到 jingao..."
-	ssh $(JINGAO_HOST) "cd $(REPO_DIR) && git fetch origin && git reset --hard origin/main"
+	ssh $(JINGAO_HOST) "cd $(REPO_DIR) && git fetch origin && git reset --hard origin/main && git submodule update --init --recursive 2>/dev/null || true"
 	@echo "✅ 代码已同步"
 
 deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
@@ -111,6 +111,7 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		export GOTOOLCHAIN=local && \
 		export GOPROXY=https://goproxy.cn,direct && \
 		CGO_ENABLED=0 go build -ldflags='-s -w' -o /tmp/jacoworks-gateway ./cmd/gateway && \
+		sudo ln -sfn $(REPO_DIR)/openclaw /opt/jacoworks/openclaw && \
 		sudo systemctl stop jacoworks-gateway && \
 		sudo mv /tmp/jacoworks-gateway /opt/jacoworks/gateway && \
 		sudo chmod +x /opt/jacoworks/gateway && \

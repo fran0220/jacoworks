@@ -1081,7 +1081,7 @@ func (oc *OpenClawClient) waitForContainerHealthURL(containerName, url string, t
 
 func (oc *OpenClawClient) execChecked(containerName, script string) error {
 	const sentinel = "__JACOWORKS_EXEC_OK__"
-	out, err := oc.client.Exec(containerName, "sh", "-lc", fmt.Sprintf("set -eu; %s; printf %s", script, sentinel))
+	out, err := oc.client.Exec(containerName, "sh", "-lc", fmt.Sprintf("set -eu\n%s\nprintf %s", strings.TrimSpace(script), sentinel))
 	if err != nil {
 		return err
 	}
