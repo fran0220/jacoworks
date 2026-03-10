@@ -35,6 +35,7 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	dockerpkg "github.com/fran0220/jacoworks/gateway/internal/docker"
+	execws "github.com/fran0220/jacoworks/gateway/internal/exec"
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	"github.com/fran0220/jacoworks/gateway/internal/games"
 	"github.com/fran0220/jacoworks/gateway/internal/github"
@@ -218,6 +219,7 @@ func main() {
 	proxyHandler := proxy.NewHandler(s, dockerClient, freezer, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
 	backendAdapter := dockerpkg.NewBackendAdapter(dockerClient)
 	agentProxy := agent.NewProxy(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
+	execHandler := execws.NewHandler(s, dockerClient, freezer)
 
 	// Inject container env vars for auto-reprovision of destroyed containers
 	envVars := containerEnvVars(cfg)
@@ -306,6 +308,7 @@ func main() {
 
 	// Authenticated: Agent WebSocket proxy (direct desktop ↔ container)
 	mux.Handle("GET /ws/agent", authMiddleware.Authenticate(agentProxy))
+	mux.Handle("GET /ws/exec", authMiddleware.Authenticate(execHandler))
 
 	// Agent browser WebSocket bridge (ticket auth)
 	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -922,7 +925,7 @@ func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, a
 		})
 
 		go func() {
-			ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars, hostPort)
+			ip, err := dockerClient.ProvisionContainer(containerName, req.UserID, containerToken, envVars, hostPort)
 			if err != nil {
 				log.Error().Err(err).Str("container", containerName).Msg("async provision failed")
 				return
@@ -1117,14 +1120,24 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"provisioned": false,
+				"ready":       false,
+				"status":      "missing",
 			})
 			return
 		}
+
+		// A container record can exist while async provisioning is still in-flight
+		// (status=creating, empty endpoint). Report readiness separately so desktop
+		// doesn't start WS handshake too early and end up in reconnect/error loops.
+		ready := info.ContainerName != "" && info.Status != "creating" && (info.HostPort > 0 || info.ContainerIP != "")
 		resp := map[string]interface{}{
 			"provisioned":    true,
+			"ready":          ready,
+			"status":         info.Status,
 			"container_name": info.ContainerName,
 			"container_ip":   info.ContainerIP,
 			"container_type": info.ContainerType,
+			"host_port":      info.HostPort,
 		}
 		if info.ContainerType == "openclaw" {
 			resp["container_token"] = info.ContainerToken
@@ -1231,7 +1244,7 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, ocClie
 		} else {
 			envVars := containerEnvVars(cfg)
 			go func() {
-				ip, err := dockerClient.ProvisionContainer(containerName, containerToken, envVars, hostPort)
+				ip, err := dockerClient.ProvisionContainer(containerName, userID, containerToken, envVars, hostPort)
 				if err != nil {
 					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision failed")
 					return
