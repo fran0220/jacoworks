@@ -5,6 +5,11 @@ import type { AgentRpcEvent } from "./agent";
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 15_000;
 const RECONNECT_JITTER_RATIO = 0.2;
+const APP_PING_INTERVAL_MS = 25_000;
+const APP_PONG_TIMEOUT_MS = 5_000;
+const APP_PONG_MISSED_LIMIT = 2;
+const STABLE_CONNECTION_RESET_MS = 60_000;
+const DEFAULT_MAX_RECONNECT_ATTEMPTS = 20;
 
 export interface CloudAgentWSHandlers {
   onReady?: () => void;
@@ -13,6 +18,12 @@ export interface CloudAgentWSHandlers {
   onDisconnect?: (reason: string) => void;
   onError?: (error: Error) => void;
   onReconnect?: (delayMs: number, attempt: number) => void;
+  onActivity?: (timestamp: number) => void;
+  onReconnectExhausted?: (error: Error) => void;
+}
+
+export interface CloudAgentWSOptions {
+  maxReconnectAttempts?: number;
 }
 
 function buildWebSocketUrl(token: string): string {
@@ -53,11 +64,28 @@ export class CloudAgentWS {
   private reconnectTimer: number | null = null;
   private connectRunId = 0;
   private lifecycleListenersBound = false;
+  private appPingTimer: number | null = null;
+  private pongTimeoutTimer: number | null = null;
+  private stableConnectionTimer: number | null = null;
+  private waitingForPong = false;
+  private missedPongCount = 0;
+  private lastPongAtTs = 0;
+  private lastActivityAtTs = 0;
+  private readonly maxReconnectAttempts: number;
 
-  constructor(private handlers: CloudAgentWSHandlers = {}) {}
+  constructor(
+    private handlers: CloudAgentWSHandlers = {},
+    options: CloudAgentWSOptions = {},
+  ) {
+    this.maxReconnectAttempts = Math.max(1, options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS);
+  }
 
   get isReady() {
     return this.ready;
+  }
+
+  get lastPongAt() {
+    return this.lastPongAtTs;
   }
 
   connect() {
@@ -75,8 +103,13 @@ export class CloudAgentWS {
     this.shouldReconnect = false;
     this.ready = false;
     this.reconnectAttempt = 0;
+    this.missedPongCount = 0;
+    this.waitingForPong = false;
 
     this.cancelReconnectTimer();
+    this.cancelPingTimer();
+    this.cancelPongTimeout();
+    this.cancelStableConnectionTimer();
     this.unbindLifecycleListeners();
 
     this.connectRunId += 1;
@@ -111,6 +144,7 @@ export class CloudAgentWS {
         if (!this.isActiveSocket(socket, runId)) return;
         this.connected = true;
         this.connecting = false;
+        this.startPingLoop();
       };
 
       socket.onmessage = (event) => {
@@ -146,6 +180,8 @@ export class CloudAgentWS {
   }
 
   private handleIncomingData(data: string | Blob | ArrayBuffer) {
+    this.markActivity();
+
     if (typeof data === "string") {
       this.handleIncomingText(data);
       return;
@@ -176,12 +212,20 @@ export class CloudAgentWS {
 
     const type = typeof message.type === "string" ? message.type : "";
 
-    if (type === "pong") return;
+    if (type === "pong") {
+      this.lastPongAtTs = Date.now();
+      return;
+    }
 
     if (type === "proxy.ready") {
+      const recovered = this.reconnectAttempt > 0;
       this.ready = true;
-      this.reconnectAttempt = 0;
+      this.startPingLoop();
+      this.scheduleStableConnectionReset();
       this.handlers.onReady?.();
+      if (recovered) {
+        this.handlers.onMessage?.({ type: "proxy.reconnected" } as AgentRpcEvent);
+      }
       return;
     }
 
@@ -204,6 +248,11 @@ export class CloudAgentWS {
     const wasReady = this.ready;
     const reason = event.reason || (wasReady ? "连接中断" : "连接失败");
 
+    this.cancelPingTimer();
+    this.cancelPongTimeout();
+    this.cancelStableConnectionTimer();
+    this.waitingForPong = false;
+
     this.ready = false;
     this.connected = false;
     this.connecting = false;
@@ -217,6 +266,14 @@ export class CloudAgentWS {
     if (!this.shouldReconnect) return;
 
     this.cancelReconnectTimer();
+
+    if (this.reconnectAttempt >= this.maxReconnectAttempts) {
+      this.shouldReconnect = false;
+      const error = new Error(`云端连接重试次数已达上限（${this.maxReconnectAttempts} 次）`);
+      this.handlers.onError?.(error);
+      this.handlers.onReconnectExhausted?.(error);
+      return;
+    }
 
     this.reconnectAttempt += 1;
     const delayMs = getReconnectDelayMs(this.reconnectAttempt);
@@ -236,11 +293,109 @@ export class CloudAgentWS {
     }
   }
 
+  private scheduleStableConnectionReset() {
+    this.cancelStableConnectionTimer();
+    this.stableConnectionTimer = window.setTimeout(() => {
+      this.stableConnectionTimer = null;
+      this.reconnectAttempt = 0;
+    }, STABLE_CONNECTION_RESET_MS);
+  }
+
+  private cancelStableConnectionTimer() {
+    if (this.stableConnectionTimer !== null) {
+      window.clearTimeout(this.stableConnectionTimer);
+      this.stableConnectionTimer = null;
+    }
+  }
+
+  private startPingLoop() {
+    this.cancelPingTimer();
+    this.cancelPongTimeout();
+    this.waitingForPong = false;
+    this.missedPongCount = 0;
+
+    this.appPingTimer = window.setInterval(() => {
+      this.sendPing();
+    }, APP_PING_INTERVAL_MS);
+  }
+
+  private cancelPingTimer() {
+    if (this.appPingTimer !== null) {
+      window.clearInterval(this.appPingTimer);
+      this.appPingTimer = null;
+    }
+  }
+
+  private sendPing() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    if (!this.shouldReconnect || !this.connected || this.connecting) return;
+    if (this.reconnectAttempt > 0 && !this.ready) return;
+    if (this.waitingForPong) return;
+
+    try {
+      this.socket.send(JSON.stringify({ type: "ping" }));
+      this.waitingForPong = true;
+      this.cancelPongTimeout();
+      this.pongTimeoutTimer = window.setTimeout(() => {
+        if (!this.waitingForPong) return;
+        this.waitingForPong = false;
+        this.missedPongCount += 1;
+
+        if (this.missedPongCount >= APP_PONG_MISSED_LIMIT) {
+          this.handlers.onError?.(new Error("云端连接心跳超时，正在重连"));
+          this.forceReconnect("heartbeat timeout");
+        }
+      }, APP_PONG_TIMEOUT_MS);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.handlers.onError?.(new Error(message));
+      this.forceReconnect("ping failed");
+    }
+  }
+
+  private cancelPongTimeout() {
+    if (this.pongTimeoutTimer !== null) {
+      window.clearTimeout(this.pongTimeoutTimer);
+      this.pongTimeoutTimer = null;
+    }
+  }
+
+  private markActivity() {
+    const now = Date.now();
+    this.lastActivityAtTs = now;
+    this.handlers.onActivity?.(now);
+    this.missedPongCount = 0;
+    this.waitingForPong = false;
+    this.cancelPongTimeout();
+  }
+
+  private forceReconnect(reason: string) {
+    const socket = this.socket;
+    if (!socket) return;
+    if (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING) return;
+
+    try {
+      socket.close(4000, reason);
+    } catch {
+      this.connecting = false;
+      this.connected = false;
+      this.ready = false;
+      this.socket = null;
+      this.scheduleReconnect();
+    }
+  }
+
   private teardownSocket() {
     const socket = this.socket;
     this.socket = null;
     this.connected = false;
     this.connecting = false;
+    this.ready = false;
+
+    this.cancelPingTimer();
+    this.cancelPongTimeout();
+    this.cancelStableConnectionTimer();
+    this.waitingForPong = false;
 
     if (!socket) return;
 

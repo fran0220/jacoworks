@@ -77,7 +77,7 @@ function toSession(session: ServerSession): ChatSession {
     messages,
     createdAt: parseTime(session.created_at),
     updatedAt: parseTime(session.updated_at),
-    type: (session.type as ChatSession["type"]) || "chat",
+    type: (session.type as ChatSession["type"]) || "cowork",
     workspacePath: session.workspace_path || "",
     model: session.model || "",
   };
@@ -85,7 +85,7 @@ function toSession(session: ServerSession): ChatSession {
 
 export async function createSession(options?: { workspacePath?: string; model?: string; type?: "chat" | "cowork" }) {
   const payload: Record<string, string> = {
-    type: options?.type || "chat",
+    type: options?.type || "cowork",
     workspace_path: options?.workspacePath || "",
   };
   const model = options?.model?.trim();
@@ -145,7 +145,7 @@ export async function listSessions(): Promise<ChatSession[]> {
       messages: [],
       createdAt: parseTime(summary.created_at),
       updatedAt: parseTime(summary.updated_at),
-      type: (summary.type as ChatSession["type"]) || "chat",
+      type: (summary.type as ChatSession["type"]) || "cowork",
       workspacePath: summary.workspace_path || "",
       model: summary.model || "",
     }));

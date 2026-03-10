@@ -69,7 +69,7 @@ export default function ChatView({
   const lastUserMessage = visibleMessages.filter(m => m.role === "user").pop();
 
   return (
-    <div className={`chat-view${session.anonymous ? " anonymous" : ""}${session.type === "cowork" ? " cloud" : ""}`}>
+    <div className={`chat-view cloud${session.anonymous ? " anonymous" : ""}`}>
       <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {visibleMessages.length === 0 && !streaming && (
           <div className="empty-state">
@@ -173,7 +173,7 @@ export default function ChatView({
         workspacePath={localSession.workspacePath}
         model={localSession.model}
         disabled={!isCloudReady}
-        isCloud={session.type === "cowork"}
+        isCloud
         isAnonymous={!!session.anonymous}
         onWorkspaceChange={updateWorkspacePath}
         onModelChange={updateModel}

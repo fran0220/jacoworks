@@ -1,5 +1,3 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import type { CloudAgentWS } from "./cloud-agent-ws";
 
 export interface PromptPayload {
@@ -14,7 +12,6 @@ export interface PromptPayload {
   anonymous?: boolean;
 }
 
-type NativePromptPayload = PromptPayload;
 export type CloudPromptPayload = PromptPayload;
 
 export interface AgentRpcEvent {
@@ -74,119 +71,6 @@ let commandCounter = 0;
 function nextCommandId(prefix: string): string {
   commandCounter += 1;
   return `${prefix}-${Date.now()}-${commandCounter}`;
-}
-
-async function sendRpcCommand(command: Record<string, unknown>) {
-  if (!isTauri()) {
-    throw new Error("RPC transport is only available in Tauri runtime");
-  }
-  await invoke("agent_rpc_send", { command });
-}
-
-export async function startNativeStream(payload: NativePromptPayload): Promise<{
-  requestId: string;
-  stream: AsyncGenerator<AgentRpcEvent>;
-  cancel: () => void;
-}> {
-  if (!isTauri()) {
-    throw new Error("RPC transport is only available in Tauri runtime");
-  }
-
-  const requestId = nextCommandId("prompt");
-  const queue = new AsyncEventQueue<AgentRpcEvent>();
-
-  const unlisten = await listen<AgentRpcEvent>("agent-rpc-event", (event) => {
-    const packet = event.payload;
-    // Broadcast fatal errors (no id) like "Agent 进程已退出" must reach every active stream
-    if (!packet.id && packet.type === "error") {
-      queue.push(packet);
-      queue.close();
-      return;
-    }
-    if (String(packet.id ?? "") !== requestId) return;
-    queue.push(packet);
-    if (packet.type === "done" || packet.type === "error") {
-      queue.close();
-    }
-  });
-
-  try {
-    await sendRpcCommand({ id: requestId, type: "prompt", ...payload });
-  } catch (err) {
-    unlisten();
-    throw err;
-  }
-
-  const cancel = () => {
-    queue.close();
-    unlisten();
-  };
-
-  const stream = (async function* () {
-    try {
-      while (true) {
-        const next = await queue.next();
-        if (next.done) break;
-        yield next.value;
-      }
-    } finally {
-      unlisten();
-    }
-  })();
-
-  return { requestId, stream, cancel };
-}
-
-export async function abortNativeSession(sessionId: string) {
-  const id = nextCommandId("abort");
-  await sendRpcCommand({ id, type: "abort", session_id: sessionId });
-}
-
-export async function requestTitleGeneration(
-  userMessage: string,
-  assistantMessage: string,
-): Promise<string | null> {
-  if (!isTauri()) return null;
-
-  const id = nextCommandId("title");
-  let cleanup: (() => void) | null = null;
-
-  return new Promise<string | null>(async (resolve) => {
-    let resolved = false;
-    const done = (value: string | null) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      cleanup?.();
-      resolve(value);
-    };
-
-    const timeout = setTimeout(() => done(null), 15_000);
-
-    const unsub = await listen<AgentRpcEvent>("agent-rpc-event", (event) => {
-      const packet = event.payload;
-      if (String(packet.id ?? "") !== id) return;
-      if (packet.type === "response") {
-        if (packet.success && (packet.data as { title?: string })?.title) {
-          done((packet.data as { title: string }).title);
-        } else {
-          done(null);
-        }
-      }
-    });
-    cleanup = unsub;
-
-    try {
-      await sendRpcCommand({
-        id,
-        type: "generate_title",
-        user_message: userMessage,
-        assistant_message: assistantMessage,
-      });
-    } catch {
-      done(null);
-    }
-  });
 }
 
 export async function startCloudStream(

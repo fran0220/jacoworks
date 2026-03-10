@@ -81,13 +81,13 @@ export default function NewSessionPanel({
           messages: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
-          type: "chat",
+          type: "cowork",
           workspacePath: workspacePath || "",
           model,
           anonymous: true,
         } satisfies import("../types").ChatSession;
       } else {
-        session = await createSession({ model, workspacePath: workspacePath || undefined });
+        session = await createSession({ type: "cowork", model, workspacePath: workspacePath || undefined });
       }
       onSessionCreated(session, task.trim() || "(附件)", files);
     } catch (err) {

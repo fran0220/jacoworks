@@ -35,8 +35,8 @@ export default function TopBar({
   onToggleSidebar,
   onOpenSettings,
   ocPhase,
-  coworkOpen,
-  onToggleCloud,
+  taskPanelOpen,
+  onCloudAction,
   debugEnabled,
   showRpcLog,
   onToggleRpcLog,
@@ -49,8 +49,8 @@ export default function TopBar({
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
   ocPhase: OcConnectionPhase;
-  coworkOpen: boolean;
-  onToggleCloud: () => void;
+  taskPanelOpen: boolean;
+  onCloudAction: () => void;
   debugEnabled: boolean;
   showRpcLog: boolean;
   onToggleRpcLog: () => void;
@@ -63,7 +63,6 @@ export default function TopBar({
   const user = getUser();
 
   const isBusy = ocPhase === "checking" || ocPhase === "provisioning" || ocPhase === "connecting" || ocPhase === "reconnecting";
-  const isConnected = ocPhase === "ready";
 
   useClickOutside(menuRef, () => setMenuOpen(false), menuOpen);
 
@@ -74,7 +73,7 @@ export default function TopBar({
 
   const btnClass = [
     "btn-cowork",
-    coworkOpen && "active",
+    taskPanelOpen && "active",
     `phase-${phaseColor(ocPhase)}`,
   ].filter(Boolean).join(" ");
 
@@ -131,12 +130,12 @@ export default function TopBar({
           type="button"
           className={btnClass}
           title={ocPhase === "error" ? "点击重试连接" : "任务面板"}
-          onClick={onToggleCloud}
+          onClick={onCloudAction}
           disabled={isBusy}
         >
           {icon}
           {ocPhase === "idle" ? (
-            <span className="btn-cowork-label">新建云端</span>
+            <span className="btn-cowork-label">连接云端</span>
           ) : ocPhase === "error" ? (
             <span className="btn-cowork-label">重试连接</span>
           ) : (

@@ -4,8 +4,11 @@ import { httpFetch } from "../../lib/transport";
 
 export interface ContainerStatus {
   provisioned: boolean;
+  ready?: boolean;
+  status?: string;
   container_name?: string;
   container_ip?: string;
+  host_port?: number;
 }
 
 export interface ProvisionResult {

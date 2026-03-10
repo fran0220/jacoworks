@@ -54,16 +54,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "binaries/vm-agent"
-    ],
     "resources": {
-      "resources/pi-meta/package.json": "resources/pi-meta/package.json",
-      "resources/doc-packages.tar.gz": "resources/doc-packages.tar.gz",
       "resources/fonts/NotoSansSC-Regular.otf": "resources/fonts/NotoSansSC-Regular.otf",
-      "../../vm-agent/skills": "resources/skills",
-      "resources/win-bash": "resources/win-bash",
-      "resources/win-bin": "resources/win-bin"
+      "../../vm-agent/skills": "resources/skills"
     }
   },
   "plugins": {

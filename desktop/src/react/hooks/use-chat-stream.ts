@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  abortNativeSession,
   abortCloudSession,
-  requestTitleGeneration,
   requestCloudTitleGeneration,
-  startNativeStream,
   startCloudStream,
 } from "../lib/agent";
 import type { AgentRpcEvent } from "../lib/agent";
@@ -106,7 +103,10 @@ export function useChatStream({
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
+  type StreamSessionContext = Pick<ChatSession, "id" | "anonymous" | "title">;
+
   const localSessionRef = useRef(session);
+  const activeStreamRef = useRef<StreamSessionContext | null>(null);
   const abortedRef = useRef(false);
   const sendLockRef = useRef(false);
   const stoppedByUserRef = useRef(false);
@@ -188,17 +188,26 @@ export function useChatStream({
   }, [cancelRenderFrame, cancelScrollFrame]);
 
   const persistSession = useCallback(
-    async (messages: ChatMessage[], title?: string) => {
-      const sessionId = localSessionRef.current.id;
-      setLocalSession((prev) => ({ ...prev, messages, ...(title ? { title } : {}) }));
-      if (localSessionRef.current.anonymous) return;
+    async (ctx: StreamSessionContext, messages: ChatMessage[], title?: string) => {
+      const sessionId = ctx.id;
+      
+      // Skip DB persist for anonymous sessions
+      if (ctx.anonymous) {
+        setLocalSession((prev) => (prev.id === ctx.id ? { ...prev, messages, ...(title ? { title } : {}) } : prev));
+        return;
+      }
+      
+      // Persist to DB (single source of truth)
       await persistMessages(sessionId, messages, title);
+      
+      // Trigger parent to refresh from DB
+      // This ensures we always display the DB state, not local cache
       await onSessionUpdate();
     },
     [onSessionUpdate],
   );
 
-  const finalizeStream = useCallback(async () => {
+  const finalizeStream = useCallback(async (ctx: StreamSessionContext) => {
     const assistantText = blocksRef.current
       .filter((block): block is Extract<StreamBlock, { type: "text" }> => block.type === "text")
       .map((block) => block.content)
@@ -225,31 +234,29 @@ export function useChatStream({
     const finalMessages = [...streamBaseRef.current, assistantMessage];
 
     const assistantCount = finalMessages.filter((message) => message.role === "assistant").length;
-    const isUntitled = isUntitledTitle(localSessionRef.current.title);
+    const isUntitled = isUntitledTitle(ctx.title);
 
     const fallbackTitle =
       isUntitled && assistantCount === 1
         ? generateTitle(assistantText)
         : undefined;
 
-    await persistSession(finalMessages, fallbackTitle);
+    await persistSession(ctx, finalMessages, fallbackTitle);
 
-    if (isUntitled && assistantCount === 1 && !localSessionRef.current.anonymous) {
+    if (isUntitled && assistantCount === 1 && !ctx.anonymous) {
       const lastUserContent =
         streamBaseRef.current.filter((message) => message.role === "user").pop()?.content || "";
       const userMessage = typeof lastUserContent === "string" ? lastUserContent : "";
-      const targetSessionId = localSessionRef.current.id;
+      const targetSessionId = ctx.id;
       const titleRequestVersion = titleRequestVersionRef.current;
 
-      const titlePromise = (localSessionRef.current.type === "cowork")
-        ? (() => {
-            const ws = cloudWsRef?.current;
-            if (ws?.isReady && setCloudMessageHandler) {
-              return requestCloudTitleGeneration(ws, userMessage, assistantText, setCloudMessageHandler);
-            }
-            return Promise.resolve(null);
-          })()
-        : requestTitleGeneration(userMessage, assistantText);
+      const titlePromise = (() => {
+        const ws = cloudWsRef?.current;
+        if (ws?.isReady && setCloudMessageHandler) {
+          return requestCloudTitleGeneration(ws, userMessage, assistantText, setCloudMessageHandler);
+        }
+        return Promise.resolve(null);
+      })();
 
       titlePromise.then(async (aiTitle) => {
         if (!aiTitle) return;
@@ -279,6 +286,12 @@ export function useChatStream({
       setErrorText(null);
 
       const sessionSnapshot = localSessionRef.current;
+      const streamCtx: StreamSessionContext = {
+        id: sessionSnapshot.id,
+        anonymous: sessionSnapshot.anonymous,
+        title: sessionSnapshot.title,
+      };
+      activeStreamRef.current = streamCtx;
       const fileRefs = files.length > 0
         ? files.map(f => ({ name: f.name, size: f.size }))
         : undefined;
@@ -288,7 +301,7 @@ export function useChatStream({
         ...(fileRefs ? { files: fileRefs } : {}),
       };
       const nextMessages = [...sessionSnapshot.messages, userMessage];
-      await persistSession(nextMessages);
+      await persistSession(streamCtx, nextMessages);
 
       setStreamingStartedAt(Date.now());
       setStreaming(true);
@@ -301,7 +314,7 @@ export function useChatStream({
       stoppedByUserRef.current = false;
       stickToBottomRef.current = true;
 
-      // Shared stream processing for both local and cloud modes
+      // Shared stream processing for cloud mode
       const processStream = async (response: { stream: AsyncGenerator<AgentRpcEvent>; cancel: () => void }) => {
         streamCancelRef.current = response.cancel;
         let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
@@ -492,13 +505,13 @@ export function useChatStream({
           if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
 
           if (!abortedRef.current) {
-            await finalizeStream();
+            await finalizeStream(streamCtx);
           } else if (!stoppedByUserRef.current) {
             const hasPartialText = blocksRef.current.some(
               (b) => b.type === "text" && b.content.trim(),
             );
             if (hasPartialText) {
-              await finalizeStream();
+              await finalizeStream(streamCtx);
             }
           }
         } catch (error) {
@@ -509,7 +522,7 @@ export function useChatStream({
               role: "assistant" as const,
               content: `⚠️ ${msg}`,
             }];
-            await persistSession(errorMessages).catch(() => {});
+            await persistSession(streamCtx, errorMessages).catch(() => {});
           }
         } finally {
           if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
@@ -517,45 +530,28 @@ export function useChatStream({
           sendLockRef.current = false;
           setStreaming(false);
           setStreamingStartedAt(null);
-          window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: localSessionRef.current.id, streaming: false } }));
+          window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: streamCtx.id, streaming: false } }));
           cancelRenderFrame();
           setBlocks([]);
           blocksRef.current = [];
+          activeStreamRef.current = null;
           debouncedSyncMemory().catch(() => {});
         }
       };
 
-      // Cloud mode
-      if (sessionSnapshot.type === "cowork") {
-        const ws = cloudWsRef?.current;
-        if (!ws || !ws.isReady) {
-          sendLockRef.current = false;
-          setStreaming(false);
-          setStreamingStartedAt(null);
-          setErrorText("云端连接尚未就绪");
-          return;
-        }
-
-        const currentUser = getUser();
-        const appSettings = getSettings();
-        const response = await startCloudStream(ws, {
-          session_id: sessionSnapshot.id,
-          user_id: currentUser?.id || undefined,
-          model: sessionSnapshot.model,
-          message: buildPrompt(text, files),
-          workspace: sessionSnapshot.workspacePath || undefined,
-          restricted: false,
-          thinking_level: appSettings.thinkingLevel || undefined,
-          anonymous: sessionSnapshot.anonymous || undefined,
-        }, setCloudMessageHandler!);
-        await processStream(response);
+      const ws = cloudWsRef?.current;
+      if (!ws || !ws.isReady || !setCloudMessageHandler) {
+        sendLockRef.current = false;
+        setStreaming(false);
+        setStreamingStartedAt(null);
+        setErrorText("云端连接尚未就绪");
+        activeStreamRef.current = null;
         return;
       }
 
-      // Local mode
       const currentUser = getUser();
       const appSettings = getSettings();
-      const response = await startNativeStream({
+      const response = await startCloudStream(ws, {
         session_id: sessionSnapshot.id,
         user_id: currentUser?.id || undefined,
         model: sessionSnapshot.model,
@@ -564,26 +560,26 @@ export function useChatStream({
         restricted: false,
         thinking_level: appSettings.thinkingLevel || undefined,
         anonymous: sessionSnapshot.anonymous || undefined,
-      });
+      }, setCloudMessageHandler);
       await processStream(response);
     },
     [cancelRenderFrame, finalizeStream, persistSession, scheduleBlocksRender, cloudWsRef, setCloudMessageHandler],
   );
 
   const stopStreaming = useCallback(async () => {
+    const ctx = activeStreamRef.current;
+    if (!ctx) return;
+
     stoppedByUserRef.current = true;
     abortedRef.current = true;
     streamCancelRef.current?.();
     streamCancelRef.current = null;
 
-    const sessionId = localSessionRef.current.id;
+    const sessionId = ctx.id;
 
-    // Branch: cloud vs local abort
-    if (localSessionRef.current.type === "cowork") {
-      const ws = cloudWsRef?.current;
-      if (ws?.isReady) abortCloudSession(ws, sessionId);
-    } else {
-      await abortNativeSession(sessionId).catch(() => {});
+    const ws = cloudWsRef?.current;
+    if (ws?.isReady) {
+      abortCloudSession(ws, sessionId);
     }
 
     const assistantText = blocksRef.current
@@ -599,7 +595,7 @@ export function useChatStream({
         content: assistantText,
         ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
       };
-      await persistSession([...streamBaseRef.current, assistantMessage]);
+      await persistSession(ctx, [...streamBaseRef.current, assistantMessage]);
     }
 
     sendLockRef.current = false;
@@ -607,7 +603,8 @@ export function useChatStream({
     cancelRenderFrame();
     setBlocks([]);
     blocksRef.current = [];
-  }, [cancelRenderFrame, persistSession]);
+    activeStreamRef.current = null;
+  }, [cancelRenderFrame, persistSession, cloudWsRef]);
 
   useEffect(() => {
     if (!pendingMessage || streaming) return;
@@ -651,7 +648,7 @@ export function useChatStream({
     errorText,
     messagesRef,
     isAtBottom,
-    cloudReady: session.type === "cowork" ? (cloudReady ?? false) : true,
+    cloudReady: cloudReady ?? false,
     scrollToBottom,
     sendMessage,
     stopStreaming,

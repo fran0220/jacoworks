@@ -3,6 +3,8 @@ import { isAuthenticated } from "../lib/auth";
 import { createSession, deleteSession, getSession, listSessions } from "../lib/sessions";
 import type { AttachedFile, ChatSession } from "../types";
 
+const SESSION_REFRESH_INTERVAL_MS = 5000; // 5 seconds
+
 export function useSessionState(authenticated: boolean) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -42,9 +44,6 @@ export function useSessionState(authenticated: boolean) {
       return;
     }
 
-    // Skip fetch if we already have the correct session loaded.
-    if (currentSession?.id === currentSessionId) return;
-
     // Anonymous sessions are local-only, resolve from the sessions list
     const anon = sessions.find((s) => s.id === currentSessionId && s.anonymous);
     if (anon) {
@@ -52,6 +51,8 @@ export function useSessionState(authenticated: boolean) {
       return;
     }
 
+    // Always fetch from DB (single source of truth)
+    // This ensures we get the latest messages even if switching back to a running session
     let cancelled = false;
     getSession(currentSessionId)
       .then((session) => {
@@ -70,7 +71,26 @@ export function useSessionState(authenticated: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [currentSessionId, currentSession?.id, sessions]);
+  }, [currentSessionId, sessions]);
+
+  // Periodic refresh of current session (DB as single source of truth)
+  // This ensures we see updates from other devices or background processes
+  useEffect(() => {
+    if (!currentSessionId || !currentSession || currentSession.anonymous) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const updated = await getSession(currentSessionId);
+        if (updated) {
+          setCurrentSession(updated);
+        }
+      } catch (err) {
+        console.warn("[sessions] periodic refresh failed:", err);
+      }
+    }, SESSION_REFRESH_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [currentSessionId, currentSession?.anonymous]);
 
   const selectSession = useCallback((sessionId: string) => {
     setCurrentSessionId(sessionId);

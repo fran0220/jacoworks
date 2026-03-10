@@ -693,7 +693,6 @@ dependencies = [
  "dunce",
  "flate2",
  "futures-util",
- "libc",
  "open",
  "reqwest 0.12.28",
  "serde",

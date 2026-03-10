@@ -38,4 +38,3 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-updater = "2"
 dirs = "6"
 dunce = "1"
-libc = "0.2"
