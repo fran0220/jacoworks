@@ -106,6 +106,10 @@ func (m *mockDockerClient) ContainerExecAttach(_ context.Context, _ string, _ ty
 	return types.HijackedResponse{}, nil
 }
 
+func (m *mockDockerClient) ContainerExecInspect(_ context.Context, _ string) (types.ContainerExecInspect, error) {
+	return types.ContainerExecInspect{}, nil
+}
+
 func (m *mockDockerClient) ContainerLogs(_ context.Context, _ string, _ types.ContainerLogsOptions) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
@@ -149,7 +153,7 @@ func TestCreate(t *testing.T) {
 		"LLM_PROXY_KEY": "sk-test",
 	}
 
-	if err := c.Create("agent-user1", envVars, 0); err != nil {
+	if err := c.Create("agent-user1", "user-test-id", envVars, 0); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -363,7 +367,7 @@ func TestCreateError(t *testing.T) {
 
 	m.createErr = containerNotFoundError{"already exists"}
 
-	err := c.Create("agent-user1", nil, 0)
+	err := c.Create("agent-user1", "", nil, 0)
 	if err == nil {
 		t.Fatal("expected error")
 	}

@@ -306,7 +306,7 @@ func (p *Proxy) ensureRunning(ctx context.Context, info *store.ContainerInfo, us
 			return fmt.Errorf("container destroyed and no env vars configured for reprovision")
 		}
 		log.Info().Str("container", info.ContainerName).Str("user_id", userID).Msg("container not found, reprovisioning")
-		ip, err := p.backend.Reprovision(info.ContainerName, info.ContainerToken, p.containerEnvVars, info.HostPort)
+		ip, err := p.backend.Reprovision(info.ContainerName, userID, info.ContainerToken, p.containerEnvVars, info.HostPort)
 		if err != nil {
 			return fmt.Errorf("reprovision: %w", err)
 		}

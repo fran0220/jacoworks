@@ -15,7 +15,7 @@ type ContainerBackend interface {
 	WaitForHealth(name, ip string) error
 	// Reprovision recreates a container that was destroyed.
 	// Returns the new IP address.
-	Reprovision(name, token string, envVars map[string]string, hostPort int) (string, error)
+	Reprovision(name, userID, token string, envVars map[string]string, hostPort int) (string, error)
 }
 
 // Freezer interface abstracts idle container management.

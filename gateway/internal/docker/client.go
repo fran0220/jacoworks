@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,9 +40,18 @@ type dockerAPI interface {
 	ContainerList(ctx context.Context, options types.ContainerListOptions) ([]types.Container, error)
 	ContainerExecCreate(ctx context.Context, container string, config types.ExecConfig) (types.IDResponse, error)
 	ContainerExecAttach(ctx context.Context, execID string, config types.ExecStartCheck) (types.HijackedResponse, error)
+	ContainerExecInspect(ctx context.Context, execID string) (types.ContainerExecInspect, error)
 	ContainerLogs(ctx context.Context, container string, options types.ContainerLogsOptions) (io.ReadCloser, error)
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options types.CopyToContainerOptions) error
 	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, types.ContainerPathStat, error)
+}
+
+// ExecRunResult contains the result of a command executed inside a container.
+type ExecRunResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode *int
+	Killed   bool
 }
 
 // Client manages Docker containers via the Docker SDK.
@@ -123,9 +133,9 @@ func (c *sshConn) Close() error {
 }
 func (c *sshConn) LocalAddr() net.Addr                { return &net.UnixAddr{Name: "ssh", Net: "ssh"} }
 func (c *sshConn) RemoteAddr() net.Addr               { return &net.UnixAddr{Name: "ssh", Net: "ssh"} }
-func (c *sshConn) SetDeadline(_ time.Time) error       { return nil }
-func (c *sshConn) SetReadDeadline(_ time.Time) error   { return nil }
-func (c *sshConn) SetWriteDeadline(_ time.Time) error  { return nil }
+func (c *sshConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *sshConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *sshConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 // RunSSH runs a command on the remote host via SSH.
 // Deprecated: Use Docker SDK methods or Exec instead. Kept for openclaw config writing.
@@ -141,14 +151,60 @@ func (c *Client) RunSSH(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+const (
+	// agentDataRoot is the host-side base directory for per-user persistent data on oracle.
+	agentDataRoot = "/srv/jacoworks/agents"
+	// resource limits per container: 2 CPUs, 3GiB RAM.
+	containerMemoryBytes = 3 * 1024 * 1024 * 1024
+	containerNanoCPUs    = 2 * 1_000_000_000
+)
+
+// agentDataDirs returns the three host-side bind-mount paths for a given user.
+func agentDataDirs(userID string) (workspace, memory, home string) {
+	base := fmt.Sprintf("%s/%s", agentDataRoot, userID)
+	return base + "/workspace", base + "/memory", base + "/home"
+}
+
+// ensureAgentDirs creates per-user data directories on the remote host via SSH.
+func (c *Client) ensureAgentDirs(userID string) error {
+	workspace, memory, home := agentDataDirs(userID)
+	cmd := fmt.Sprintf("mkdir -p %s %s %s", workspace, memory, home)
+	if _, err := c.RunSSH(cmd); err != nil {
+		return fmt.Errorf("ensure agent dirs for %s: %w", userID, err)
+	}
+	return nil
+}
+
 // Create creates and starts a new container from the configured image.
-func (c *Client) Create(name string, envVars map[string]string, hostPort int) error {
+// userID is used to bind-mount persistent per-user data directories and set resource limits.
+func (c *Client) Create(name, userID string, envVars map[string]string, hostPort int) error {
 	log.Info().Str("name", name).Str("image", c.image).Int("host_port", hostPort).Msg("creating container")
 	ctx := context.Background()
+
+	if userID != "" {
+		if err := c.ensureAgentDirs(userID); err != nil {
+			log.Warn().Err(err).Str("user_id", userID).Msg("failed to ensure agent dirs; continuing without bind mounts")
+			userID = "" // fall back to no bind mounts rather than failing provision
+		}
+	}
 
 	var env []string
 	for k, v := range envVars {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Override env vars to point to the bind-mounted host directories.
+	if userID != "" {
+		workspace, memory, home := agentDataDirs(userID)
+		env = append(env,
+			"WORKSPACE_DIR=/home/agent/workspace",
+			"MEMORY_ROOT_DIR=/home/agent/memory",
+			"AGENT_HOME_DIR=/home/agent/home",
+			// keep originals as comments so they're visible in `docker inspect`
+			fmt.Sprintf("DATA_HOST_WORKSPACE=%s", workspace),
+			fmt.Sprintf("DATA_HOST_MEMORY=%s", memory),
+			fmt.Sprintf("DATA_HOST_HOME=%s", home),
+		)
 	}
 
 	containerCfg := &container.Config{
@@ -159,6 +215,20 @@ func (c *Client) Create(name string, envVars map[string]string, hostPort int) er
 	hostCfg := &container.HostConfig{
 		NetworkMode:   container.NetworkMode(c.network),
 		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+		Resources: container.Resources{
+			Memory:   containerMemoryBytes,
+			NanoCPUs: containerNanoCPUs,
+		},
+	}
+
+	// Bind-mount persistent directories so user data survives container recreate.
+	if userID != "" {
+		workspace, memory, home := agentDataDirs(userID)
+		hostCfg.Binds = []string{
+			workspace + ":/home/agent/workspace",
+			memory + ":/home/agent/memory",
+			home + ":/home/agent/home",
+		}
 	}
 
 	if hostPort > 0 {
@@ -403,6 +473,157 @@ func (c *Client) Exec(containerName string, args ...string) (string, error) {
 	return strings.TrimSpace(output), nil
 }
 
+// ExecCommand runs a shell command inside a container with context-based timeout support.
+// The returned result may be non-nil even when err is set (e.g., stream/inspect edge cases).
+func (c *Client) ExecCommand(ctx context.Context, containerName, command, cwd string) (*ExecRunResult, error) {
+	if strings.TrimSpace(command) == "" {
+		return nil, fmt.Errorf("empty command")
+	}
+
+	execCfg := types.ExecConfig{
+		Cmd:          []string{"sh", "-c", command},
+		AttachStdout: true,
+		AttachStderr: true,
+	}
+	if strings.TrimSpace(cwd) != "" {
+		execCfg.WorkingDir = cwd
+	}
+
+	resp, err := c.cli.ContainerExecCreate(ctx, containerName, execCfg)
+	if err != nil {
+		return nil, fmt.Errorf("exec create %s: %w", containerName, err)
+	}
+
+	attach, err := c.cli.ContainerExecAttach(ctx, resp.ID, types.ExecStartCheck{})
+	if err != nil {
+		return nil, fmt.Errorf("exec attach %s: %w", containerName, err)
+	}
+	defer attach.Close()
+
+	type streamReadResult struct {
+		data []byte
+		err  error
+	}
+
+	streamDone := make(chan streamReadResult, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, copyErr := io.Copy(&buf, attach.Reader)
+		streamDone <- streamReadResult{data: buf.Bytes(), err: copyErr}
+	}()
+
+	result := &ExecRunResult{}
+	var readResult streamReadResult
+
+	select {
+	case readResult = <-streamDone:
+	case <-ctx.Done():
+		result.Killed = true
+		if killErr := c.killExecProcess(containerName, resp.ID); killErr != nil {
+			log.Warn().Err(killErr).Str("container", containerName).Str("exec_id", resp.ID).Msg("exec timeout: kill failed")
+		}
+
+		select {
+		case readResult = <-streamDone:
+		case <-time.After(2 * time.Second):
+			readResult = streamReadResult{}
+		}
+	}
+
+	stdout, stderr := splitDockerExecStreams(readResult.data)
+	result.Stdout = stdout
+	result.Stderr = stderr
+
+	if readResult.err != nil && !result.Killed {
+		return result, fmt.Errorf("exec read %s: %w", containerName, readResult.err)
+	}
+
+	inspect, inspectErr := c.cli.ContainerExecInspect(context.Background(), resp.ID)
+	if inspectErr != nil {
+		return result, fmt.Errorf("exec inspect %s: %w", containerName, inspectErr)
+	}
+	if !inspect.Running {
+		exitCode := inspect.ExitCode
+		result.ExitCode = &exitCode
+	}
+
+	return result, nil
+}
+
+func (c *Client) killExecProcess(containerName, execID string) error {
+	inspect, err := c.cli.ContainerExecInspect(context.Background(), execID)
+	if err != nil {
+		return fmt.Errorf("inspect exec before kill: %w", err)
+	}
+	if !inspect.Running || inspect.Pid <= 0 {
+		return nil
+	}
+
+	pid := strconv.Itoa(inspect.Pid)
+	if _, err := c.Exec(containerName, "sh", "-c", "kill -TERM "+pid+" >/dev/null 2>&1 || true"); err != nil {
+		return fmt.Errorf("send TERM to exec pid %s: %w", pid, err)
+	}
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		state, stateErr := c.cli.ContainerExecInspect(context.Background(), execID)
+		if stateErr != nil {
+			return fmt.Errorf("inspect exec after TERM: %w", stateErr)
+		}
+		if !state.Running {
+			return nil
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	if _, err := c.Exec(containerName, "sh", "-c", "kill -KILL "+pid+" >/dev/null 2>&1 || true"); err != nil {
+		return fmt.Errorf("send KILL to exec pid %s: %w", pid, err)
+	}
+	return nil
+}
+
+func splitDockerExecStreams(data []byte) (stdout string, stderr string) {
+	if len(data) == 0 {
+		return "", ""
+	}
+
+	var outBuf bytes.Buffer
+	var errBuf bytes.Buffer
+	remaining := data
+	parsed := false
+
+	for len(remaining) >= 8 {
+		streamType := remaining[0]
+		size := int(remaining[4])<<24 | int(remaining[5])<<16 | int(remaining[6])<<8 | int(remaining[7])
+		remaining = remaining[8:]
+		if size < 0 || size > len(remaining) {
+			break
+		}
+		chunk := remaining[:size]
+		remaining = remaining[size:]
+		parsed = true
+
+		switch streamType {
+		case 1:
+			outBuf.Write(chunk)
+		case 2, 3:
+			errBuf.Write(chunk)
+		default:
+			outBuf.Write(chunk)
+		}
+	}
+
+	if !parsed {
+		return string(data), ""
+	}
+
+	if len(remaining) > 0 {
+		outBuf.Write(remaining)
+	}
+
+	return outBuf.String(), errBuf.String()
+}
+
 // stripDockerStreamHeaders strips the 8-byte multiplexed stream headers
 // from Docker exec output when TTY is not allocated.
 func stripDockerStreamHeaders(data []byte) string {
@@ -624,8 +845,9 @@ func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
 }
 
 // ProvisionContainer creates a new container with env vars injected and waits for health.
-func (c *Client) ProvisionContainer(name, containerToken string, envVars map[string]string, hostPort int) (string, error) {
-	log.Info().Str("name", name).Str("image", c.image).Msg("provisioning container")
+// userID is used to bind-mount per-user persistent directories.
+func (c *Client) ProvisionContainer(name, userID, containerToken string, envVars map[string]string, hostPort int) (string, error) {
+	log.Info().Str("name", name).Str("image", c.image).Str("user_id", userID).Msg("provisioning container")
 
 	allEnv := make(map[string]string, len(envVars)+1)
 	for k, v := range envVars {
@@ -633,7 +855,7 @@ func (c *Client) ProvisionContainer(name, containerToken string, envVars map[str
 	}
 	allEnv["GATEWAY_TOKEN"] = containerToken
 
-	if err := c.Create(name, allEnv, hostPort); err != nil {
+	if err := c.Create(name, userID, allEnv, hostPort); err != nil {
 		return "", fmt.Errorf("create: %w", err)
 	}
 

@@ -193,8 +193,14 @@ clean: ## 清理所有构建产物
 docker-build-agent: ## 在 Oracle 上原地构建 vm-agent ARM64 镜像 (无需 Mac 跨架构)
 	@echo "🔄 推送代码到 oracle..."
 	ssh $(JINGAO_HOST) "ssh $(ORACLE_HOST) 'cd /opt/jacoworks/repo && git pull --ff-only'"
-	@echo "🔨 oracle 本地构建 ARM64 镜像..."
-	ssh $(JINGAO_HOST) "ssh $(ORACLE_HOST) 'cd /opt/jacoworks/repo/vm-agent && docker build -t jacoworks/vm-agent:latest .'"
+	@echo "🔨 oracle 本地构建 ARM64 镜像 (同时打 git SHA 和 latest 标签)..."
+	$(eval GIT_SHA := $(shell git rev-parse --short HEAD))
+	ssh $(JINGAO_HOST) "ssh $(ORACLE_HOST) '\
+		cd /opt/jacoworks/repo/vm-agent && \
+		docker build -t jacoworks/vm-agent:$(GIT_SHA) -t jacoworks/vm-agent:latest . && \
+		echo \"✅ 构建完成: jacoworks/vm-agent:$(GIT_SHA)\" && \
+		docker image prune -f && \
+		docker buildx prune -f --keep-storage=2g'"
 
 docker-run-agent: ## 本地启动 vm-agent Docker 容器
 	cd vm-agent && docker compose up -d
@@ -219,10 +225,14 @@ release-bump: ## 仅更新版本号 — make release-bump V=1.5.0
 	@test -n "$(V)" || (echo "❌ 用法: make release-bump V=1.5.0" && exit 1)
 	bash deploy/release.sh "$(V)" bump
 
-deploy-agent: docker-build-agent ## 构建并部署 vm-agent 到 oracle (oracle 本地构建，无需传镜像)
-	@echo "🔄 停止旧容器（新容器由网关按需创建）..."
-	ssh $(JINGAO_HOST) "ssh $(ORACLE_HOST) ' \
+deploy-agent: docker-build-agent ## 构建并部署 vm-agent 到 oracle (零停机：旧容器继续运行到自然重启)
+	@echo "✅ 新镜像已就绪 (jacoworks/vm-agent:latest)"
+	@echo "   运行中的容器继续使用旧镜像直到下次 provision/restart"
+	@echo "   如需立即重建所有容器: make redeploy-agent"
+
+redeploy-agent: docker-build-agent ## 强制重建所有 vm-agent 容器 (有停机，谨慎使用)
+	@echo "⚠️  停止并删除所有 vm-agent 容器..."
+	ssh $(JINGAO_HOST) "ssh $(ORACLE_HOST) '\
 		docker ps -q --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker stop && \
 		docker ps -aq --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker rm && \
-		echo \"✅ 镜像已更新, 新容器将由网关按需创建\"'"
-	@echo "✅ vm-agent 已部署到 oracle"
+		echo \"✅ 旧容器已清理，新容器将由网关按需创建\"'"

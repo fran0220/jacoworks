@@ -236,7 +236,7 @@ func (h *Handler) ensureRunning(ctx context.Context, containerName, userID strin
 			return fmt.Errorf("get container info for reprovision: %w", err)
 		}
 		log.Info().Str("container", containerName).Str("user_id", userID).Msg("container not found, reprovisioning")
-		ip, err := h.dockerClient.ProvisionContainer(containerName, cInfo.ContainerToken, h.containerEnvVars, cInfo.HostPort)
+		ip, err := h.dockerClient.ProvisionContainer(containerName, userID, cInfo.ContainerToken, h.containerEnvVars, cInfo.HostPort)
 		if err != nil {
 			return fmt.Errorf("reprovision: %w", err)
 		}
