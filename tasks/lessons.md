@@ -1,5 +1,34 @@
 # Lessons Learned
 
+## 2026-03-10: Session 状态漂移 — 双源真相导致切换错乱
+
+**触发**: 用户反馈在一个线程保持运行时切换到另外一个线程，会出现消息漂移错乱。
+
+**根因**: 双源真相（dual source of truth）
+- 本地内存维护 `localSession.messages` 状态
+- 网关 PostgreSQL 异步 persist
+- 切换 session 时，如果前一个 session 的消息还没 persist 完成，从 DB 加载的是旧数据
+- `use-session-state.ts` 有跳过逻辑：`if (currentSession?.id === currentSessionId) return;`，导致切回已加载的 session 时不刷新
+
+**修复**:
+1. **移除跳过逻辑**: `use-session-state.ts` 每次切换 session 都强制从 DB 重新加载
+2. **persist 后立即刷新**: `persistSession()` 在写入 DB 后调用 `onSessionUpdate()` 触发父组件刷新
+3. **定期刷新机制**: 当前 session 每 5 秒从 DB 刷新一次（非匿名会话）
+4. **重试逻辑**: `persistMessages()` 添加指数退避重试（3 次，1s/2s/4s）
+
+**架构原则**: Database as Single Source of Truth (SSOT)
+- PostgreSQL 是唯一真相源，本地状态只做渲染缓存
+- 所有持久化操作立即写入 DB 并刷新
+- 切换 session 时始终从 DB 加载最新状态
+- 定期刷新确保多设备/后台更新可见
+
+**规则**: 
+- 涉及多 session 切换的状态管理，必须明确单一真相源（DB 或内存）
+- 如果选择 DB 为真相源，所有读写都必须经过 DB，不能依赖本地缓存
+- 切换上下文时，必须强制刷新，不能假设本地状态是最新的
+
+---
+
 ## 2026-03-05: Docker 容器链路可靠性审计 — 10 处问题
 
 **触发**: 全链路审计，发现 3 Critical + 4 High + 3 Medium 问题。
