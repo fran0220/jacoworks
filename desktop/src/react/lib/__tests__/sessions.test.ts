@@ -63,7 +63,7 @@ describe("sessions", () => {
       headers: Record<string, string>;
     };
     expect(JSON.parse(request.body)).toEqual({
-      type: "chat",
+      type: "cowork",
       workspace_path: "/workspace/project",
       model: "proxy-claude/claude-sonnet-4-6",
     });
@@ -91,7 +91,7 @@ describe("sessions", () => {
 
     const request = httpFetchMock.mock.calls[0]?.[1] as { body: string };
     expect(JSON.parse(request.body)).toEqual({
-      type: "chat",
+      type: "cowork",
       workspace_path: "/workspace/project",
     });
   });

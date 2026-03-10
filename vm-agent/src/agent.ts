@@ -31,7 +31,7 @@ import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
 import { createCronService, type CronService, type CronResultEvent } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
-import { createPowershellTool, isPowershellAvailable } from "./tools/powershell.js";
+import { createBashExtension } from "./tools/remote-bash.js";
 import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
 
@@ -390,19 +390,13 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     );
   }
 
-  const codingTools = createCodingTools(workspace, {
-    bash: process.platform === "win32"
-      ? { commandPrefix: "export LANG=C.UTF-8; export LC_ALL=C.UTF-8" }
-      : undefined,
-  });
+  const codingTools = createCodingTools(workspace);
 
   const extensionFactories: ExtensionFactory[] = [];
 
-  // Windows: register PowerShell fallback tool for environment self-repair
-  if (process.platform === "win32" && isPowershellAvailable()) {
-    extensionFactories.push((pi) => {
-      pi.registerTool(createPowershellTool());
-    });
+  // Override built-in bash with the container-local executor.
+  if (!restricted) {
+    extensionFactories.push(createBashExtension());
   }
 
   if (config.memoryEnabled && !opts?.anonymous) {
@@ -445,7 +439,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   }
 
   // Remote filesystem (cloud mode only — when transport sender is available)
-  if (currentSender) {
+  if (config.mode === "server" && currentSender) {
     extensionFactories.push(
       createRemoteFsExtension(() => currentSender, registerTransportResponseHandler),
     );

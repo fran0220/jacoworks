@@ -9,7 +9,6 @@ import PreviewDrawer from "./react/components/PreviewDrawer";
 import TaskPanel from "./react/components/TaskPanel";
 import { useAgentBootstrap } from "./react/hooks/use-agent-bootstrap";
 import { useCoworkConnection } from "./react/hooks/use-cowork-connection";
-import { useCronResults } from "./react/hooks/use-cron-results";
 import { useUpdater } from "./react/hooks/use-updater";
 import { useResponsiveSidebar } from "./react/hooks/use-responsive-sidebar";
 import { useSessionState } from "./react/hooks/use-session-state";
@@ -31,7 +30,7 @@ const AgentationDevTools = import.meta.env.DEV
 export default function App() {
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [showSettings, setShowSettings] = useState(false);
-  const [coworkOpen, setCoworkOpen] = useState(false);
+  const [taskPanelOpen, setTaskPanelOpen] = useState(true);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [debugEnabled, setDebugEnabled] = useState(() => getSettings().debugLogEnabled);
   const [showRpcLog, setShowRpcLog] = useState(false);
@@ -39,19 +38,25 @@ export default function App() {
   const [unreadSessions, setUnreadSessions] = useState<Set<string>>(() => new Set());
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
-  const { agentStarting, agentError, retryAgent } = useAgentBootstrap(authenticated);
+  const { bootstrapDone, bootstrapError, retryBootstrap } = useAgentBootstrap(authenticated);
+  const ocConnection = useCoworkConnection();
 
-  // One-time memory sync on app ready (after auth + agent bootstrap)
+  // One-time memory sync on app ready (after auth + cloud ready)
   const memorySyncDoneRef = useRef(false);
   useEffect(() => {
-    if (!authenticated || agentStarting || agentError || memorySyncDoneRef.current) return;
+    if (!authenticated) {
+      memorySyncDoneRef.current = false;
+    }
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated || !bootstrapDone || ocConnection.phase !== "ready" || memorySyncDoneRef.current) return;
     memorySyncDoneRef.current = true;
     if (getSettings().memorySyncEnabled) {
       syncMemory().catch(() => {});
     }
-  }, [authenticated, agentStarting, agentError]);
-  const ocConnection = useCoworkConnection();
-  const cronResults = useCronResults();
+  }, [authenticated, bootstrapDone, ocConnection.phase]);
+
   const updater = useUpdater();
   const {
     sessions,
@@ -77,7 +82,7 @@ export default function App() {
       subscribeAuth(() => {
         const next = isAuthenticated();
         setAuthenticated(next);
-        if (!next) setCoworkOpen(false);
+        if (!next) setTaskPanelOpen(false);
       }),
     [],
   );
@@ -88,12 +93,13 @@ export default function App() {
     return () => window.removeEventListener("auth-expired", handler);
   }, []);
 
-  // Auto-connect when user selects a cowork session from Sidebar
+  // Cloud-only: establish container connection immediately after auth + bootstrap.
   useEffect(() => {
-    if (currentSession?.type === "cowork") {
+    if (!authenticated || !bootstrapDone) return;
+    if (ocConnection.phase === "idle") {
       ocConnection.connect();
     }
-  }, [currentSession?.id, currentSession?.type, ocConnection.connect]);
+  }, [authenticated, bootstrapDone, ocConnection.phase, ocConnection.connect]);
 
   // Sync active session workspace path to cowork file handler
   useEffect(() => {
@@ -103,7 +109,7 @@ export default function App() {
   // Auto-open panel when cloud becomes ready
   useEffect(() => {
     if (ocConnection.phase === "ready") {
-      setCoworkOpen(true);
+      setTaskPanelOpen(true);
     }
   }, [ocConnection.phase]);
 
@@ -162,11 +168,11 @@ export default function App() {
     return <LoginPanel authExpiredHint={authExpiredHint} onClearHint={() => setAuthExpiredHint(false)} />;
   }
 
-  if (agentStarting) {
+  if (!bootstrapDone && !bootstrapError) {
     return (
       <div className="agent-loading">
         <LoaderCircle size={24} className="spinning" />
-        <p>正在启动 AI Agent</p>
+        <p>正在初始化云端配置</p>
         <button className="agent-debug-btn" onClick={() => setShowRpcLog(v => !v)}>
           <Bug size={14} />
           调试日志
@@ -176,14 +182,14 @@ export default function App() {
     );
   }
 
-  if (agentError) {
+  if (bootstrapError) {
     return (
       <div className="agent-error">
         <p>
           <AlertTriangle size={16} />
-          {agentError}
+          {bootstrapError}
         </p>
-        <button onClick={retryAgent}>重试</button>
+        <button onClick={retryBootstrap}>重试</button>
         <button onClick={() => logout()}>退出登录</button>
         <button className="agent-debug-btn" onClick={() => setShowRpcLog(v => !v)}>
           <Bug size={14} />
@@ -193,6 +199,33 @@ export default function App() {
       </div>
     );
   }
+
+  if (ocConnection.phase !== "ready") {
+    const isCloudError = ocConnection.phase === "error";
+    return (
+      <div className={isCloudError ? "agent-error" : "agent-loading"}>
+        {!isCloudError && <LoaderCircle size={24} className="spinning" />}
+        <p>
+          {isCloudError ? (
+            <>
+              <AlertTriangle size={16} />
+              {ocConnection.errorText || "连接云端容器失败"}
+            </>
+          ) : (
+            ocConnection.statusText || "正在连接云端容器"
+          )}
+        </p>
+        {isCloudError && <button onClick={ocConnection.retry}>重试连接</button>}
+        <button className="agent-debug-btn" onClick={() => setShowRpcLog(v => !v)}>
+          <Bug size={14} />
+          调试日志
+        </button>
+        {showRpcLog && <Suspense fallback={null}><RpcLogPanel onClose={() => setShowRpcLog(false)} /></Suspense>}
+      </div>
+    );
+  }
+
+  const showTaskPanel = taskPanelOpen && ocConnection.phase === "ready";
 
   return (
     <div className="app-layout">
@@ -231,12 +264,14 @@ export default function App() {
           onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
           onOpenSettings={() => setShowSettings(true)}
           ocPhase={ocConnection.phase}
-          coworkOpen={coworkOpen}
-          onToggleCloud={() => {
-            if (ocConnection.phase === "idle" || ocConnection.phase === "error") {
+          taskPanelOpen={showTaskPanel}
+          onCloudAction={() => {
+            if (ocConnection.phase === "error") {
+              ocConnection.retry();
+            } else if (ocConnection.phase === "idle") {
               ocConnection.connect();
             } else if (ocConnection.phase === "ready") {
-              setCoworkOpen((v) => !v);
+              setTaskPanelOpen((v) => !v);
             }
           }}
           debugEnabled={debugEnabled}
@@ -247,7 +282,7 @@ export default function App() {
           onInstallUpdate={updater.doInstall}
         />
 
-        <div className={`content-row${coworkOpen ? " oc-drawer-active" : ""}`}>
+        <div className={`content-row${showTaskPanel ? " oc-drawer-active" : ""}`}>
           <div className="content-main">
             {sessionError && (
               <div className="session-error-banner">
@@ -282,18 +317,18 @@ export default function App() {
             onClose={() => setPreviewPath(null)}
           />
 
-          <div className={`oc-drawer${coworkOpen ? " open" : ""}`}>
+          <div className={`oc-drawer${showTaskPanel ? " open" : ""}`}>
             <div className="oc-drawer-inner">
-              {coworkOpen && ocConnection.phase === "ready" && (
+              {showTaskPanel && (
                 <TaskPanel
-                  results={cronResults.results}
-                  onClearResults={cronResults.clearResults}
+                  results={ocConnection.cronResults}
+                  onClearResults={ocConnection.clearCronResults}
                   onNewCoworkSession={ensureCoworkSession}
                   onCreateCronTask={async (prompt) => {
                     await ensureCoworkSession();
                     setPendingMessage(prompt);
                   }}
-                  onClose={() => setCoworkOpen(false)}
+                  onClose={() => setTaskPanelOpen(false)}
                 />
               )}
             </div>

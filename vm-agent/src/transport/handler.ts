@@ -211,9 +211,10 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
 }
 
 export async function handleCommand(config: Config, sender: TransportSender, command: RawCommand) {
-  // Route fs.*.result messages to registered response handlers (remote-fs etc.)
+  // Route transport response messages to registered response handlers (remote-fs, etc.)
   const msgType = typeof command.type === "string" ? command.type : "";
-  if (msgType.startsWith("fs.") && msgType.endsWith(".result")) {
+  const isTransportResult = msgType.startsWith("fs.") && msgType.endsWith(".result");
+  if (isTransportResult) {
     for (const handler of responseHandlers) {
       if (handler(command as Record<string, unknown>)) return;
     }
