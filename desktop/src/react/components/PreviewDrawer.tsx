@@ -18,12 +18,22 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { FilePreview } from "../types";
 import { formatSize } from "../lib/file-utils";
 import DOMPurify from "dompurify";
+
+const LazyMarkdown = lazy(() => import("./Markdown"));
+
+function ReactMarkdownLazy({ content }: { content: string }) {
+  return (
+    <Suspense fallback={<pre style={{ whiteSpace: "pre-wrap" }}>{content}</pre>}>
+      <LazyMarkdown content={content} />
+    </Suspense>
+  );
+}
 
 type PreviewMetadata = Record<string, string | number | boolean | null>;
 
@@ -1037,12 +1047,9 @@ function BinaryInfo({ preview }: { preview: FilePreview }) {
 }
 
 function MarkdownPreviewContent({ content }: { content: string }) {
-  const [html, setHtml] = useState("");
-  useEffect(() => {
-    import("marked").then(({ marked }) => {
-      setHtml(DOMPurify.sanitize(marked.parse(content) as string));
-    });
-  }, [content]);
-  if (!html) return null;
-  return <div className="preview-doc markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div className="preview-doc markdown-body">
+      <ReactMarkdownLazy content={content} />
+    </div>
+  );
 }

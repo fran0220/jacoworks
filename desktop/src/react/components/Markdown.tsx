@@ -1,72 +1,72 @@
-import DOMPurify from "dompurify";
-import hljs from "../lib/hljs-setup";
-import { marked } from "marked";
-import { useEffect, useMemo, useRef } from "react";
-import type { MouseEventHandler } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
+import rehypeHighlight from "rehype-highlight";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MouseEventHandler, ComponentPropsWithoutRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 /* ---- File path detection ---- */
 
 const FILE_SUFFIX_MAP: Array<{ suffix: string; ext: string; typeLabel: string; kind: string }> = [
-  { suffix: ".tar.gz", ext: "TAR.GZ", typeLabel: "Archive · TAR.GZ", kind: "archive" },
-  { suffix: ".tgz", ext: "TGZ", typeLabel: "Archive · TGZ", kind: "archive" },
+  { suffix: ".tar.gz", ext: "TAR.GZ", typeLabel: "Archive \u00b7 TAR.GZ", kind: "archive" },
+  { suffix: ".tgz", ext: "TGZ", typeLabel: "Archive \u00b7 TGZ", kind: "archive" },
 ];
 
 const FILE_EXT_MAP: Record<string, { typeLabel: string; kind: string }> = {
-  pdf: { typeLabel: "Document · PDF", kind: "pdf" },
-  docx: { typeLabel: "Document · DOCX", kind: "document" },
-  doc: { typeLabel: "Document · DOC", kind: "document" },
-  xlsx: { typeLabel: "Spreadsheet · XLSX", kind: "document" },
-  xls: { typeLabel: "Spreadsheet · XLS", kind: "document" },
-  pptx: { typeLabel: "Presentation · PPTX", kind: "document" },
-  txt: { typeLabel: "Text · TXT", kind: "text" },
-  md: { typeLabel: "Document · Markdown", kind: "text" },
-  mjs: { typeLabel: "Script · MJS", kind: "code" },
-  js: { typeLabel: "Script · JavaScript", kind: "code" },
-  ts: { typeLabel: "Script · TypeScript", kind: "code" },
-  tsx: { typeLabel: "Script · TSX", kind: "code" },
-  jsx: { typeLabel: "Script · JSX", kind: "code" },
-  py: { typeLabel: "Script · Python", kind: "code" },
-  go: { typeLabel: "Source · Go", kind: "code" },
-  rs: { typeLabel: "Source · Rust", kind: "code" },
-  json: { typeLabel: "Data · JSON", kind: "code" },
-  yaml: { typeLabel: "Config · YAML", kind: "code" },
-  yml: { typeLabel: "Config · YAML", kind: "code" },
-  toml: { typeLabel: "Config · TOML", kind: "code" },
-  html: { typeLabel: "Web · HTML", kind: "code" },
-  css: { typeLabel: "Style · CSS", kind: "code" },
-  sql: { typeLabel: "Query · SQL", kind: "code" },
-  csv: { typeLabel: "Data · CSV", kind: "csv" },
-  png: { typeLabel: "Image · PNG", kind: "image" },
-  jpg: { typeLabel: "Image · JPEG", kind: "image" },
-  jpeg: { typeLabel: "Image · JPEG", kind: "image" },
-  gif: { typeLabel: "Image · GIF", kind: "image" },
-  svg: { typeLabel: "Image · SVG", kind: "image" },
-  webp: { typeLabel: "Image · WEBP", kind: "image" },
-  bmp: { typeLabel: "Image · BMP", kind: "image" },
-  mp4: { typeLabel: "Video · MP4", kind: "video" },
-  mov: { typeLabel: "Video · MOV", kind: "video" },
-  m4v: { typeLabel: "Video · M4V", kind: "video" },
-  webm: { typeLabel: "Video · WEBM", kind: "video" },
-  mp3: { typeLabel: "Audio · MP3", kind: "audio" },
-  wav: { typeLabel: "Audio · WAV", kind: "audio" },
-  m4a: { typeLabel: "Audio · M4A", kind: "audio" },
-  aac: { typeLabel: "Audio · AAC", kind: "audio" },
-  ogg: { typeLabel: "Audio · OGG", kind: "audio" },
-  flac: { typeLabel: "Audio · FLAC", kind: "audio" },
-  zip: { typeLabel: "Archive · ZIP", kind: "archive" },
-  tar: { typeLabel: "Archive · TAR", kind: "archive" },
-  fig: { typeLabel: "Design · FIG", kind: "design" },
-  sketch: { typeLabel: "Design · SKETCH", kind: "design" },
-  psd: { typeLabel: "Design · PSD", kind: "design" },
-  sh: { typeLabel: "Script · Shell", kind: "code" },
-  log: { typeLabel: "Log · LOG", kind: "code" },
-  xml: { typeLabel: "Data · XML", kind: "code" },
+  pdf: { typeLabel: "Document \u00b7 PDF", kind: "pdf" },
+  docx: { typeLabel: "Document \u00b7 DOCX", kind: "document" },
+  doc: { typeLabel: "Document \u00b7 DOC", kind: "document" },
+  xlsx: { typeLabel: "Spreadsheet \u00b7 XLSX", kind: "document" },
+  xls: { typeLabel: "Spreadsheet \u00b7 XLS", kind: "document" },
+  pptx: { typeLabel: "Presentation \u00b7 PPTX", kind: "document" },
+  txt: { typeLabel: "Text \u00b7 TXT", kind: "text" },
+  md: { typeLabel: "Document \u00b7 Markdown", kind: "text" },
+  mjs: { typeLabel: "Script \u00b7 MJS", kind: "code" },
+  js: { typeLabel: "Script \u00b7 JavaScript", kind: "code" },
+  ts: { typeLabel: "Script \u00b7 TypeScript", kind: "code" },
+  tsx: { typeLabel: "Script \u00b7 TSX", kind: "code" },
+  jsx: { typeLabel: "Script \u00b7 JSX", kind: "code" },
+  py: { typeLabel: "Script \u00b7 Python", kind: "code" },
+  go: { typeLabel: "Source \u00b7 Go", kind: "code" },
+  rs: { typeLabel: "Source \u00b7 Rust", kind: "code" },
+  json: { typeLabel: "Data \u00b7 JSON", kind: "code" },
+  yaml: { typeLabel: "Config \u00b7 YAML", kind: "code" },
+  yml: { typeLabel: "Config \u00b7 YAML", kind: "code" },
+  toml: { typeLabel: "Config \u00b7 TOML", kind: "code" },
+  html: { typeLabel: "Web \u00b7 HTML", kind: "code" },
+  css: { typeLabel: "Style \u00b7 CSS", kind: "code" },
+  sql: { typeLabel: "Query \u00b7 SQL", kind: "code" },
+  csv: { typeLabel: "Data \u00b7 CSV", kind: "csv" },
+  png: { typeLabel: "Image \u00b7 PNG", kind: "image" },
+  jpg: { typeLabel: "Image \u00b7 JPEG", kind: "image" },
+  jpeg: { typeLabel: "Image \u00b7 JPEG", kind: "image" },
+  gif: { typeLabel: "Image \u00b7 GIF", kind: "image" },
+  svg: { typeLabel: "Image \u00b7 SVG", kind: "image" },
+  webp: { typeLabel: "Image \u00b7 WEBP", kind: "image" },
+  bmp: { typeLabel: "Image \u00b7 BMP", kind: "image" },
+  mp4: { typeLabel: "Video \u00b7 MP4", kind: "video" },
+  mov: { typeLabel: "Video \u00b7 MOV", kind: "video" },
+  m4v: { typeLabel: "Video \u00b7 M4V", kind: "video" },
+  webm: { typeLabel: "Video \u00b7 WEBM", kind: "video" },
+  mp3: { typeLabel: "Audio \u00b7 MP3", kind: "audio" },
+  wav: { typeLabel: "Audio \u00b7 WAV", kind: "audio" },
+  m4a: { typeLabel: "Audio \u00b7 M4A", kind: "audio" },
+  aac: { typeLabel: "Audio \u00b7 AAC", kind: "audio" },
+  ogg: { typeLabel: "Audio \u00b7 OGG", kind: "audio" },
+  flac: { typeLabel: "Audio \u00b7 FLAC", kind: "audio" },
+  zip: { typeLabel: "Archive \u00b7 ZIP", kind: "archive" },
+  tar: { typeLabel: "Archive \u00b7 TAR", kind: "archive" },
+  fig: { typeLabel: "Design \u00b7 FIG", kind: "design" },
+  sketch: { typeLabel: "Design \u00b7 SKETCH", kind: "design" },
+  psd: { typeLabel: "Design \u00b7 PSD", kind: "design" },
+  sh: { typeLabel: "Script \u00b7 Shell", kind: "code" },
+  log: { typeLabel: "Log \u00b7 LOG", kind: "code" },
+  xml: { typeLabel: "Data \u00b7 XML", kind: "code" },
 };
 
 function getFileInfo(text: string): { name: string; ext: string; typeLabel: string; kind: string } | null {
   if (!text.includes(".")) return null;
-  // Allow both full paths and bare filenames with known extensions
   const hasPath = text.includes("/") || text.includes("\\");
   const name = hasPath ? (text.split(/[\\/]/).pop() || text) : text;
   const lowerName = name.toLowerCase();
@@ -82,54 +82,128 @@ function getFileInfo(text: string): { name: string; ext: string; typeLabel: stri
   return { name, ext: ext.toUpperCase(), typeLabel: FILE_EXT_MAP[ext].typeLabel, kind: FILE_EXT_MAP[ext].kind };
 }
 
-/* ---- Marked renderer ---- */
+/* ---- Custom components for ReactMarkdown ---- */
 
-marked.setOptions({ gfm: true, breaks: true });
+function CodeBlock({
+  children,
+  className,
+}: ComponentPropsWithoutRef<"code"> & { inline?: boolean }) {
+  const isInline = !className;
 
-const renderer = new marked.Renderer();
+  if (isInline) {
+    // Check if this is a file reference
+    const text = typeof children === "string" ? children : String(children ?? "");
+    const fileInfo = getFileInfo(text);
+    if (fileInfo) {
+      return (
+        <code
+          className="file-ref"
+          data-file-path={text}
+          title={fileInfo.typeLabel}
+        >
+          {children}
+        </code>
+      );
+    }
+    return <code>{children}</code>;
+  }
 
-renderer.code = ({ text, lang }) => {
-  const language = lang && hljs.getLanguage(lang) ? lang : "plaintext";
-  const highlighted = hljs.highlight(text, { language }).value;
-  const id = `code-${Math.random().toString(36).slice(2, 9)}`;
-  return `<div class="code-block">
-    <div class="code-header">
-      <span class="code-lang">${language}</span>
-      <button class="copy-btn" data-code-id="${id}">复制</button>
+  // Block code — rehype-highlight already applied hljs classes
+  const lang = className?.replace("language-", "") || "plaintext";
+
+  const handleCopy = () => {
+    const text = typeof children === "string" ? children : String(children ?? "");
+    navigator.clipboard.writeText(text).catch(() => {});
+  };
+
+  return (
+    <div className="code-block">
+      <div className="code-header">
+        <span className="code-lang">{lang}</span>
+        <CopyButton onCopy={handleCopy} />
+      </div>
+      <pre>
+        <code className={className}>{children}</code>
+      </pre>
     </div>
-    <pre><code id="${id}" class="hljs language-${language}">${highlighted}</code></pre>
-  </div>`;
-};
+  );
+}
 
-renderer.image = ({ href, title, text }) => {
-  if (!href) return `<img alt="${(text || "").replace(/"/g, "&quot;")}" />`;
+function CopyButton({ onCopy }: { onCopy: () => void }) {
+  const [copied, setCopied] = useState(false);
 
-  const safeAlt = (text || "").replace(/"/g, "&quot;");
-  const safeTitle = title ? ` title="${title.replace(/"/g, "&quot;")}"` : "";
+  const handleClick = () => {
+    onCopy();
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
-  if (/^(https?:|data:)/i.test(href)) {
-    return `<img src="${href.replace(/"/g, "&quot;")}" alt="${safeAlt}"${safeTitle} loading="lazy" class="md-image" />`;
+  return (
+    <button className="copy-btn" onClick={handleClick} type="button">
+      {copied ? "\u5df2\u590d\u5236" : "\u590d\u5236"}
+    </button>
+  );
+}
+
+function LocalImage({
+  src,
+  alt,
+  title,
+  workspacePath,
+}: {
+  src?: string;
+  alt?: string;
+  title?: string;
+  workspacePath?: string;
+}) {
+  const [resolvedSrc, setResolvedSrc] = useState<string | undefined>(undefined);
+  const [error, setError] = useState(false);
+
+  const isRemote = src && /^(https?:|data:)/i.test(src);
+  const isLocal = src && !isRemote;
+
+  useEffect(() => {
+    if (!isLocal) return;
+    let cancelled = false;
+
+    invoke<string>("read_file_base64", {
+      path: src,
+      workspace: workspacePath || null,
+    })
+      .then((url) => {
+        if (!cancelled) setResolvedSrc(url);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
+
+    return () => { cancelled = true; };
+  }, [src, isLocal, workspacePath]);
+
+  if (error) {
+    return <span>[图片加载失败: {src}]</span>;
   }
 
-  const escaped = href.replace(/"/g, "&quot;");
-  return `<img data-local-src="${escaped}" alt="${safeAlt}"${safeTitle} loading="lazy" class="md-image md-image-pending" />`;
-};
+  const finalSrc = isRemote ? src : resolvedSrc;
+  const pending = isLocal && !resolvedSrc && !error;
 
-renderer.codespan = ({ text }) => {
-  const decoded = text
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"');
-  const fileInfo = getFileInfo(decoded);
-  if (!fileInfo) {
-    return `<code>${text}</code>`;
-  }
-  const escaped = decoded.replace(/"/g, "&quot;");
-  return `<code class="file-ref" data-file-path="${escaped}" title="${fileInfo.typeLabel}">${text}</code>`;
-};
+  return (
+    <img
+      src={finalSrc}
+      alt={alt || ""}
+      title={title}
+      loading="lazy"
+      className={`md-image${pending ? " md-image-pending" : ""}`}
+    />
+  );
+}
 
-marked.use({ renderer });
+/* ---- Remark/rehype plugins (stable references) ---- */
+
+const remarkPlugins = [remarkGfm, remarkBreaks];
+const rehypePlugins = [rehypeHighlight];
+
+/* ---- Main component ---- */
 
 export default function Markdown({
   content,
@@ -139,85 +213,27 @@ export default function Markdown({
   workspacePath?: string;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const thumbUrlCacheRef = useRef<Map<string, string>>(new Map());
 
-  const html = useMemo(
-    () =>
-      DOMPurify.sanitize(marked.parse(content) as string, {
-        ADD_TAGS: ["pre", "code", "img"],
-        ADD_ATTR: [
-          "class", "id", "data-code-id", "data-file-path", "data-ext", "data-kind",
-          "src", "alt", "width", "height", "loading", "title", "decoding", "data-local-src",
-        ],
-      }),
-    [content],
-  );
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-
-    const localImgs = Array.from(
-      root.querySelectorAll<HTMLImageElement>("img[data-local-src]"),
-    );
-    if (!localImgs.length) return;
-
-    let disposed = false;
-
-    const resolveImg = async (node: HTMLImageElement) => {
-      if (disposed || node.src) return;
-      const localPath = node.getAttribute("data-local-src");
-      if (!localPath) return;
-
-      let assetUrl = thumbUrlCacheRef.current.get(localPath);
-      if (!assetUrl) {
-        try {
-          assetUrl = await invoke<string>("read_file_base64", {
-            path: localPath,
-            workspace: workspacePath || null,
-          });
-          thumbUrlCacheRef.current.set(localPath, assetUrl);
-        } catch {
-          node.alt = `[图片加载失败: ${localPath}]`;
-          node.classList.remove("md-image-pending");
-          return;
-        }
-      }
-
-      if (disposed) return;
-      node.onload = () => node.classList.remove("md-image-pending");
-      node.onerror = () => {
-        node.alt = `[图片加载失败: ${localPath}]`;
-        node.classList.remove("md-image-pending");
-      };
-      node.src = assetUrl;
-    };
-
-    for (const img of localImgs) {
-      void resolveImg(img);
-    }
-
-    return () => { disposed = true; };
-  }, [html, workspacePath]);
+  // Build components object with workspace context
+  const components = useCallback(() => ({
+    code: CodeBlock,
+    img: (props: ComponentPropsWithoutRef<"img">) => (
+      <LocalImage {...props} workspacePath={workspacePath} />
+    ),
+    // Open external links in default browser
+    a: ({ href, children, ...rest }: ComponentPropsWithoutRef<"a">) => (
+      <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+        {children}
+      </a>
+    ),
+    // Unwrap ReactMarkdown's default <pre> around code blocks — our CodeBlock handles it
+    pre: ({ children }: ComponentPropsWithoutRef<"pre">) => <>{children}</>,
+  }), [workspacePath]);
 
   const onClick: MouseEventHandler<HTMLDivElement> = (event) => {
     const target = event.target as HTMLElement;
 
-    // Copy code button
-    if (target.classList.contains("copy-btn")) {
-      const codeId = target.getAttribute("data-code-id");
-      if (!codeId) return;
-      const codeNode = document.getElementById(codeId);
-      if (!codeNode?.textContent) return;
-      navigator.clipboard.writeText(codeNode.textContent).catch(() => {});
-      target.textContent = "已复制";
-      setTimeout(() => {
-        target.textContent = "复制";
-      }, 1500);
-      return;
-    }
-
-    // Lightweight file-ref click → trigger preview
+    // File-ref click → trigger preview
     const fileRef = target.closest(".file-ref") as HTMLElement | null;
     if (fileRef) {
       const filePath = fileRef.getAttribute("data-file-path");
@@ -226,9 +242,18 @@ export default function Markdown({
           new CustomEvent("preview-file", { detail: { path: filePath } }),
         );
       }
-      return;
     }
   };
 
-  return <div ref={rootRef} className="markdown-body" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div ref={rootRef} className="markdown-body" onClick={onClick}>
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={components()}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }

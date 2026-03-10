@@ -1,13 +1,12 @@
 import { FileText } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import hljs from "../lib/hljs-setup";
-import { Suspense, lazy, memo, useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { formatSize } from "../lib/file-utils";
 import { toolArgsSummary } from "../lib/tool-utils";
 import type { ChatMessage, FileRef, MessageContent, StreamBlock } from "../types";
 import ToolStatus from "./ToolStatus";
-
-const Markdown = lazy(() => import("./Markdown"));
+import Markdown from "./Markdown";
 
 function extractText(content: string | MessageContent[]) {
   if (typeof content === "string") return content;
@@ -326,9 +325,7 @@ const MessageBubble = memo(function MessageBubble({
           <>
             <AssistantBlocks blocks={blocks} workspacePath={workspacePath} />
             {text.trim() && (
-              <Suspense fallback={<pre className="assistant-plain-text">{text}</pre>}>
-                <Markdown content={text} workspacePath={workspacePath} />
-              </Suspense>
+              <Markdown content={text} workspacePath={workspacePath} />
             )}
           </>
         )}
