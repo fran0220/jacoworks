@@ -26,8 +26,8 @@ const SEEDS_DIR = join(dirname(fileURLToPath(import.meta.url)), "seeds");
 
 function buildRuntimePrompt(opts: SystemPromptOptions): string {
   const mode = opts.mode === "server"
-    ? "You run inside a Docker container on a remote server. The workspace is a persistent volume."
-    : "You run as a local agent sidecar on the user's desktop computer. You have direct access to the user's local file system through a workspace directory — there is no cloud container or remote VM involved.";
+    ? "You run inside a Docker container on a remote server. The workspace is a persistent volume. The container comes with Python3, Node.js, Bun, git, pandoc, and other development tools pre-installed."
+    : "You run inside a cloud-managed container. The workspace is a persistent volume.";
 
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-US", {

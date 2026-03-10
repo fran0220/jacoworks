@@ -45,8 +45,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # Preinstall common CLI tooling for sandboxed bash commands
-RUN npm install -g typescript tsx prettier && \
-    pip3 install --no-cache-dir requests beautifulsoup4 markdown
+RUN npm install -g typescript tsx prettier @types/node && \
+    pip3 install --no-cache-dir \
+      requests beautifulsoup4 markdown \
+      pandas numpy matplotlib Pillow openpyxl \
+      flask fastapi uvicorn \
+      scipy sympy
+
+# Browser automation (Playwright + Chromium)
+RUN pip3 install --no-cache-dir playwright && \
+    playwright install --with-deps chromium
 
 # Install Godot binary + Web export templates
 COPY --from=godot-downloader /opt/godot /usr/local/bin/godot

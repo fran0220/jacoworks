@@ -31,7 +31,6 @@ import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 import { createBashExtension } from "./tools/remote-bash.js";
 import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
-import { setupPipMirror } from "./lib/python-setup.js";
 
 // ─── Session Metadata ───────────────────────────────
 
@@ -334,13 +333,6 @@ export function initAgent(cfg: Config) {
 
   // 设置 NODE_PATH 让文档处理脚本能找到预装包
   setupNodePath(cfg);
-
-  // 配置 pip 镜像 (中国大陆用户)
-  try {
-    setupPipMirror();
-  } catch (err) {
-    log.warn("failed to setup pip mirror", { error: err instanceof Error ? err.message : String(err) });
-  }
 
   log.info("agent initialized", {
     model: `${cfg.primaryProvider}/${cfg.primaryModel}`,
