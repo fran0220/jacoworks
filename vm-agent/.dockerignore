@@ -14,4 +14,5 @@ memory/
 scripts/
 !scripts/godot_operations.gd
 !scripts/godot-export-presets.cfg
+!scripts/runtime-smoke.sh
 数据模板.xlsx
