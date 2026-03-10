@@ -12,8 +12,6 @@ import {
   SettingsManager,
   createCodingTools,
   loadSkillsFromDir,
-  convertToLlm,
-  serializeConversation,
 } from "@mariozechner/pi-coding-agent";
 import type { ExtensionFactory, CreateAgentSessionResult } from "@mariozechner/pi-coding-agent";
 import type { Config } from "./config.js";
@@ -23,7 +21,6 @@ import { createImageGenExtension } from "./extensions/image-gen.js";
 import { createReadDocumentExtension, ocrWithVision } from "./extensions/read-document.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
 import { createRemoteFsExtension } from "./extensions/remote-fs.js";
-import { createCompactionSafeguardExtension } from "./extensions/compaction-safeguard.js";
 import { registerTransportResponseHandler } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
@@ -34,6 +31,7 @@ import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 import { createBashExtension } from "./tools/remote-bash.js";
 import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
+import { setupPipMirror } from "./lib/python-setup.js";
 
 // ─── Session Metadata ───────────────────────────────
 
@@ -337,6 +335,13 @@ export function initAgent(cfg: Config) {
   // 设置 NODE_PATH 让文档处理脚本能找到预装包
   setupNodePath(cfg);
 
+  // 配置 pip 镜像 (中国大陆用户)
+  try {
+    setupPipMirror();
+  } catch (err) {
+    log.warn("failed to setup pip mirror", { error: err instanceof Error ? err.message : String(err) });
+  }
+
   log.info("agent initialized", {
     model: `${cfg.primaryProvider}/${cfg.primaryModel}`,
     proxy: cfg.proxyUrl,
@@ -406,10 +411,11 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
         embedCacheMax: config.embedCacheMax,
         hybridWBm25: config.hybridWBm25,
         hybridWVec: config.hybridWVec,
+      }, {
+        reserveTokens: config.compactionReserveTokens,
+        softThresholdTokens: config.compactionSoftThresholdTokens,
       }),
     );
-    // Compaction safeguard: token usage logging + pre-compaction memory flush
-    extensionFactories.push(createCompactionSafeguardExtension(memRoot));
   }
 
   if (cronService) {
@@ -445,12 +451,16 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     );
   }
 
-  // Redirect read tool on binary documents and images to read_document
-  // Images: avoid base64 bloating the context (each image can be ~4.5MB base64),
-  // use OCR via read_document instead to keep only text descriptions in context.
+  // Intercept read tool for binary documents and images.
+  // Binary docs → block with guidance to use read_document.
+  // Images → let read execute, then replace base64 result with OCR text
+  //          (Pi SDK's block:true throws Error, so we use tool_result for images).
   const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
   const IMAGE_EXTS_RE = /\.(png|jpg|jpeg|gif|webp|bmp|tiff|tif)$/i;
+  // Track image paths intercepted in tool_call so tool_result can replace them
+  const pendingImageOcr = new Map<string, string>(); // toolCallId → filePath
   extensionFactories.push((pi) => {
+    // Phase 1: tool_call — block binary docs, mark images for OCR replacement
     pi.on("tool_call", async (event) => {
       if (event.toolName === "read" && typeof event.input?.path === "string") {
         if (BINARY_DOC_EXTS.test(event.input.path)) {
@@ -462,20 +472,30 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
         if (IMAGE_EXTS_RE.test(event.input.path) && config.proxyKey) {
           const filePath = resolve(workspace, event.input.path);
           if (existsSync(filePath)) {
-            try {
-              const text = await ocrWithVision(config.proxyUrl, config.proxyKey, filePath);
-              return {
-                block: true,
-                reason: `[Image analyzed via OCR: ${event.input.path}]\n\n${text}`,
-              };
-            } catch (err) {
-              return {
-                block: true,
-                reason: `Image OCR failed for "${event.input.path}": ${(err as Error).message}. Try read_document tool instead.`,
-              };
-            }
+            pendingImageOcr.set(event.toolCallId, filePath);
           }
         }
+      }
+    });
+
+    // Phase 2: tool_result — replace image base64 with OCR text
+    pi.on("tool_result", async (event) => {
+      if (event.toolName !== "read") return;
+      const filePath = pendingImageOcr.get(event.toolCallId);
+      if (!filePath) return;
+      pendingImageOcr.delete(event.toolCallId);
+
+      try {
+        const text = await ocrWithVision(config.proxyUrl, config.proxyKey, filePath);
+        return {
+          content: [{ type: "text" as const, text: `[Image analyzed via OCR: ${filePath}]\n\n${text}` }],
+          details: { path: filePath, method: "ocr" },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text" as const, text: `[Image: ${filePath}] OCR failed: ${(err as Error).message}. Use read_document tool for manual inspection.` }],
+          details: { path: filePath, method: "ocr-failed" },
+        };
       }
     });
   });
@@ -861,170 +881,6 @@ export function listAvailableSkills(): SkillInfo[] {
   loadFrom(userDir, "user");
 
   return skills;
-}
-
-// ─── Session Handoff ────────────────────────────────
-
-export interface HandoffResult {
-  new_session_id: string;
-  summary: string;
-  workspace: string;
-  model: string;
-  restricted: boolean;
-}
-
-function findExistingSession(sessionId: string): {
-  key: string;
-  entry: CreateAgentSessionResult;
-  meta: SessionMeta;
-} {
-  // Exact match first
-  const entry = sessions.get(sessionId);
-  const meta = sessionMetas.get(sessionId);
-  if (entry && meta) return { key: sessionId, entry, meta };
-
-  // Prefix match (sessionId::workspace::restricted::userScope)
-  const matches: Array<{ key: string; entry: CreateAgentSessionResult; meta: SessionMeta }> = [];
-  for (const [key, e] of sessions.entries()) {
-    if (key === sessionId || key.startsWith(`${sessionId}::`)) {
-      const m = sessionMetas.get(key);
-      if (m) matches.push({ key, entry: e, meta: m });
-    }
-  }
-
-  if (matches.length === 0) throw new Error(`session not found: ${sessionId}`);
-  if (matches.length > 1) throw new Error(`ambiguous session_id: ${sessionId}, provide workspace/user_id`);
-  return matches[0];
-}
-
-async function generateHandoffSummary(
-  serializedConversation: string,
-  goal?: string,
-): Promise<string> {
-  const transcript = serializedConversation.slice(-50_000);
-
-  const prompt = [
-    "You are preparing a handoff summary for a fresh coding-agent session.",
-    "The transcript below is serialized reference material, not a live conversation.",
-    "Summarize it compactly. Include only facts clearly supported by the transcript:",
-    "- Overall task / user intent",
-    "- Key decisions and assumptions",
-    "- Files inspected or modified",
-    "- Commands/tests run and notable results",
-    "- Remaining work / blockers / next steps",
-    "",
-    "Keep it concise, structured, and under 1200 characters.",
-    "Do not continue the conversation. Do not address the user directly.",
-    "If a category has nothing, omit it. Output in the same language as the transcript.",
-    "",
-    goal?.trim() ? `New goal for the fresh session: ${goal.trim()}` : "",
-    "",
-    "<conversation>",
-    transcript,
-    "</conversation>",
-  ].filter(Boolean).join("\n");
-
-  // Lightweight model fallback chain (same as generateSessionTitle)
-  const summaryModels = [
-    { model: "gemini-3-flash-preview", api: "openai" },
-    { model: "claude-haiku-4-5", api: "anthropic" },
-  ];
-
-  let lastError: Error | null = null;
-
-  for (const { model, api } of summaryModels) {
-    try {
-      if (api === "anthropic") {
-        const res = await fetch(`${config.proxyUrl}/v1/messages`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": config.proxyKey,
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: 1024,
-            messages: [{ role: "user", content: prompt }],
-          }),
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`Anthropic ${model} ${res.status}: ${body.slice(0, 200)}`);
-        }
-        const result = (await res.json()) as { content?: Array<{ text?: string }> };
-        const text = result.content?.[0]?.text?.trim() || "";
-        if (text) return text;
-      } else {
-        const res = await fetch(`${config.proxyUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.proxyKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: 1024,
-            messages: [{ role: "user", content: prompt }],
-          }),
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`OpenAI ${model} ${res.status}: ${body.slice(0, 200)}`);
-        }
-        const result = (await res.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-        const text = result.choices?.[0]?.message?.content?.trim() || "";
-        if (text) return text;
-      }
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      log.error("handoff summary failed", { model, error: lastError.message });
-      continue;
-    }
-  }
-
-  if (lastError) throw lastError;
-  return "(summary unavailable)";
-}
-
-export async function handoffSession(
-  sourceSessionId: string,
-  opts?: { goal?: string },
-): Promise<HandoffResult> {
-  const { entry: sourceEntry, meta } = findExistingSession(sourceSessionId);
-  const source = sourceEntry.session;
-
-  if (source.isStreaming) {
-    throw new Error("cannot handoff while source session is streaming");
-  }
-
-  const messages = source.messages;
-  if (messages.length === 0) {
-    throw new Error("cannot handoff an empty session");
-  }
-
-  // Serialize conversation for summary
-  const llmMessages = convertToLlm(messages);
-  const serialized = serializeConversation(llmMessages);
-
-  const summary = await generateHandoffSummary(serialized, opts?.goal);
-
-  const newSessionId = randomUUID();
-  const modelStr = source.model
-    ? `${source.model.provider}/${source.model.id}`
-    : `${config.primaryProvider}/${config.primaryModel}`;
-
-  log.info("session handoff", { source: sourceSessionId, target: newSessionId, summary_len: summary.length });
-
-  return {
-    new_session_id: newSessionId,
-    summary,
-    workspace: meta.workspace,
-    model: modelStr,
-    restricted: meta.restricted,
-  };
 }
 
 // ─── Lightweight Title Generation ───────────────────

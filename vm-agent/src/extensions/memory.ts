@@ -2,7 +2,6 @@ import { Type, type Static } from "@sinclair/typebox";
 import type {
   ExtensionFactory,
   ToolDefinition,
-  SessionMessageEntry,
 } from "@mariozechner/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -152,11 +151,32 @@ function getMemoryStore(
 
 // ─── Extension Factory ──────────────────────────────
 
+const FLUSH_PROMPT = (currentTokens: number) => `[SYSTEM - MEMORY FLUSH]
+Context window is approaching compaction threshold (current: ${currentTokens} tokens).
+Soon, older conversation history will be summarized and compressed.
+
+Before that happens, review the conversation and save any critical information
+to long-term memory using the memory_save tool:
+- Key decisions made and their rationale
+- Important file paths and modifications
+- Current task state and progress
+- Blockers or open questions
+- Next steps planned
+
+If nothing important needs saving, simply acknowledge briefly.
+Do NOT continue working on the user's task — only save memories.`;
+
 export function createMemoryExtension(
   memoryRootDir: string,
   storeConfig: MemoryStoreConfig,
+  compactionConfig: {
+    reserveTokens: number;
+    softThresholdTokens: number;
+  },
 ): ExtensionFactory {
   return (pi) => {
+    // Agentic flush state: prevent re-entry within a single compaction cycle
+    let flushedForCompaction = false;
     const store = getMemoryStore(memoryRootDir, storeConfig);
 
     // Background init: migrate + index + embed (non-blocking)
@@ -231,35 +251,47 @@ export function createMemoryExtension(
       }
     });
 
-    // ── session_before_compact: flush topics to daily log ──
-    pi.on("session_before_compact", async (event) => {
-      const topics: string[] = [];
-      for (const entry of event.branchEntries) {
-        if (entry.type !== "message") continue;
-        const { message } = entry as SessionMessageEntry;
-        if (message.role !== "user") continue;
-        let text = "";
-        if (typeof message.content === "string") {
-          text = message.content;
-        } else if (Array.isArray(message.content)) {
-          const block = message.content.find(
-            (b) => b && typeof b === "object" && "type" in b && b.type === "text",
-          ) as { text?: string } | undefined;
-          text = block?.text ?? "";
-        }
-        const first100 = text.slice(0, 100);
-        if (first100.trim()) topics.push(first100);
-      }
-
-      if (topics.length > 0) {
-        const summary = topics.slice(0, 5).join("\n- ");
-        await appendDailyLog(
-          memoryRootDir,
-          `## ${nowHHMM()} — Compaction Summary\nTopics discussed:\n- ${summary}\n\n`,
+    // ── turn_end: token usage logging + agentic memory flush ──
+    pi.on("turn_end", async (event, ctx) => {
+      const msg = event.message;
+      if (msg?.role === "assistant" && msg.usage) {
+        const u = msg.usage;
+        console.log(
+          `[tokens] turn=${event.turnIndex} in=${u.input} out=${u.output} cache_r=${u.cacheRead || 0} cache_w=${u.cacheWrite || 0} total=${u.totalTokens || u.input + u.output + (u.cacheRead || 0) + (u.cacheWrite || 0)} model=${msg.model || "unknown"}`,
         );
       }
 
+      // Agentic memory flush: trigger when approaching compaction threshold
+      if (flushedForCompaction) return;
+
+      const usage = ctx.getContextUsage();
+      if (!usage || usage.tokens === null) return;
+
+      const threshold = usage.contextWindow - compactionConfig.reserveTokens - compactionConfig.softThresholdTokens;
+      if (usage.tokens >= threshold) {
+        flushedForCompaction = true;
+        console.log(
+          `[memory] Triggering agentic flush: ${usage.tokens}/${usage.contextWindow} tokens (threshold: ${threshold})`,
+        );
+        pi.sendUserMessage(FLUSH_PROMPT(usage.tokens), { deliverAs: "followUp" });
+      }
+    });
+
+    // ── session_before_compact: log token stats + reset flush flag ──
+    pi.on("session_before_compact", async (event) => {
+      const tokensBefore = event.preparation?.tokensBefore;
+      if (tokensBefore) {
+        await appendDailyLog(
+          memoryRootDir,
+          `## ${nowHHMM()} — Compaction (${tokensBefore} tokens)\n\n`,
+        );
+      }
       return {};
+    });
+
+    // ── session_compact: reset flush flag for next cycle ──
+    pi.on("session_compact", async () => {
+      flushedForCompaction = false;
     });
 
     // ── memory_search tool: hybrid BM25 + vector ──

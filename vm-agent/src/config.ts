@@ -37,6 +37,7 @@ export interface Config {
   cronEnabled: boolean;
   toolDenyList: string[];
   compactionReserveTokens: number;
+  compactionSoftThresholdTokens: number;
   compactionKeepRecentTokens: number;
   maxHistoryTurns: number;
   systemPromptTotalChars: number;
@@ -197,6 +198,7 @@ export function loadConfig(): Config {
       .map((s) => s.trim())
       .filter(Boolean),
     compactionReserveTokens: parseInt(process.env.COMPACTION_RESERVE_TOKENS || "32768", 10),
+    compactionSoftThresholdTokens: parseInt(process.env.COMPACTION_SOFT_THRESHOLD_TOKENS || "6000", 10),
     compactionKeepRecentTokens: parseInt(process.env.COMPACTION_KEEP_RECENT_TOKENS || "40000", 10),
     maxHistoryTurns: parseInt(process.env.MAX_HISTORY_TURNS || "0", 10),
     systemPromptTotalChars: parseInt(process.env.SYSTEM_PROMPT_TOTAL_CHARS || "30000", 10),
