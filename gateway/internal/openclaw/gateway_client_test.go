@@ -3,6 +3,8 @@ package openclaw
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -85,6 +87,7 @@ var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return
 type mockOCServer struct {
 	token          string
 	pendingPairs   []PairRequest
+	pairListError  *ProtocolError
 	onApprove      func(pairingID string)
 	handshakeError bool
 }
@@ -137,6 +140,12 @@ func (m *mockOCServer) handler(w http.ResponseWriter, r *http.Request) {
 
 		switch frame.Method {
 		case "node.pair.list":
+			if m.pairListError != nil {
+				okVal := false
+				errPayload, _ := json.Marshal(m.pairListError)
+				conn.WriteJSON(Frame{Type: "res", ID: frame.ID, OK: &okVal, Error: errPayload})
+				continue
+			}
 			okVal := true
 			payload, _ := json.Marshal(PairListResponse{Pairs: m.pendingPairs})
 			conn.WriteJSON(Frame{Type: "res", ID: frame.ID, OK: &okVal, Payload: payload})
@@ -357,5 +366,57 @@ func TestAutoPairerBadToken(t *testing.T) {
 	err := ap.ApproveAll(ctx)
 	if err == nil {
 		t.Fatal("expected error for bad token")
+	}
+}
+
+func TestAutoPairerStopsOnMissingScope(t *testing.T) {
+	mock := &mockOCServer{
+		token: "tk",
+		pairListError: &ProtocolError{
+			Code:    "forbidden",
+			Message: "missing scope: operator.pairing",
+		},
+	}
+	wsURL := startMockServer(t, mock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ap := NewAutoPairer(wsURL, "tk").
+		WithInterval(500 * time.Millisecond).
+		WithDuration(10 * time.Second)
+
+	started := time.Now()
+	if err := ap.ApproveAll(ctx); err != nil {
+		t.Fatalf("ApproveAll with missing scope should exit cleanly: %v", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatalf("ApproveAll should stop early on missing scope")
+	}
+}
+
+func TestResErrorReturnsRequestError(t *testing.T) {
+	t.Helper()
+	falseVal := false
+	errPayload, _ := json.Marshal(ProtocolError{Code: "forbidden", Message: "missing scope: operator.pairing"})
+
+	err := (&GatewayClient{}).resError(&Frame{OK: &falseVal, Error: errPayload}, "node.pair.list")
+
+	var reqErr *RequestError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("expected RequestError, got %T", err)
+	}
+	if reqErr.Code != "forbidden" {
+		t.Fatalf("code=%q, want forbidden", reqErr.Code)
+	}
+	if !IsMissingScope(err, "operator.pairing") {
+		t.Fatalf("expected missing scope detection, got: %v", err)
+	}
+}
+
+func TestIsMissingScopeFallback(t *testing.T) {
+	err := fmt.Errorf("node.pair.list failed: missing scope: operator.pairing")
+	if !IsMissingScope(err, "operator.pairing") {
+		t.Fatalf("expected missing scope fallback detection")
 	}
 }

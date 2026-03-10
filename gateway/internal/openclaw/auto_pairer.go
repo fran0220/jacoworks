@@ -66,6 +66,10 @@ func (ap *AutoPairer) ApproveAll(ctx context.Context) error {
 
 	for {
 		if err := ap.pollOnce(ctx, client, &approved); err != nil {
+			if IsMissingScope(err, "operator.pairing") {
+				log.Info().Err(err).Msg("auto-pairer: token missing operator.pairing scope; stop polling")
+				return nil
+			}
 			log.Warn().Err(err).Msg("auto-pairer: poll error")
 		}
 
@@ -90,6 +94,9 @@ func (ap *AutoPairer) pollOnce(ctx context.Context, client *GatewayClient, appro
 		log.Info().Str("pairing_id", p.PairingID).Str("name", p.Name).Msg("auto-pairer: approving pair request")
 
 		if err := client.ApprovePair(ctx, p.PairingID); err != nil {
+			if IsMissingScope(err, "operator.pairing") {
+				return err
+			}
 			log.Error().Err(err).Str("pairing_id", p.PairingID).Msg("auto-pairer: approve failed")
 			continue
 		}

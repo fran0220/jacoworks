@@ -18,6 +18,7 @@ type ContainerInfo struct {
 	ContainerToken string
 	HostPort       int
 	ContainerType  string // "vm-agent" | "openclaw"
+	Status         string // "creating" | "running" | "paused" | "stopped" | "exited"
 }
 
 type Container struct {
@@ -37,10 +38,10 @@ type Container struct {
 func (s *Store) GetContainerInfo(ctx context.Context, userID, containerType string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent')
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent'), COALESCE(status, 'creating')
 		 FROM containers WHERE user_id = $1 AND container_type = $2`,
 		userID, containerType,
-	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType)
+	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType, &info.Status)
 	if err != nil {
 		return nil, fmt.Errorf("get container info: %w", err)
 	}
@@ -100,10 +101,10 @@ func (s *Store) GetUserIDByContainerName(ctx context.Context, containerName stri
 func (s *Store) GetContainerInfoByName(ctx context.Context, containerName string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent')
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent'), COALESCE(status, 'creating')
 		 FROM containers WHERE container_name = $1`,
 		containerName,
-	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType)
+	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType, &info.Status)
 	if err != nil {
 		return nil, fmt.Errorf("get container info by name: %w", err)
 	}

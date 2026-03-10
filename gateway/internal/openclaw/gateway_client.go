@@ -3,6 +3,7 @@ package openclaw
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -18,6 +19,42 @@ const (
 	defaultConnectTimeout = 10 * time.Second
 	defaultRequestTimeout = 5 * time.Second
 )
+
+// RequestError keeps structured method/code/message details from OpenClaw RPC responses.
+type RequestError struct {
+	Method  string
+	Code    string
+	Message string
+}
+
+func (e *RequestError) Error() string {
+	if e == nil {
+		return "openclaw request failed"
+	}
+	if e.Message != "" {
+		return fmt.Sprintf("%s failed: %s", e.Method, e.Message)
+	}
+	if e.Code != "" {
+		return fmt.Sprintf("%s failed: code=%s", e.Method, e.Code)
+	}
+	return fmt.Sprintf("%s failed: ok=false", e.Method)
+}
+
+// IsMissingScope reports whether err indicates a missing-scope protocol rejection.
+func IsMissingScope(err error, scope string) bool {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	if err == nil || scope == "" {
+		return false
+	}
+
+	var reqErr *RequestError
+	if errors.As(err, &reqErr) {
+		msg := strings.ToLower(reqErr.Message)
+		return strings.Contains(msg, "missing scope") && strings.Contains(msg, scope)
+	}
+
+	return strings.Contains(strings.ToLower(err.Error()), "missing scope: "+scope)
+}
 
 // GatewayClient is an OpenClaw WS protocol client that performs
 // challenge-response authentication and supports operator commands.
@@ -295,9 +332,9 @@ func (gc *GatewayClient) resError(res *Frame, method string) error {
 	if len(res.Error) > 0 {
 		var pe ProtocolError
 		if json.Unmarshal(res.Error, &pe) == nil && pe.Message != "" {
-			return fmt.Errorf("%s failed: %s", method, pe.Message)
+			return &RequestError{Method: method, Code: pe.Code, Message: pe.Message}
 		}
-		return fmt.Errorf("%s failed: %s", method, string(res.Error))
+		return &RequestError{Method: method, Message: string(res.Error)}
 	}
-	return fmt.Errorf("%s failed: ok=false", method)
+	return &RequestError{Method: method}
 }
