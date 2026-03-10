@@ -39,10 +39,14 @@ ARG GODOT_VERSION=4.6
 
 # System packages: dev tools + Godot runtime deps (X11/GL for headless rendering)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini curl git ca-certificates \
-    python3 python3-pip jq zip unzip \
+    bash tini curl wget git ca-certificates nodejs npm \
+    python3 python3-pip jq zip unzip wkhtmltopdf pandoc \
     xvfb imagemagick libfontconfig1 libgl1 libxcursor1 libxinerama1 libxrandr2 libxi6 libasound2 && \
     rm -rf /var/lib/apt/lists/*
+
+# Preinstall common CLI tooling for sandboxed bash commands
+RUN npm install -g typescript tsx prettier && \
+    pip3 install --no-cache-dir requests beautifulsoup4 markdown
 
 # Install Godot binary + Web export templates
 COPY --from=godot-downloader /opt/godot /usr/local/bin/godot
@@ -52,10 +56,12 @@ COPY --from=godot-downloader /opt/godot-templates/ /home/bun/.local/share/godot/
 # Godot tools: operations script + export preset template
 COPY scripts/godot_operations.gd /opt/godot-tools/
 COPY scripts/godot-export-presets.cfg /opt/godot-tools/templates/export_presets.cfg
+COPY --chown=bun:bun scripts/runtime-smoke.sh /opt/health/runtime-smoke.sh
 
 # Create all directories with correct ownership BEFORE copying app files.
 # This avoids a costly chown -R layer that duplicates node_modules (~448MB).
-RUN mkdir -p /home/agent/app /home/agent/workspace /home/agent/memory /opt/godot-tools/templates && \
+RUN mkdir -p /home/agent/app /home/agent/workspace /home/agent/memory /opt/godot-tools/templates /opt/health && \
+    chmod +x /opt/health/runtime-smoke.sh && \
     chown -R bun:bun /home/agent /opt/godot-tools /home/bun/.local
 
 WORKDIR /home/agent/app

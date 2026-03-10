@@ -20,12 +20,9 @@
     "test:journeys": "bun test src/__tests__/journeys.e2e.test.ts --timeout 120000",
     "test:all": "bun test --timeout 120000",
     "compile": "bun build --compile src/index.ts --outfile dist/vm-agent",
-    "compile:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin",
-    "compile:darwin-x64": "bun build --compile --target=bun-darwin-x64 src/index.ts --outfile dist/vm-agent-x86_64-apple-darwin",
     "compile:linux-x64": "bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/vm-agent-x86_64-unknown-linux-gnu",
-    "compile:windows-x64": "bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe",
     "compile:server:linux-arm64": "bun build --compile --target=bun-linux-arm64 src/server.ts --outfile dist/vm-agent-server-aarch64-unknown-linux-gnu",
-    "compile:all": "npm run compile:darwin-arm64 && npm run compile:darwin-x64 && npm run compile:linux-x64 && npm run compile:windows-x64"
+    "compile:all": "npm run compile:linux-x64 && npm run compile:server:linux-arm64"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.56.2",

@@ -6,11 +6,11 @@ import {
   destroySession,
   generateSessionTitle,
   listAvailableSkills,
-  handoffSession,
 } from "../agent.js";
 import type { Config } from "../config.js";
 import type { TransportSender } from "./types.js";
 import { log } from "../lib/logger.js";
+import { promptWithRetry, sanitizePromptMessage } from "../lib/prompt-retry.js";
 
 type RpcId = string | number;
 
@@ -195,7 +195,9 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
       ? { streamingBehavior: command.streaming_behavior || "followUp" as const }
       : undefined;
 
-    session.prompt(command.message, options)
+    // Sanitize message and use retry logic
+    const sanitizedMessage = sanitizePromptMessage(command.message);
+    promptWithRetry(session, sanitizedMessage, options)
       .then(() => finish())
       .catch((err) => {
         finish(err instanceof Error ? err.message : "prompt failed");
@@ -295,24 +297,6 @@ export async function handleCommand(config: Config, sender: TransportSender, com
       } catch (err) {
         sendResponse(sender, command.id, command.type, false, {
           error: err instanceof Error ? err.message : "title generation failed",
-        });
-      }
-      return;
-    }
-
-    case "handoff": {
-      const sessionId = typeof command.session_id === "string" ? command.session_id : "";
-      if (!sessionId) {
-        sendResponse(sender, command.id, command.type, false, { error: "session_id required" });
-        return;
-      }
-      const goal = typeof command.goal === "string" ? command.goal : undefined;
-      try {
-        const result = await handoffSession(sessionId, { goal });
-        sendResponse(sender, command.id, command.type, true, result);
-      } catch (err) {
-        sendResponse(sender, command.id, command.type, false, {
-          error: err instanceof Error ? err.message : "handoff failed",
         });
       }
       return;

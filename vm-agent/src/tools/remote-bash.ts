@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { Type, type Static } from "@sinclair/typebox";
 import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { getEnrichedEnv } from "../lib/env-enrichment.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
@@ -86,8 +87,17 @@ function runBashInContainer(
   signal?: AbortSignal,
 ): Promise<FormattedExecResult> {
   return new Promise((resolveResult) => {
+    // Enrich environment with user tools (nvm, pyenv, virtualenv, etc.)
+    const enriched = getEnrichedEnv(cwd);
+    const env = {
+      ...process.env,
+      PATH: enriched.PATH,
+      ...enriched.extraEnv,
+    };
+
     const child = spawn("bash", ["-c", command], {
       cwd,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
