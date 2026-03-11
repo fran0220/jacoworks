@@ -275,13 +275,20 @@ func main() {
 	// Authenticated: agent config
 	mux.Handle("GET /api/agent/config", authMiddleware.Authenticate(http.HandlerFunc(agentConfigHandler(cfg))))
 
-	// Authenticated: memory sync
+	// Authenticated: memory sync & management
 	mux.Handle("POST /api/memory/sync", authMiddleware.Authenticate(http.HandlerFunc(memorySyncHandler(s))))
+	mux.Handle("GET /api/memory/stats", authMiddleware.Authenticate(http.HandlerFunc(memoryStatsHandler(s))))
+	mux.Handle("DELETE /api/memory", authMiddleware.Authenticate(http.HandlerFunc(memoryClearHandler(s))))
 
-	// Authenticated: skills sync
+	// Authenticated: skills sync (legacy — retained for push-skills.sh)
 	mux.Handle("POST /api/skills/upload", authMiddleware.Authenticate(http.HandlerFunc(skillsUploadHandler(s))))
 	mux.Handle("GET /api/skills/checksum", authMiddleware.Authenticate(http.HandlerFunc(skillsChecksumHandler(s))))
 	mux.Handle("GET /api/skills/pull", authMiddleware.Authenticate(http.HandlerFunc(skillsPullHandler(s))))
+
+	// Authenticated: skills CRUD (desktop → gateway DB → container hot-push)
+	mux.Handle("GET /api/skills", authMiddleware.Authenticate(http.HandlerFunc(skillsListHandler(s))))
+	mux.Handle("PUT /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsUpsertHandler(s, dockerClient))))
+	mux.Handle("DELETE /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsDeleteHandler(s, dockerClient))))
 
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
@@ -1467,6 +1474,43 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 	}
 }
 
+func memoryStatsHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		count, totalBytes, err := s.GetMemoryStats(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get memory stats"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"file_count":  count,
+			"total_bytes": totalBytes,
+		})
+	}
+}
+
+func memoryClearHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		deleted, err := s.ClearAllMemory(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to clear memory"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int64{
+			"deleted_count": deleted,
+		})
+	}
+}
+
 func memorySyncHandler(s *store.Store) http.HandlerFunc {
 	type manifestEntry struct {
 		Path     string `json:"path"`
@@ -1766,6 +1810,167 @@ func skillsPullHandler(s *store.Store) http.HandlerFunc {
 			"files":    files,
 			"checksum": etag,
 		})
+	}
+}
+
+// ─── Skills CRUD handlers ────────────────────────────────
+
+func validateSkillID(skillID string) bool {
+	if skillID == "" || len(skillID) > 128 {
+		return false
+	}
+	if strings.Contains(skillID, "..") || strings.Contains(skillID, "/") || strings.Contains(skillID, "\\") {
+		return false
+	}
+	return true
+}
+
+// pushSkillsToContainer asynchronously re-pushes all skill files (system + user) to the user's container.
+func pushSkillsToContainer(s *store.Store, dc *dockerpkg.Client, userID string) {
+	if dc == nil {
+		return
+	}
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		cInfo, err := s.GetContainerInfo(bgCtx, userID, store.ContainerTypeVMAgent)
+		if err != nil || cInfo.Status != "running" {
+			return
+		}
+
+		// Clear existing skills in container
+		dc.Exec(cInfo.ContainerName, "sh", "-c", "rm -rf /home/agent/.jacoworks/skills/* 2>/dev/null; true")
+
+		// Merge system + user skill files and push
+		for _, owner := range []string{"system", userID} {
+			files, err := s.GetSkillFiles(bgCtx, owner)
+			if err != nil || len(files) == 0 {
+				continue
+			}
+			fileMap := make(map[string]string, len(files))
+			for _, f := range files {
+				fileMap[f.FilePath] = f.Content
+			}
+			if err := dc.PushSkillFiles(cInfo.ContainerName, fileMap); err != nil {
+				log.Warn().Err(err).Str("container", cInfo.ContainerName).Str("owner", owner).Msg("skill hot-push failed")
+			}
+		}
+
+		log.Info().Str("container", cInfo.ContainerName).Str("user_id", userID).Msg("skill hot-push complete")
+	}()
+}
+
+func skillsListHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		summaries, err := s.ListSkillSummaries(r.Context(), []string{"system", user.ID})
+		if err != nil {
+			log.Error().Err(err).Msg("list skill summaries")
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list skills"})
+			return
+		}
+
+		if summaries == nil {
+			summaries = []store.SkillSummary{}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"skills": summaries,
+		})
+	}
+}
+
+func skillsUpsertHandler(s *store.Store, dc *dockerpkg.Client) http.HandlerFunc {
+	type fileEntry struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	type upsertRequest struct {
+		Files []fileEntry `json:"files"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		skillID := r.PathValue("skillId")
+		if !validateSkillID(skillID) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid skill id"})
+			return
+		}
+
+		var req upsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		if len(req.Files) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "files array is required"})
+			return
+		}
+
+		// Prefix each file path with skillId/
+		storeFiles := make([]store.SkillFile, 0, len(req.Files))
+		for _, f := range req.Files {
+			relPath := filepath.ToSlash(f.Path)
+			storeFiles = append(storeFiles, store.SkillFile{
+				FilePath: skillID + "/" + relPath,
+				Content:  f.Content,
+				Checksum: store.ContentChecksum(f.Content),
+			})
+		}
+
+		if err := s.ReplaceSkillByPrefix(r.Context(), user.ID, skillID, storeFiles); err != nil {
+			log.Error().Err(err).Str("skill_id", skillID).Msg("upsert skill")
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save skill"})
+			return
+		}
+
+		// Async hot-push to container
+		pushSkillsToContainer(s, dc, user.ID)
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":     "ok",
+			"skill_id":   skillID,
+			"file_count": len(storeFiles),
+		})
+	}
+}
+
+func skillsDeleteHandler(s *store.Store, dc *dockerpkg.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		skillID := r.PathValue("skillId")
+		if !validateSkillID(skillID) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid skill id"})
+			return
+		}
+
+		if err := s.DeleteSkillByPrefix(r.Context(), user.ID, skillID); err != nil {
+			log.Error().Err(err).Str("skill_id", skillID).Msg("delete skill")
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete skill"})
+			return
+		}
+
+		// Async hot-push to container
+		pushSkillsToContainer(s, dc, user.ID)
+
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
 
@@ -2233,6 +2438,9 @@ func containerEnvVars(cfg *config.Config) map[string]string {
 	}
 	if cfg.Docker.GatewayToken != "" {
 		env["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken
+	}
+	if cfg.Server.PublicURL != "" {
+		env["GATEWAY_URL"] = cfg.Server.PublicURL
 	}
 	return env
 }

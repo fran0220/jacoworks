@@ -74,6 +74,27 @@ func (s *Store) UpsertMemoryFile(ctx context.Context, userID, filePath, content,
 	return err
 }
 
+// GetMemoryStats returns file count and total bytes for a user's memory.
+func (s *Store) GetMemoryStats(ctx context.Context, userID string) (int, int64, error) {
+	var count int
+	var totalBytes int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(OCTET_LENGTH(content)), 0) FROM user_memory WHERE user_id = $1`,
+		userID).Scan(&count, &totalBytes)
+	return count, totalBytes, err
+}
+
+// ClearAllMemory deletes all memory files for a user, returns affected rows.
+func (s *Store) ClearAllMemory(ctx context.Context, userID string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM user_memory WHERE user_id = $1`,
+		userID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // GetAllMemoryFiles returns all memory files with content for a user (for container push).
 func (s *Store) GetAllMemoryFiles(ctx context.Context, userID string) ([]MemoryFile, error) {
 	rows, err := s.pool.Query(ctx,
