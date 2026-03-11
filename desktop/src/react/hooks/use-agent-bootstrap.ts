@@ -2,7 +2,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
 import { ensureDefaultWorkspace } from "../lib/config";
-import { syncUserSkills } from "../lib/skill-sync";
+import { fetchSkills, setSkills } from "../lib/skills";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -46,14 +46,16 @@ export function useAgentBootstrap(authenticated: boolean) {
     withTimeout((async () => {
       await ensureDefaultWorkspace();
 
-      // Keep this call during cloud-only migration: gateway validates and provides
-      // the active model proxy configuration used by containers.
+      // Gateway validates and provides the active model proxy configuration
+      // used by cloud containers.
       await fetchAgentConfig();
 
-      // Push user skills to gateway so cloud containers can consume them.
-      await syncUserSkills().catch((err) => {
-        console.warn("[boot] user skill push failed:", err);
+      // Fetch skill list from gateway DB to populate SkillMenu.
+      const skills = await fetchSkills().catch((err) => {
+        console.warn("[boot] fetch skills failed:", err);
+        return [];
       });
+      setSkills(skills);
     })(), 20_000, "云端初始化超时，请重试")
       .then(() => {
         if (cancelled) return;

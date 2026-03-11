@@ -93,7 +93,7 @@ export default function RpcLogPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="rpc-log-list" ref={listRef}>
-          {latestLogs.length === 0 && <p className="rpc-log-empty">等待 sidecar 日志输出...</p>}
+          {latestLogs.length === 0 && <p className="rpc-log-empty">等待容器日志输出...</p>}
 
           {latestLogs.map((entry) => (
             <div key={entry.id} className="rpc-log-line">

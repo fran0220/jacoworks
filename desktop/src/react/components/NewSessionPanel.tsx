@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEventHandler } from "react";
 import { useClickOutside } from "../hooks/use-click-outside";
-import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
+import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings, getSessionSyncDir } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
@@ -37,7 +37,7 @@ export default function NewSessionPanel({
   const [readingCount, setReadingCount] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [model, setModel] = useState(() => getSettings().defaultModel || DEFAULT_MODEL);
-  const [workspacePath, setWorkspacePath] = useState(() => getSettings().defaultWorkspace);
+  const [workspacePath, setWorkspacePath] = useState("");
   const [anonymous, setAnonymous] = useState(false);
   const [loading, setLoading] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
@@ -73,6 +73,9 @@ export default function NewSessionPanel({
     if (!canSend) return;
     setLoading(true);
     try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const syncRoot = getSettings().defaultWorkspace;
+
       let session;
       if (anonymous) {
         session = {
@@ -89,6 +92,16 @@ export default function NewSessionPanel({
       } else {
         session = await createSession({ type: "cowork", model, workspacePath: workspacePath || undefined });
       }
+
+      // 如果用户没有手动选择文件夹，自动派生 session 同步子目录
+      if (!workspacePath && syncRoot) {
+        const syncDir: string = await invoke("ensure_session_sync_dir", {
+          syncRoot,
+          sessionId: session.id,
+        });
+        session = { ...session, workspacePath: syncDir };
+      }
+
       onSessionCreated(session, task.trim() || "(附件)", files);
     } catch (err) {
       addWarning(err instanceof Error ? err.message : "创建会话失败");
@@ -227,10 +240,10 @@ export default function NewSessionPanel({
                 className="ns-btn-folder"
                 onClick={() => setFolderMenuOpen((v) => !v)}
                 disabled={loading}
-                data-tip="选择工作文件夹"
+                data-tip="选择要挂载到容器的本地文件夹"
               >
                 <FolderOpen size={14} />
-                {workspacePath && workspacePath !== getSettings().defaultWorkspace && (
+                {workspacePath && (
                   <>
                     <span className="ns-folder-label">
                       {folderName(workspacePath)}

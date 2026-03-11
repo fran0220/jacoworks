@@ -61,10 +61,11 @@ export function updateSettings(settings: AppSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
-// ───── Default workspace bootstrap ─────────────────────────────
+// ───── Default workspace bootstrap (同步根目录) ─────────────────
 
 /**
- * 首次启动时自动设置默认工作区 (~/Documents/JAcoworks)。
+ * 首次启动时自动设置同步根目录 (~/Documents/JAcoworks)。
+ * 容器文件同步到此目录下，按会话 ID 隔离子文件夹。
  * 如果用户已手动设置过则跳过。
  */
 export async function ensureDefaultWorkspace(): Promise<void> {
@@ -79,4 +80,11 @@ export async function ensureDefaultWorkspace(): Promise<void> {
   } catch (err) {
     console.warn("[config] Failed to set default workspace:", err);
   }
+}
+
+/**
+ * 返回按会话隔离的同步子目录路径: {syncRoot}/{sessionId}/
+ */
+export function getSessionSyncDir(syncRoot: string, sessionId: string): string {
+  return `${syncRoot}/${sessionId}`;
 }

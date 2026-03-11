@@ -40,7 +40,7 @@ export default function ChatView({
   setCloudMessageHandler?: (handler: ((packet: import("../lib/agent").AgentRpcEvent) => void) | null) => void;
 }) {
   const {
-    localSession,
+    sessionState,
     visibleMessages,
     streaming,
     streamingStartedAt,
@@ -78,7 +78,7 @@ export default function ChatView({
         )}
 
         {visibleMessages.map((message, index) => (
-          <MessageBubble key={`${index}-${message.role}`} message={message} workspacePath={localSession.workspacePath} />
+          <MessageBubble key={`${index}-${message.role}`} message={message} workspacePath={sessionState.workspacePath} />
         ))}
 
         {streaming && blocks.length === 0 && (
@@ -95,7 +95,7 @@ export default function ChatView({
               {blocks.map((block, i) => {
                 if (block.type === "text") {
                   return (
-                    <StreamingMarkdown key={`stream-text-${i}`} content={block.content} workspacePath={localSession.workspacePath} />
+                    <StreamingMarkdown key={`stream-text-${i}`} content={block.content} workspacePath={sessionState.workspacePath} />
                   );
                 }
                 if (block.type === "thinking") {
@@ -170,10 +170,9 @@ export default function ChatView({
       <Composer
         isStreaming={streaming}
         streamingStartedAt={streamingStartedAt}
-        workspacePath={localSession.workspacePath}
-        model={localSession.model}
+        workspacePath={sessionState.workspacePath}
+        model={sessionState.model}
         disabled={!isCloudReady}
-        isCloud
         isAnonymous={!!session.anonymous}
         onWorkspaceChange={updateWorkspacePath}
         onModelChange={updateModel}

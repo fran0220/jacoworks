@@ -1,13 +1,13 @@
 # Desktop — Tauri v2 + React 18 桌面客户端
 
-> 本地优先: 对话永远走 sidecar RPC。云端能力 (定时任务、容器协作) 通过任务面板入口访问。记忆同步可选 (默认关闭)。
+> 云端模式: 对话通过 CloudAgentWS → Gateway /ws/agent → 云端 vm-agent 容器。本地仅保留文件管理能力 (记忆文件、附件、预览)。技能通过 Gateway REST API CRUD，修改后热推送到容器。记忆同步可选 (默认关闭)。
 
 ## 代码结构
 
 ```
 src-tauri/src/
-  lib.rs                       Tauri 入口
-  sidecar.rs                   Agent 生命周期 + RPC + 记忆管理 + 技能路径注入
+  lib.rs                       Tauri 入口 (文件预览/导入/路径解析)
+  sidecar.rs                   本地文件管理 (记忆文件读写), 不含 Agent 生命周期
   stream.rs                    http_fetch (网关 API)
   cowork.rs                    远程文件系统 Tauri 命令 (read/write/list/stat + safe_resolve 安全校验) + 目录选择/tar (保留兼容)
 
@@ -24,7 +24,7 @@ src/
                                use-session-state use-cron-results
     lib/                       auth sessions agent cloud-agent-ws cloud-file-handler
                                transport config recentFolders session-persistence
-                               skills skill-sync memory-sync (记忆双向同步)
+                               skills memory-sync (记忆双向同步)
     cowork/                    容器 API (api.ts) + 遗留类型 (types.ts)
       lib/api.ts               容器状态检查 + 自助分配
     styles/                    按组件拆分 CSS (chat composer layout sidebar task-panel...)
@@ -60,9 +60,8 @@ npm test
 
 - **React 18 纯 CSS 变量** (无 CSS-in-JS, 无 Tailwind)
 - **CSS 模块化**: 样式拆分到 `react/styles/` 按组件分文件
-- **本地对话优先**: NewSessionPanel 无模式切换，对话永远本地 sidecar
-- **云端模式统一协议**: 云端 (cowork) 会话通过 `CloudAgentWS` 连接 `/ws/agent?token=`，使用与本地模式相同的 vm-agent RPC 协议 (prompt/abort/session_event/done)，`use-chat-stream` 共享同一 `processStream` 事件处理循环
-- **协作入口在任务面板**: TaskPanel 提供「启动云端对话」和「新建定时任务」按钮
+- **云端对话**: 所有对话通过 `CloudAgentWS` 连接 `/ws/agent?token=`，使用 vm-agent RPC 协议 (prompt/abort/session_event/done)
+- **本地无 Agent**: 不再运行本地 sidecar，`sidecar.rs` 仅提供文件系统 Tauri 命令
 - **WebSocket 文件通道**: 云端容器通过 WS 按需读写桌面端本地文件 (替代旧 tar 上传/下载)。`CloudAgentWS` 拦截 `fs.*` 消息 → `onFileRequest` → `cloud-file-handler.ts` 分发到 Tauri 命令 (`read_file_text` / `write_file_text` / `list_directory` / `file_stat`)。`use-cowork-connection.ts` 注入 workspace 路径，`cowork.rs` 用 `dunce::canonicalize` + `safe_resolve` 做路径安全校验 (防 `..` 遍历和符号链接逃逸)。目录列表上限 5000 条
 - **三色模式体系**: 默认 (陶土 `--accent`)、隐私 (紫灰 `--accent-anonymous`)、云端 (蓝 `--accent-cloud`)。通过 composer/input-card 的 `inset box-shadow` + 发送按钮色 + chat-view 背景微调区分
 - **TopBar 云端按钮**: 纯状态指示 — idle 显示「新建云端」触发连接、busy 时 disabled、ready 显示「已连接」toggle 面板、error 显示「重试连接」
@@ -73,16 +72,21 @@ npm test
 
 ## 技能架构
 
-**内置技能** (`vm-agent/skills/`): 跟随代码版本，sidecar 启动时通过 `SKILLS_PATHS` 环境变量显式传入。
-- 生产: 打包到 Tauri resources (`resources/skills/`)
-- 开发: 直接引用 monorepo 中的 `vm-agent/skills/`
+**数据源**: Gateway DB `skill_files` 表 (owner + file_path UNIQUE)。桌面端通过 REST API CRUD。
 
-**用户自建技能** (`app_data/skills/`): 通过设置面板管理，`skill-sync.ts` 负责 push 到网关供 OpenClaw 容器使用。
+**内置技能** (`vm-agent/skills/`): 通过 `make push-skills` 上传到 Gateway DB (owner=system)，容器 provision 时自动推送。
 
-**网关角色**: 仅存储用户技能副本 (供 OpenClaw)，不再向桌面端下发系统技能。
+**用户自建技能**: 通过设置面板创建/删除，`skills.ts` 调用 Gateway API (`GET/PUT/DELETE /api/skills/{skillId}`)。修改后自动热推送到运行中容器。
 
-## Agent 启动排查
+**SkillMenu 初始化**: `use-agent-bootstrap.ts` 登录后调用 `fetchSkills()` → `setSkills()`，SkillMenu 显示 system + user 技能列表。
+
+**容器热推送**: upsert/delete handler 成功后，异步清空容器 skills 目录并全量重推 (system + user)。无运行中容器时静默跳过。
+
+**向后兼容**: 旧 `POST /api/skills/upload` + `GET /api/skills/checksum` + `GET /api/skills/pull` 保留，`push-skills.sh` 继续工作。
+
+## 云端连接排查
 
 1. 看 RPC 日志面板 (`agent-rpc-log`)
 2. `需要 LLM_PROXY_KEY` → 检查管理后台「系统设置」中 LLM 密钥配置
-3. `Agent ready handshake timed out` → 重新构建 `vm-agent/dist/index.js`
+3. 连接失败 → 检查 Gateway 和容器状态
+- sidecar 需预编译: `cd ../vm-agent && bun build --compile src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin`

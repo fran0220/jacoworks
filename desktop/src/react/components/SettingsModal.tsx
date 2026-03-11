@@ -5,7 +5,6 @@ import {
   Cpu,
   Download,
   FolderOpen,
-  FolderSearch,
   HardDrive,
   ImagePlus,
   Info,
@@ -21,15 +20,16 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { selectFolder } from "../lib/cowork";
 import { getSettings, updateSettings, GATEWAY_URL, MODEL_OPTIONS, THINKING_LEVELS, type AppSettings } from "../lib/config";
 import { getToken } from "../lib/auth";
+import { getMemoryStats as fetchMemoryStats, clearAllMemory } from "../lib/memory-sync";
 import { httpFetch } from "../lib/transport";
-import { useSkills, setSkills, type SkillDefinition } from "../lib/skills";
+import { useSkills, setSkills, fetchSkills, deleteSkill as apiDeleteSkill, type SkillDefinition } from "../lib/skills";
 import ConfirmDialog from "./ConfirmDialog";
 import CustomSelect from "./CustomSelect";
 
@@ -122,9 +122,9 @@ function GeneralTab() {
             <div className="settings-item-info">
               <FolderOpen size={16} />
               <div>
-                <div className="settings-item-label">默认工作目录</div>
+                <div className="settings-item-label">本地同步目录</div>
                 <div className="settings-item-desc">
-                  新会话自动使用此目录作为工作区
+                  容器文件同步到此目录下，按会话隔离子文件夹
                 </div>
               </div>
             </div>
@@ -287,11 +287,9 @@ function MemoryTab() {
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; action: () => void } | null>(null);
 
   useEffect(() => {
-    if (isTauri()) {
-      invoke<MemoryStats>("get_memory_stats")
-        .then(setMemoryStats)
-        .catch(() => {});
-    }
+    fetchMemoryStats()
+      .then((stats) => setMemoryStats({ path: "云端数据库", ...stats }))
+      .catch(() => {});
   }, []);
 
   const toggleMemory = () => {
@@ -311,13 +309,13 @@ function MemoryTab() {
   const handleClearMemory = async () => {
     setConfirmAction({
       title: "清除记忆",
-      message: "确认清除所有记忆数据？此操作不可恢复。",
+      message: "确认清除云端和本地所有记忆数据？此操作不可恢复。",
       action: async () => {
         setClearing(true);
         try {
-          await invoke("clear_memory");
-          const stats = await invoke<MemoryStats>("get_memory_stats");
-          setMemoryStats(stats);
+          await clearAllMemory();
+          const stats = await fetchMemoryStats();
+          setMemoryStats({ path: "云端数据库", ...stats });
         } catch {
           // ignore
         } finally {
@@ -378,7 +376,7 @@ function MemoryTab() {
         <div className="settings-item">
           <div className="settings-item-main">
             <div className="settings-item-info">
-              <Package size={16} />
+              <Cloud size={16} />
               <div>
                 <div className="settings-item-label">存储用量</div>
                 <div className="settings-item-desc">
@@ -429,11 +427,9 @@ function MemoryTab() {
 function UserSkillCard({
   skill,
   onDelete,
-  onReveal,
 }: {
   skill: SkillDefinition;
   onDelete: (id: string) => void;
-  onReveal: (id: string) => void;
 }) {
   return (
     <div className="settings-skill-card">
@@ -445,13 +441,6 @@ function UserSkillCard({
           </span>
         </div>
         <div className="settings-skill-actions">
-          <button
-            className="settings-skill-action"
-            onClick={() => onReveal(skill.id)}
-            title="在文件管理器中打开"
-          >
-            <FolderSearch size={14} />
-          </button>
           <button
             className="settings-skill-action danger"
             onClick={() => onDelete(skill.id)}
@@ -732,8 +721,9 @@ function SkillsTab({
       action: async () => {
         setDeleting(id);
         try {
-          await invoke("delete_user_skill", { skillId: id });
-          setSkills(skills.filter((s) => s.id !== id));
+          await apiDeleteSkill(id);
+          const updated = await fetchSkills();
+          setSkills(updated);
         } catch (err) {
           console.error("Failed to delete skill:", err);
         } finally {
@@ -742,14 +732,6 @@ function SkillsTab({
       },
     });
   }, [skills]);
-
-  const handleReveal = useCallback(async (id: string) => {
-    try {
-      await invoke("reveal_user_skill", { skillId: id });
-    } catch (err) {
-      console.error("Failed to reveal skill:", err);
-    }
-  }, []);
 
   return (
     <>
@@ -814,7 +796,6 @@ function SkillsTab({
                 key={s.id}
                 skill={s}
                 onDelete={deleting ? () => {} : handleDelete}
-                onReveal={handleReveal}
               />
             ))}
           </div>

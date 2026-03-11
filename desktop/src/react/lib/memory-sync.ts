@@ -41,6 +41,53 @@ interface SyncResponse {
 }
 
 /**
+ * Get memory stats from gateway (database as source of truth).
+ */
+export async function getMemoryStats(): Promise<{ file_count: number; total_bytes: number }> {
+  const token = getToken();
+  if (!token) return { file_count: 0, total_bytes: 0 };
+
+  const res = await httpFetch(`${GATEWAY_URL}/api/memory/stats`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (res.status !== 200) {
+    throw new Error(`Failed to get memory stats: ${res.status}`);
+  }
+  return JSON.parse(res.body);
+}
+
+/**
+ * Clear all memory from gateway DB, then clear local cache.
+ * Returns the number of deleted entries.
+ */
+export async function clearAllMemory(): Promise<number> {
+  const token = getToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await httpFetch(`${GATEWAY_URL}/api/memory`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (res.status !== 200) {
+    throw new Error(`Failed to clear memory: ${res.status}`);
+  }
+
+  const data = JSON.parse(res.body);
+
+  // Clear local cache to prevent stale data from syncing back
+  try {
+    await invoke("clear_memory");
+  } catch {
+    // Local clear is best-effort
+  }
+
+  return data.deleted_count;
+}
+
+/**
  * Sync memory with gateway. Call before/after agent sessions.
  * Returns number of files synced (pulled + pushed).
  */

@@ -145,7 +145,7 @@ function CopyButton({ onCopy }: { onCopy: () => void }) {
   );
 }
 
-function LocalImage({
+function WorkspaceImage({
   src,
   alt,
   title,
@@ -160,10 +160,10 @@ function LocalImage({
   const [error, setError] = useState(false);
 
   const isRemote = src && /^(https?:|data:)/i.test(src);
-  const isLocal = src && !isRemote;
+  const isRelativePath = src && !isRemote;
 
   useEffect(() => {
-    if (!isLocal) return;
+    if (!isRelativePath) return;
     let cancelled = false;
 
     invoke<string>("read_file_base64", {
@@ -178,14 +178,14 @@ function LocalImage({
       });
 
     return () => { cancelled = true; };
-  }, [src, isLocal, workspacePath]);
+  }, [src, isRelativePath, workspacePath]);
 
   if (error) {
     return <span>[图片加载失败: {src}]</span>;
   }
 
   const finalSrc = isRemote ? src : resolvedSrc;
-  const pending = isLocal && !resolvedSrc && !error;
+  const pending = isRelativePath && !resolvedSrc && !error;
 
   return (
     <img
@@ -218,7 +218,7 @@ export default function Markdown({
   const components = useCallback(() => ({
     code: CodeBlock,
     img: (props: ComponentPropsWithoutRef<"img">) => (
-      <LocalImage {...props} workspacePath={workspacePath} />
+      <WorkspaceImage {...props} workspacePath={workspacePath} />
     ),
     // Open external links in default browser
     a: ({ href, children, ...rest }: ComponentPropsWithoutRef<"a">) => (

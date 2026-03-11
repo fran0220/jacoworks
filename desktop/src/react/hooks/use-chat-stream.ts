@@ -96,7 +96,7 @@ export function useChatStream({
   cloudReady,
   setCloudMessageHandler,
 }: UseChatStreamOptions) {
-  const [localSession, setLocalSession] = useState(session);
+  const [sessionState, setSessionState] = useState(session);
   const [streaming, setStreaming] = useState(false);
   const [streamingStartedAt, setStreamingStartedAt] = useState<number | null>(null);
   const [blocks, setBlocks] = useState<StreamBlock[]>([]);
@@ -105,7 +105,7 @@ export function useChatStream({
 
   type StreamSessionContext = Pick<ChatSession, "id" | "anonymous" | "title">;
 
-  const localSessionRef = useRef(session);
+  const sessionStateRef = useRef(session);
   const activeStreamRef = useRef<StreamSessionContext | null>(null);
   const abortedRef = useRef(false);
   const sendLockRef = useRef(false);
@@ -158,9 +158,9 @@ export function useChatStream({
   useEffect(() => {
     // Use updater to avoid overwriting in-flight local changes (e.g. user message
     // queued by sendMessage) — React.StrictMode re-runs effects which would
-    // otherwise clobber the pending setLocalSession from sendMessage.
-    setLocalSession((prev) => (prev.id === session.id ? prev : session));
-    localSessionRef.current = session;
+    // otherwise clobber the pending setSessionState from sendMessage.
+    setSessionState((prev) => (prev.id === session.id ? prev : session));
+    sessionStateRef.current = session;
   }, [session]);
 
   useEffect(() => {
@@ -168,12 +168,12 @@ export function useChatStream({
   }, [session.id]);
 
   useEffect(() => {
-    localSessionRef.current = localSession;
-  }, [localSession]);
+    sessionStateRef.current = sessionState;
+  }, [sessionState]);
 
   const visibleMessages = useMemo(
-    () => localSession.messages.filter((message) => message.role !== "system"),
-    [localSession.messages],
+    () => sessionState.messages.filter((message) => message.role !== "system"),
+    [sessionState.messages],
   );
 
   useEffect(() => {
@@ -193,7 +193,7 @@ export function useChatStream({
       
       // Skip DB persist for anonymous sessions
       if (ctx.anonymous) {
-        setLocalSession((prev) => (prev.id === ctx.id ? { ...prev, messages, ...(title ? { title } : {}) } : prev));
+        setSessionState((prev) => (prev.id === ctx.id ? { ...prev, messages, ...(title ? { title } : {}) } : prev));
         return;
       }
       
@@ -262,10 +262,10 @@ export function useChatStream({
         if (!aiTitle) return;
 
         if (titleRequestVersionRef.current !== titleRequestVersion) return;
-        const latestSession = localSessionRef.current;
+        const latestSession = sessionStateRef.current;
         if (latestSession.id !== targetSessionId) return;
 
-        setLocalSession((prev) => {
+        setSessionState((prev) => {
           if (prev.id !== targetSessionId) return prev;
           return { ...prev, title: aiTitle };
         });
@@ -285,7 +285,7 @@ export function useChatStream({
       sendLockRef.current = true;
       setErrorText(null);
 
-      const sessionSnapshot = localSessionRef.current;
+      const sessionSnapshot = sessionStateRef.current;
       const streamCtx: StreamSessionContext = {
         id: sessionSnapshot.id,
         anonymous: sessionSnapshot.anonymous,
@@ -628,19 +628,19 @@ export function useChatStream({
   }, []);
 
   const updateWorkspacePath = useCallback((workspacePath: string) => {
-    const sessionId = localSessionRef.current.id;
-    setLocalSession((prev) => ({ ...prev, workspacePath }));
+    const sessionId = sessionStateRef.current.id;
+    setSessionState((prev) => ({ ...prev, workspacePath }));
     persistSessionMeta(sessionId, { workspacePath }).catch(() => {});
   }, []);
 
   const updateModel = useCallback((model: string) => {
-    const sessionId = localSessionRef.current.id;
-    setLocalSession((prev) => ({ ...prev, model }));
+    const sessionId = sessionStateRef.current.id;
+    setSessionState((prev) => ({ ...prev, model }));
     persistSessionMeta(sessionId, { model }).catch(() => {});
   }, []);
 
   return {
-    localSession,
+    sessionState,
     visibleMessages,
     streaming,
     streamingStartedAt,

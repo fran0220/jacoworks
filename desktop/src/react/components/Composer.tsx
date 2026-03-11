@@ -40,7 +40,6 @@ export default function Composer({
   workspacePath,
   model,
   disabled,
-  isCloud,
   isAnonymous,
   onWorkspaceChange,
   onModelChange,
@@ -52,7 +51,6 @@ export default function Composer({
   workspacePath: string;
   model: string;
   disabled?: boolean;
-  isCloud?: boolean;
   isAnonymous?: boolean;
   onWorkspaceChange: (workspacePath: string) => void;
   onModelChange: (model: string) => void;
@@ -148,7 +146,7 @@ export default function Composer({
   const hasAttachments = files.length > 0 || readingCount > 0;
 
   return (
-    <div className={`composer-card${isAnonymous ? " anonymous" : ""}${isCloud ? " cloud" : ""}`}>
+    <div className={`composer-card${isAnonymous ? " anonymous" : ""}`}>
       {/* Warnings toast */}
       {warnings.length > 0 && (
         <div className="composer-warnings">
@@ -212,13 +210,12 @@ export default function Composer({
 
       <div className="composer-toolbar">
         <div className="composer-toolbar-left">
-          {!isCloud && (
           <div className="ns-folder-wrapper" ref={folderMenuRef}>
             <button
               className="ns-btn-folder"
               onClick={() => setFolderMenuOpen((v) => !v)}
               disabled={isStreaming}
-              title={workspacePath || "选择工作目录"}
+              title={workspacePath || "选择同步目录"}
             >
               <FolderOpen size={14} />
               <span className="ns-folder-label">
@@ -257,7 +254,6 @@ export default function Composer({
               </div>
             )}
           </div>
-          )}
 
           <input
             ref={fileInputRef}

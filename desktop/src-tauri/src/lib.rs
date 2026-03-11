@@ -136,7 +136,8 @@ fn resolve_path(path: &str, workspace: Option<&str>) -> PathBuf {
     p
 }
 
-/// Return (and auto-create) the default workspace: `~/Documents/JAcoworks`.
+/// Return (and auto-create) the local sync root directory: `~/Documents/JAcoworks`.
+/// Container files are synced into per-session subdirectories under this root.
 #[tauri::command]
 fn ensure_default_workspace() -> Result<String, String> {
     let doc_dir = dirs::document_dir().ok_or("Cannot resolve Documents directory")?;
@@ -147,6 +148,23 @@ fn ensure_default_workspace() -> Result<String, String> {
     }
     workspace
         .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Invalid path encoding".to_string())
+}
+
+/// Create (and return) a session-specific sync subdirectory: `{sync_root}/{session_id}/`.
+#[tauri::command]
+fn ensure_session_sync_dir(sync_root: String, session_id: String) -> Result<String, String> {
+    // Sanitize session_id to prevent path traversal
+    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+        return Err("Invalid session ID".to_string());
+    }
+    let dir = PathBuf::from(&sync_root).join(&session_id);
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create session sync dir: {}", e))?;
+    }
+    dir.to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Invalid path encoding".to_string())
 }
@@ -642,18 +660,12 @@ pub fn run() {
             cowork::write_file_text,
             cowork::list_directory,
             cowork::file_stat,
-            sidecar::get_memory_stats,
             sidecar::clear_memory,
             sidecar::list_memory_files,
             sidecar::write_memory_files,
             sidecar::get_memory_root,
-            sidecar::list_skill_files,
-            sidecar::get_user_skills_dir,
-            sidecar::save_user_skill,
-            sidecar::list_user_skills,
-            sidecar::delete_user_skill,
-            sidecar::reveal_user_skill,
             ensure_default_workspace,
+            ensure_session_sync_dir,
             reveal_in_finder,
             open_file_default,
             resolve_file_path,

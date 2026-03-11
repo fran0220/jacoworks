@@ -308,15 +308,15 @@
   background: var(--accent-anonymous);
 }
 
-/* Cloud badge in composer */
-.composer-card.cloud {
+/* Cloud style — now default for all composer cards */
+.composer-card {
   box-shadow: 0 2px 12px rgba(74, 142, 196, 0.12), inset 0 0 0 1px var(--accent-cloud);
 }
 
-.composer-card.cloud .btn-send {
+.composer-card .btn-send {
   background: var(--accent-cloud);
 }
 
-.composer-card.cloud .btn-send:hover:not(:disabled) {
+.composer-card .btn-send:hover:not(:disabled) {
   background: var(--accent-cloud-hover);
 }

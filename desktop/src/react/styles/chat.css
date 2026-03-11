@@ -2,10 +2,6 @@
   background: var(--bg-anonymous);
 }
 
-.chat-view.cloud {
-  background: var(--bg-cloud);
-}
-
 /* ===== Chat View ===== */
 
 .chat-view {
@@ -14,6 +10,7 @@
   flex-direction: column;
   min-height: 0;
   position: relative;
+  background: var(--bg-cloud);
 }
 
 .messages {
