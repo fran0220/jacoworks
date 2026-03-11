@@ -358,7 +358,7 @@ export interface SessionOptions {
 }
 
 export async function getSession(sessionId: string, opts?: SessionOptions) {
-  const workspace = opts?.workspace || config.workspaceDir;
+  const workspace = config.workspaceDir;
   const restricted = !!opts?.restricted;
   const userScope = userScopeKey(opts?.userId);
   const cacheKey = sessionCacheKey(sessionId, workspace, restricted, userScope);

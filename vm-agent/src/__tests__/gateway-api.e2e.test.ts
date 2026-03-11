@@ -807,6 +807,126 @@ describe("6. 技能同步", () => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  6b. 技能 CRUD (新 REST API)
+// ═══════════════════════════════════════════════════════
+
+describe("6b. 技能 CRUD", () => {
+  const testSkillId = `${PREFIX}-test-skill`;
+
+  test("GET /api/skills — 无 auth → 401", async () => {
+    if (skip()) return;
+    const res = await api("/api/skills");
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /api/skills — 列表包含 system skills", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api("/api/skills", { token: userToken });
+    expect(res.status).toBe(200);
+    const data = await json<{ skills: Array<{ id: string; source: string }> }>(res);
+    expect(Array.isArray(data.skills)).toBe(true);
+  });
+
+  test("PUT /api/skills/{id} — 创建用户 skill", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api(`/api/skills/${testSkillId}`, {
+      method: "PUT",
+      token: userToken,
+      body: JSON.stringify({
+        files: [
+          { path: "SKILL.md", content: `---\nname: ${testSkillId}\ndescription: E2E test skill\n---\n# Test\n` },
+          { path: "handler.ts", content: "export default function() { return 'hello'; }\n" },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await json<{ status: string; file_count: number }>(res);
+    expect(data.status).toBe("ok");
+    expect(data.file_count).toBe(2);
+  });
+
+  test("GET /api/skills — 创建后验证出现", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api("/api/skills", { token: userToken });
+    expect(res.status).toBe(200);
+    const data = await json<{ skills: Array<{ id: string; source: string; name: string }> }>(res);
+    const found = data.skills.find((s) => s.id === testSkillId);
+    expect(found).toBeDefined();
+    expect(found!.source).toBe("user");
+    expect(found!.name).toBe(testSkillId);
+  });
+
+  test("PUT /api/skills/{id} — 更新已有 skill", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api(`/api/skills/${testSkillId}`, {
+      method: "PUT",
+      token: userToken,
+      body: JSON.stringify({
+        files: [
+          { path: "SKILL.md", content: `---\nname: ${testSkillId}\ndescription: Updated E2E skill\n---\n# Updated\n` },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("GET /api/skills — 更新后验证描述变化", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api("/api/skills", { token: userToken });
+    const data = await json<{ skills: Array<{ id: string; description: string; file_count: number }> }>(res);
+    const found = data.skills.find((s) => s.id === testSkillId);
+    expect(found).toBeDefined();
+    expect(found!.description).toBe("Updated E2E skill");
+    expect(found!.file_count).toBe(1); // replaced, now only 1 file
+  });
+
+  test("DELETE /api/skills/{id} — 删除 skill", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api(`/api/skills/${testSkillId}`, {
+      method: "DELETE",
+      token: userToken,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("GET /api/skills — 删除后验证消失", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api("/api/skills", { token: userToken });
+    const data = await json<{ skills: Array<{ id: string }> }>(res);
+    const found = data.skills.find((s) => s.id === testSkillId);
+    expect(found).toBeUndefined();
+  });
+
+  test("PUT /api/skills/../evil — skillId 注入 → 400", async () => {
+    if (skip() || skipNoUser()) return;
+    const res = await api("/api/skills/..%2Fevil", {
+      method: "PUT",
+      token: userToken,
+      body: JSON.stringify({ files: [{ path: "SKILL.md", content: "hack" }] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("PUT /api/skills/ — 空 skillId → 404 或 400", async () => {
+    if (skip() || skipNoUser()) return;
+    // Empty path segment matches the GET /api/skills route, so we test differently
+    const res = await api("/api/skills/%00", {
+      method: "PUT",
+      token: userToken,
+      body: JSON.stringify({ files: [{ path: "SKILL.md", content: "hack" }] }),
+    });
+    // Null byte in skillId should be rejected
+    expect([400, 404]).toContain(res.status);
+  });
+
+  test("DELETE /api/skills/{id} — 无 auth → 401", async () => {
+    if (skip()) return;
+    const res = await api("/api/skills/nonexistent", { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
 //  7. 反馈提交
 // ═══════════════════════════════════════════════════════
 

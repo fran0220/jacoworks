@@ -7,7 +7,7 @@ display-description: "创建和管理 Agent 技能包"
 
 # 技能构建器
 
-帮助用户创建结构良好的 Agent 技能包。
+帮助用户创建、安装和管理 Agent 技能包。
 
 ## 技能结构
 
@@ -44,10 +44,6 @@ Instructions go here.
 - "从 PDF 文件中提取文本和表格。当需要读取或编辑 PDF 时使用。"
 - "查询 BigQuery 数据集。用于数据分析、SQL 查询任务。"
 
-**差的描述：**
-- "帮助处理文件"（太模糊）
-- "PDF 工具"（无触发上下文）
-
 ### 可选字段
 - `display-name`: 显示名称（中文友好）
 - `display-description`: 显示描述
@@ -58,13 +54,13 @@ Instructions go here.
 
 ### 简单技能（仅说明）
 ```
-vm-agent/skills/my-skill/
+my-skill/
 └── SKILL.md
 ```
 
 ### 带脚本的技能
 ```
-vm-agent/skills/my-skill/
+my-skill/
 ├── SKILL.md
 └── scripts/
     └── my-script.sh
@@ -72,7 +68,7 @@ vm-agent/skills/my-skill/
 
 ### 复杂技能（渐进式加载）
 ```
-vm-agent/skills/my-skill/
+my-skill/
 ├── SKILL.md           # 概览，500 行以内
 ├── reference/
 │   ├── api.md         # 详细 API 文档
@@ -83,35 +79,56 @@ vm-agent/skills/my-skill/
 
 ## 创建技能的工作流
 
-1. **确认需求**：向用户确认技能名称、用途、触发条件
-2. **确定安装位置**：用户自建技能安装到 `$USER_SKILLS_DIR`（见下方目录说明）
-3. **创建目录**：在目标目录下创建 `<skill-name>/`
-4. **编写 SKILL.md**：包含 frontmatter + 详细说明
-5. **添加资源**（可选）：脚本、参考文档
-6. **验证**：确保目录名与 `name` 字段一致
+### 技能存放位置
+
+用户技能安装到 `$USER_SKILLS_DIR`（默认 `~/.jacoworks/skills/`）。
 
 ### 创建步骤
 
-当用户请求创建技能时，按以下步骤操作：
-
 ```
 步骤 1: 询问技能用途和名称
-步骤 2: 在用户技能目录下创建 <name>/ 目录
+步骤 2: 在 $USER_SKILLS_DIR 下创建 <name>/ 目录
 步骤 3: 编写 SKILL.md (frontmatter + 说明)
 步骤 4: 如需脚本，创建 scripts/ 目录
-步骤 5: 提示用户重启 Agent 以加载新技能（新建会话即可）
+步骤 5: 运行同步脚本持久化到云端:
+        bash scripts/sync-skill.sh <name>
+        (脚本位于本技能的 scripts/ 目录)
+步骤 6: 提示用户新建会话以加载新技能
+```
+
+> **重要**: 步骤 5 不可省略！不同步到云端的话，容器重建后技能会丢失。
+
+### 同步脚本路径
+
+同步脚本在本技能的 `scripts/` 目录下。获取绝对路径的方式：
+
+```bash
+# 找到本技能目录（在 builtin skills 路径中搜索）
+SKILL_SCRIPTS=$(find /home/agent/.jacoworks/skills -path "*/building-skills/scripts" -type d 2>/dev/null | head -1)
+
+# 同步创建/更新
+bash "$SKILL_SCRIPTS/sync-skill.sh" <skill-id>
+
+# 同步删除
+bash "$SKILL_SCRIPTS/delete-skill.sh" <skill-id>
 ```
 
 ### 从 GitHub 安装技能
 
-当用户提供 GitHub 链接时：
-
 ```
 步骤 1: 使用 web_fetch 或 git clone 获取仓库内容
 步骤 2: 找到 SKILL.md 文件，验证 frontmatter 格式
-步骤 3: 将整个技能目录复制到用户技能目录
-步骤 4: 验证安装结果（检查目录结构和文件）
+步骤 3: 将整个技能目录复制到 $USER_SKILLS_DIR
+步骤 4: 运行 sync-skill.sh <name> 同步到云端
 步骤 5: 提示用户新建会话以加载新技能
+```
+
+### 删除技能
+
+```
+步骤 1: 运行 delete-skill.sh <name> 从云端删除
+步骤 2: 删除本地目录 rm -rf $USER_SKILLS_DIR/<name>
+步骤 3: 提示用户新建会话以生效
 ```
 
 ## 编写有效说明
@@ -138,22 +155,3 @@ vm-agent/skills/my-skill/
 3. **Level 3 - 资源**：需要时才加载额外文件
 
 保持 SKILL.md 在 500 行以内，大内容拆分到单独文件。
-
-## 技能存放位置
-
-JAcoworks 中技能从以下位置加载：
-
-| 位置 | 类型 | 说明 |
-|------|------|------|
-| `vm-agent/skills/` | 内置 (builtin) | 项目预制技能，所有用户共享，不可编辑 |
-| `$USER_SKILLS_DIR` | 自建 (user) | 用户创建/安装的技能，可编辑和删除 |
-
-**用户技能目录** (`USER_SKILLS_DIR`) 默认路径：
-- macOS: `~/Library/Application Support/JAcoworks/skills/`
-- Windows: `%LOCALAPPDATA%/JAcoworks/skills/`
-- Linux: `~/.local/share/JAcoworks/skills/`
-
-> **重要**：用户自建技能和从 GitHub 安装的技能都应放到 `$USER_SKILLS_DIR`，不要放到 `vm-agent/skills/`。
-> 可通过环境变量 `USER_SKILLS_DIR` 查看实际路径，或调用 Tauri 命令 `get_user_skills_dir` 获取。
-
-创建或安装技能后需要重启 Agent（新建会话即可）才能生效。

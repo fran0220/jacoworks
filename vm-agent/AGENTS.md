@@ -1,6 +1,6 @@
-# vm-agent — 本地 Agent Sidecar
+# vm-agent — 云端 Agent 容器
 
-> Pi SDK + RPC stdio。桌面端内嵌 sidecar，直接读写本地文件。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。
+> Pi SDK + RPC。运行于 Docker 容器 (oracle ARM64)，通过 Gateway WS 代理与桌面端通信。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。
 
 ## 代码结构
 
@@ -30,7 +30,7 @@ src/
   __tests__/cron.e2e.test.ts   Cron E2E 测试 (真实 LLM 验证 cron_manage 工具)
   __tests__/helpers/            测试辅助 (gateway-config.ts — 自动获取 LLM 配置)
   lib/__tests__/               单元测试 (memory-store, daily-log)
-skills/                        内置技能包 (创作/办公/工具/开发), sidecar 通过 SKILLS_PATHS 传入
+skills/                        内置技能包 (创作/办公/工具/开发), 通过 push-skills 上传到 Gateway, 容器 provision 时推送
 ```
 
 ## 自定义工具 (Extensions)
@@ -91,7 +91,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), si
 - `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` — 向量 embedding (可选)
 - `MEMORY_EMBED_TIMEOUT_MS=8000` / `MEMORY_EMBED_CACHE_MAX=10000`
 - `MEMORY_HYBRID_W_BM25=0.3` / `MEMORY_HYBRID_W_VEC=0.7` — hybrid 搜索权重
-- `SKILLS_PATHS` — 内置技能目录 (逗号分隔, sidecar 显式传入)
+- `SKILLS_PATHS` — 内置技能目录 (逗号分隔, 容器内默认 `/shared/skills`)
 - `USER_SKILLS_DIR` — 用户自建技能目录 (默认 `~/Library/Application Support/JAcoworks/skills`)
 - `TOOL_DENY_LIST` / `TAVILY_API_KEY`
 
@@ -169,6 +169,6 @@ Pi SDK 在对话接近 context window 上限时自动触发压缩。通过环境
 
 - **TS strict ES2022 NodeNext**
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session 和记忆
-- **本地 Agent 优先**: 对话走 sidecar RPC，不经网关
+- **云端 Agent**: 运行于 Docker 容器，桌面端通过 Gateway WS 代理通信
 - 开发: `make dev-agent` (热重载)
-- 编译: `bun build --compile` 打包进 desktop sidecar，不独立部署
+- 部署: `make deploy-agent` 构建 ARM64 镜像 → oracle
