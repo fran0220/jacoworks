@@ -18,6 +18,7 @@ import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings, getSessionSyncDir } from "..
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
+import { sessionStore } from "../lib/session-store";
 import { importFiles, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { createSession } from "../lib/sessions";
@@ -102,6 +103,7 @@ export default function NewSessionPanel({
         session = { ...session, workspacePath: syncDir };
       }
 
+      await sessionStore.createSession(session).catch(() => {});
       onSessionCreated(session, task.trim() || "(附件)", files);
     } catch (err) {
       addWarning(err instanceof Error ? err.message : "创建会话失败");

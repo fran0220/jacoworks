@@ -154,14 +154,6 @@
   color: var(--text-secondary);
 }
 
-.session-item.cowork {
-  border-left: 2px solid var(--accent-cloud);
-}
-
-.session-item.cowork .session-type-icon {
-  color: var(--accent-cloud);
-}
-
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.75); }

@@ -69,7 +69,7 @@ export default function ChatView({
   const lastUserMessage = visibleMessages.filter(m => m.role === "user").pop();
 
   return (
-    <div className={`chat-view cloud${session.anonymous ? " anonymous" : ""}`}>
+    <div className={`chat-view${session.anonymous ? " anonymous" : ""}`}>
       <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {visibleMessages.length === 0 && !streaming && (
           <div className="empty-state">

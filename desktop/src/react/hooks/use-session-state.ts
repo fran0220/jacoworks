@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { isAuthenticated } from "../lib/auth";
-import { createSession, deleteSession, getSession, listSessions } from "../lib/sessions";
+import { sessionStore } from "../lib/session-store";
+import { createSession, deleteSession, listSessions } from "../lib/sessions";
 import type { AttachedFile, ChatSession } from "../types";
-
-const SESSION_REFRESH_INTERVAL_MS = 5000; // 5 seconds
 
 export function useSessionState(authenticated: boolean) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -16,12 +15,19 @@ export function useSessionState(authenticated: boolean) {
   const refreshSessions = useCallback(async () => {
     if (!isAuthenticated()) return;
     try {
-      const list = await listSessions();
-      setSessions(list);
+      const localList = await sessionStore.listSessions();
+      setSessions(localList);
       setSessionError(null);
     } catch (err) {
-      console.warn("[sessions] refresh failed:", err);
-      setSessionError("会话列表加载失败");
+      console.warn("[sessions] local refresh failed:", err);
+      try {
+        const remoteList = await listSessions();
+        setSessions(remoteList);
+        setSessionError(null);
+      } catch (remoteErr) {
+        console.warn("[sessions] remote refresh failed:", remoteErr);
+        setSessionError("会话列表加载失败");
+      }
     }
   }, []);
 
@@ -38,23 +44,43 @@ export function useSessionState(authenticated: boolean) {
     refreshSessions();
   }, [authenticated, refreshSessions]);
 
+  // One-time server reconciliation after login
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const remoteSessions = await listSessions();
+        if (cancelled) return;
+        const localIds = new Set((await sessionStore.listSessions()).map(s => s.id));
+        for (const rs of remoteSessions) {
+          if (!localIds.has(rs.id)) {
+            await sessionStore.createSession(rs).catch(() => {});
+          }
+        }
+        const updated = await sessionStore.listSessions();
+        if (!cancelled) setSessions(updated);
+      } catch {
+        // Non-critical — local data still works
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [authenticated]);
+
   useEffect(() => {
     if (!currentSessionId) {
       setCurrentSession(null);
       return;
     }
 
-    // Anonymous sessions are local-only, resolve from the sessions list
     const anon = sessions.find((s) => s.id === currentSessionId && s.anonymous);
     if (anon) {
       setCurrentSession(anon);
       return;
     }
 
-    // Always fetch from DB (single source of truth)
-    // This ensures we get the latest messages even if switching back to a running session
     let cancelled = false;
-    getSession(currentSessionId)
+    sessionStore.getSession(currentSessionId)
       .then((session) => {
         if (!cancelled && session) {
           setCurrentSession(session);
@@ -63,34 +89,13 @@ export function useSessionState(authenticated: boolean) {
       })
       .catch((err) => {
         if (!cancelled) {
-          console.warn("[sessions] load failed:", err);
+          console.warn("[sessions] local load failed:", err);
           setSessionError("会话加载失败");
         }
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [currentSessionId, sessions]);
-
-  // Periodic refresh of current session (DB as single source of truth)
-  // This ensures we see updates from other devices or background processes
-  useEffect(() => {
-    if (!currentSessionId || !currentSession || currentSession.anonymous) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const updated = await getSession(currentSessionId);
-        if (updated) {
-          setCurrentSession(updated);
-        }
-      } catch (err) {
-        console.warn("[sessions] periodic refresh failed:", err);
-      }
-    }, SESSION_REFRESH_INTERVAL_MS);
-
-    return () => clearInterval(interval);
-  }, [currentSessionId, currentSession?.anonymous]);
 
   const selectSession = useCallback((sessionId: string) => {
     setCurrentSessionId(sessionId);
@@ -100,7 +105,8 @@ export function useSessionState(authenticated: boolean) {
     setCurrentSessionId(null);
   }, []);
 
-  const handleSessionCreated = useCallback((session: ChatSession, firstMessage: string, files: AttachedFile[] = []) => {
+  const handleSessionCreated = useCallback(async (session: ChatSession, firstMessage: string, files: AttachedFile[] = []) => {
+    await sessionStore.createSession(session).catch(() => {});
     setSessions((prev) => [session, ...prev]);
     setCurrentSession(session);
     setCurrentSessionId(session.id);
@@ -110,6 +116,7 @@ export function useSessionState(authenticated: boolean) {
 
   const ensureCoworkSession = useCallback(async () => {
     const session = await createSession({ type: "cowork" });
+    await sessionStore.createSession(session).catch(() => {});
     setSessions((prev) => [session, ...prev]);
     setCurrentSession(session);
     setCurrentSessionId(session.id);
@@ -121,12 +128,15 @@ export function useSessionState(authenticated: boolean) {
       if (isAnon) {
         setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       } else {
-        await deleteSession(sessionId);
-        await refreshSessions();
+        await sessionStore.deleteSession(sessionId).catch(() => {});
+        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+        deleteSession(sessionId).catch((err) =>
+          console.warn("[sessions] remote delete failed:", err),
+        );
       }
       setCurrentSessionId((prev) => (prev === sessionId ? null : prev));
     },
-    [refreshSessions, sessions],
+    [sessions],
   );
 
   return {

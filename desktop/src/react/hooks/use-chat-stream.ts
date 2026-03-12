@@ -8,10 +8,7 @@ import type { AgentRpcEvent } from "../lib/agent";
 import type { CloudAgentWS } from "../lib/cloud-agent-ws";
 import { getUser } from "../lib/auth";
 import { getSettings } from "../lib/config";
-import {
-  persistMessages,
-  persistSessionMeta,
-} from "../lib/session-persistence";
+import { sessionStore, syncDirtyToServer } from "../lib/session-store";
 import { generateTitle } from "../lib/sessions";
 import type {
   AttachedFile,
@@ -155,13 +152,20 @@ export function useChatStream({
     });
   }, []);
 
+  // Track whether local sessionState has optimistic updates not yet reflected
+  // in the parent session prop. While dirty, we must not overwrite local state.
+  const dirtyRef = useRef(false);
+
   useEffect(() => {
-    // Use updater to avoid overwriting in-flight local changes (e.g. user message
-    // queued by sendMessage) — React.StrictMode re-runs effects which would
-    // otherwise clobber the pending setSessionState from sendMessage.
-    setSessionState((prev) => (prev.id === session.id ? prev : session));
-    sessionStateRef.current = session;
-  }, [session]);
+    setSessionState((prev) => {
+      if (prev.id !== session.id) return session;
+      // Keep local state while streaming or while we have un-persisted optimistic
+      // updates (dirtyRef). Once the DB round-trip completes the parent session
+      // will carry the same data, at which point we accept it.
+      if (streaming || dirtyRef.current) return prev;
+      return session;
+    });
+  }, [session, streaming]);
 
   useEffect(() => {
     titleRequestVersionRef.current += 1;
@@ -189,20 +193,20 @@ export function useChatStream({
 
   const persistSession = useCallback(
     async (ctx: StreamSessionContext, messages: ChatMessage[], title?: string) => {
-      const sessionId = ctx.id;
-      
-      // Skip DB persist for anonymous sessions
       if (ctx.anonymous) {
         setSessionState((prev) => (prev.id === ctx.id ? { ...prev, messages, ...(title ? { title } : {}) } : prev));
         return;
       }
-      
-      // Persist to DB (single source of truth)
-      await persistMessages(sessionId, messages, title);
-      
-      // Trigger parent to refresh from DB
-      // This ensures we always display the DB state, not local cache
+      // Local-first: write all messages to local SQLite (instant)
+      await sessionStore.setMessages(ctx.id, messages);
+      if (title) {
+        await sessionStore.updateMeta(ctx.id, { title });
+      }
+      // Background sync to server (non-blocking)
+      syncDirtyToServer().catch(() => {});
+      // Notify parent to re-read from local DB
       await onSessionUpdate();
+      dirtyRef.current = false;
     },
     [onSessionUpdate],
   );
@@ -223,15 +227,23 @@ export function useChatStream({
       return;
     }
 
-    setBlocks([]);
-    setStreaming(false);
-
     const assistantMessage: ChatMessage = {
       role: "assistant",
       content: assistantText,
       ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
     };
     const finalMessages = [...streamBaseRef.current, assistantMessage];
+
+    // Update local state with final messages BEFORE clearing blocks,
+    // so the assistant reply is visible immediately when streaming blocks disappear.
+    // Mark dirty so the sync effect won't clobber this with a stale parent session.
+    dirtyRef.current = true;
+    setSessionState((prev) =>
+      prev.id === ctx.id ? { ...prev, messages: finalMessages } : prev,
+    );
+
+    setBlocks([]);
+    setStreaming(false);
 
     const assistantCount = finalMessages.filter((message) => message.role === "assistant").length;
     const isUntitled = isUntitledTitle(ctx.title);
@@ -271,7 +283,8 @@ export function useChatStream({
         });
 
         if (titleRequestVersionRef.current !== titleRequestVersion) return;
-        await persistSessionMeta(targetSessionId, { title: aiTitle });
+        await sessionStore.updateMeta(targetSessionId, { title: aiTitle });
+        syncDirtyToServer().catch(() => {});
         await onSessionUpdate();
       }).catch((err) => {
         console.warn("[title] AI title generation failed:", err);
@@ -301,7 +314,15 @@ export function useChatStream({
         ...(fileRefs ? { files: fileRefs } : {}),
       };
       const nextMessages = [...sessionSnapshot.messages, userMessage];
-      await persistSession(streamCtx, nextMessages);
+      // Local-first: append user message without waiting
+      if (!streamCtx.anonymous) {
+        sessionStore.appendMessage(streamCtx.id, userMessage).catch(() => {});
+      }
+      // Update local state immediately
+      dirtyRef.current = true;
+      setSessionState((prev) =>
+        prev.id === streamCtx.id ? { ...prev, messages: nextMessages } : prev,
+      );
 
       setStreamingStartedAt(Date.now());
       setStreaming(true);
@@ -522,17 +543,23 @@ export function useChatStream({
               role: "assistant" as const,
               content: `⚠️ ${msg}`,
             }];
+            dirtyRef.current = true;
+            setSessionState((prev) =>
+              prev.id === streamCtx.id ? { ...prev, messages: errorMessages } : prev,
+            );
             await persistSession(streamCtx, errorMessages).catch(() => {});
           }
         } finally {
           if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
           streamCancelRef.current = null;
           sendLockRef.current = false;
+          // finalizeStream already set streaming=false and cleared blocks;
+          // these are safe no-ops in the normal path, and necessary for the
+          // error / aborted paths that skip finalizeStream.
           setStreaming(false);
           setStreamingStartedAt(null);
           window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: streamCtx.id, streaming: false } }));
           cancelRenderFrame();
-          setBlocks([]);
           blocksRef.current = [];
           activeStreamRef.current = null;
           debouncedSyncMemory().catch(() => {});
@@ -595,7 +622,12 @@ export function useChatStream({
         content: assistantText,
         ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
       };
-      await persistSession(ctx, [...streamBaseRef.current, assistantMessage]);
+      const finalMessages = [...streamBaseRef.current, assistantMessage];
+      dirtyRef.current = true;
+      setSessionState((prev) =>
+        prev.id === ctx.id ? { ...prev, messages: finalMessages } : prev,
+      );
+      await persistSession(ctx, finalMessages);
     }
 
     sendLockRef.current = false;
@@ -630,13 +662,15 @@ export function useChatStream({
   const updateWorkspacePath = useCallback((workspacePath: string) => {
     const sessionId = sessionStateRef.current.id;
     setSessionState((prev) => ({ ...prev, workspacePath }));
-    persistSessionMeta(sessionId, { workspacePath }).catch(() => {});
+    sessionStore.updateMeta(sessionId, { workspacePath }).catch(() => {});
+    syncDirtyToServer().catch(() => {});
   }, []);
 
   const updateModel = useCallback((model: string) => {
     const sessionId = sessionStateRef.current.id;
     setSessionState((prev) => ({ ...prev, model }));
-    persistSessionMeta(sessionId, { model }).catch(() => {});
+    sessionStore.updateMeta(sessionId, { model }).catch(() => {});
+    syncDirtyToServer().catch(() => {});
   }, []);
 
   return {

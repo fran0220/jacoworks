@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowDownCircle, Bug, CheckCircle2, ChevronDown, Cloud, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
+import { AlertCircle, ArrowDownCircle, Bug, CheckCircle2, ChevronDown, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
 import { useRef, useState } from "react";
 import type { OcConnectionPhase } from "../hooks/use-cowork-connection";
 import type { UpdatePhase } from "../hooks/use-updater";
@@ -69,7 +69,7 @@ export default function TopBar({
   let icon: React.ReactNode;
   if (isBusy) icon = <LoaderCircle size={14} className="spinning" />;
   else if (ocPhase === "error") icon = <AlertCircle size={14} />;
-  else icon = <Cloud size={14} />;
+  else icon = <CheckCircle2 size={14} />;
 
   const btnClass = [
     "btn-cowork",
@@ -135,9 +135,9 @@ export default function TopBar({
         >
           {icon}
           {ocPhase === "idle" ? (
-            <span className="btn-cowork-label">连接云端</span>
+            <span className="btn-cowork-label">连接</span>
           ) : ocPhase === "error" ? (
-            <span className="btn-cowork-label">重试连接</span>
+            <span className="btn-cowork-label">重试</span>
           ) : (
             <span className={`oc-phase-badge ${phaseColor(ocPhase)}`}>
               <span className={`oc-phase-dot ${phaseColor(ocPhase)}`} />

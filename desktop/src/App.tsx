@@ -203,10 +203,10 @@ export default function App() {
           {isCloudError ? (
             <>
               <AlertTriangle size={16} />
-              {ocConnection.errorText || "连接云端容器失败"}
+              {ocConnection.errorText || "连接容器失败"}
             </>
           ) : (
-            ocConnection.statusText || "正在连接云端容器"
+            ocConnection.statusText || "正在连接容器"
           )}
         </p>
         {isCloudError && <button onClick={ocConnection.retry}>重试连接</button>}

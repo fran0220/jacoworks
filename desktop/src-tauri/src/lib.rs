@@ -1,4 +1,5 @@
 mod cowork;
+mod db;
 mod sidecar;
 mod stream;
 
@@ -631,7 +632,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|_app| {
+        .setup(|app| {
+            db::db_init(app.handle().clone()).expect("Failed to initialize local database");
+
             // Open devtools in debug builds or when JACOWORKS_DEVTOOLS=1
             #[cfg(feature = "devtools")]
             {
@@ -639,7 +642,7 @@ pub fn run() {
                 let open_devtools = cfg!(debug_assertions)
                     || std::env::var("JACOWORKS_DEVTOOLS").unwrap_or_default() == "1";
                 if open_devtools {
-                    if let Some(window) = _app.get_webview_window("main") {
+                    if let Some(window) = app.get_webview_window("main") {
                         window.open_devtools();
                     }
                 }
@@ -672,6 +675,17 @@ pub fn run() {
             read_file_base64,
             preview_file,
             import_files,
+            db::db_init,
+            db::db_list_sessions,
+            db::db_get_session,
+            db::db_create_session,
+            db::db_append_message,
+            db::db_set_messages,
+            db::db_update_session_meta,
+            db::db_delete_session,
+            db::db_get_dirty_sessions,
+            db::db_mark_synced,
+            db::db_mark_syncing,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");

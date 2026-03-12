@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Cloud, EyeOff, Plus, Trash2, X } from "lucide-react";
+import { EyeOff, Plus, Trash2, X } from "lucide-react";
 import type { ChatSession } from "../types";
 import ConfirmDialog from "./ConfirmDialog";
 
@@ -123,14 +123,16 @@ export default function Sidebar({
                 return (
                 <div
                   key={session.id}
-                  className={`session-item ${session.id === currentSessionId ? "active" : ""} cowork${session.anonymous ? " anonymous" : ""}`}
+                  className={`session-item ${session.id === currentSessionId ? "active" : ""}${session.anonymous ? " anonymous" : ""}`}
                   onClick={() => onSelect(session.id)}
                 >
                   {isStreaming && <span className="session-status session-status--streaming" title="生成中" />}
                   {isUnread && <span className="session-status session-status--unread" title="有新回复" />}
-                  <span className="session-type-icon" title={session.anonymous ? "匿名" : "云端"}>
-                    {session.anonymous ? <EyeOff size={12} /> : <Cloud size={12} />}
-                  </span>
+                  {session.anonymous && (
+                    <span className="session-type-icon" title="匿名">
+                      <EyeOff size={12} />
+                    </span>
+                  )}
                   <span className="session-title">{stripMarkdown(session.title)}</span>
                   <span className="session-meta">
                     <span className="session-date">{formatDate(session.updatedAt)}</span>
