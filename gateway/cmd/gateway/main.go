@@ -145,39 +145,8 @@ func main() {
 		cfg.Docker.HostIP,
 	)
 
-	// Two-tier idle strategy: pause after 30m, stop after 2h
-	freezer := dockerpkg.NewFreezer(dockerClient, 30*time.Minute, 2*time.Hour, 5*time.Minute)
-	freezer.Start()
-	defer freezer.Stop()
-
-	// Pull memory files from container before stopping
-	freezer.SetOnBeforeFreeze(func(containerName string) {
-		ctx := context.Background()
-		userID, err := s.GetUserIDByContainerName(ctx, containerName)
-		if err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("idle stop: lookup user failed")
-			return
-		}
-		files, err := dockerClient.PullMemoryFiles(containerName)
-		if err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("idle stop: pull memory failed")
-			return
-		}
-		for filePath, content := range files {
-			ck := store.ContentChecksum(content)
-			if err := s.UpsertMemoryFile(ctx, userID, filePath, content, ck); err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("file", filePath).Msg("idle stop: save memory failed")
-			}
-		}
-		if len(files) > 0 {
-			log.Info().Str("container", containerName).Int("files", len(files)).Msg("idle stop: memory pulled")
-		}
-	})
-	freezer.SetOnAfterFreeze(func(containerName string) {
-		if err := s.UpdateContainerStatusByName(context.Background(), containerName, "stopped"); err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("idle stop: update status failed")
-		}
-	})
+	// vm-agent containers run persistently (no idle freeze/stop).
+	// OpenClaw containers use a separate freezer below.
 
 	// OpenClaw Docker client + freezer (separate host, "oc-" prefix)
 	var ocClient *dockerpkg.OpenClawClient
@@ -216,16 +185,16 @@ func main() {
 	// Initialize handlers
 	authMiddleware := auth.NewMiddleware(s, cfg.Auth.AdminToken)
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
-	proxyHandler := proxy.NewHandler(s, dockerClient, freezer, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
+	proxyHandler := proxy.NewHandler(s, dockerClient, nil, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
 	backendAdapter := dockerpkg.NewBackendAdapter(dockerClient)
-	execHandler := execws.NewHandler(s, dockerClient, freezer)
+	execHandler := execws.NewHandler(s, dockerClient, nil)
 
 	// Inject container env vars for auto-reprovision of destroyed containers
 	envVars := containerEnvVars(cfg)
 	proxyHandler.SetContainerEnvVars(envVars)
 
 	// Build UpstreamDialer map for unified channel architecture
-	vmDialer := agent.NewVMAgentDialer(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
+	vmDialer := agent.NewVMAgentDialer(s, backendAdapter, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
 	vmDialer.SetContainerEnvVars(envVars)
 
 	dialers := map[string]agent.UpstreamDialer{

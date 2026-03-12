@@ -35,23 +35,22 @@ func httpHealthPollExternal(url string, timeoutSec int) error {
 }
 
 // VMAgentDialer implements UpstreamDialer for vm-agent containers.
+// vm-agent containers run persistently — no idle freeze/stop management.
 type VMAgentDialer struct {
 	store            *store.Store
 	backend          ContainerBackend
-	freezer          Freezer
 	agentPort        int
 	dockerHostIP     string
 	token            string
 	containerEnvVars  map[string]string
 	onContainerReady  func(userID, containerName string)
-	onReprovisioned   func(userID, containerName string) // called when container is rebuilt from not_found
+	onReprovisioned   func(userID, containerName string)
 }
 
-func NewVMAgentDialer(s *store.Store, backend ContainerBackend, freezer Freezer, agentPort int, dockerHostIP, token string) *VMAgentDialer {
+func NewVMAgentDialer(s *store.Store, backend ContainerBackend, agentPort int, dockerHostIP, token string) *VMAgentDialer {
 	return &VMAgentDialer{
 		store:        s,
 		backend:      backend,
-		freezer:      freezer,
 		agentPort:    agentPort,
 		dockerHostIP: dockerHostIP,
 		token:        token,
@@ -105,6 +104,9 @@ func (d *VMAgentDialer) handleContainerStatus(ctx context.Context, status string
 		}
 		return fmt.Errorf("container running but not healthy")
 	case "paused":
+		// Paused state should not occur since vm-agent freezer is removed.
+		// Handle as compatibility: unpause and continue.
+		log.Warn().Str("container", info.ContainerName).Str("user_id", userID).Msg("vm-agent container unexpectedly paused, unpausing")
 		if err := d.backend.Unfreeze(info.ContainerName); err != nil {
 			return err
 		}
@@ -202,8 +204,9 @@ func (d *VMAgentDialer) FormatClientMessage(msgType string, payload json.RawMess
 	return json.Marshal(msg)
 }
 
+// GetFreezer returns nil — vm-agent containers are not idle-managed.
 func (d *VMAgentDialer) GetFreezer() Freezer {
-	return d.freezer
+	return nil
 }
 
 func normalizeStatus(status string) string {

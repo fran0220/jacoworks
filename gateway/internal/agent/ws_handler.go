@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -47,23 +46,7 @@ func NewWSHandler(pool *ChannelPool, ticketStore *TicketStore, onEvent EventCall
 	return &WSHandler{pool: pool, ticketStore: ticketStore, onEvent: onEvent}
 }
 
-// resolveContainerType determines which container type to use for a user.
-// Prefers OpenClaw if provisioned; falls back to vm-agent.
-func (h *WSHandler) resolveContainerType(ctx context.Context, userID string) (string, *store.ContainerInfo, error) {
-	// Try OpenClaw first
-	info, err := h.pool.ContainerInfo(ctx, userID, store.ContainerTypeOpenClaw)
-	if err == nil {
-		return store.ContainerTypeOpenClaw, info, nil
-	}
 
-	// Fall back to vm-agent
-	info, err = h.pool.ContainerInfo(ctx, userID, store.ContainerTypeVMAgent)
-	if err == nil {
-		return store.ContainerTypeVMAgent, info, nil
-	}
-
-	return "", nil, err
-}
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil || h.ticketStore == nil {
@@ -89,10 +72,10 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine container type
-	containerType, _, err := h.resolveContainerType(r.Context(), userID)
-	if err != nil {
-		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
+	// Container type is mandatory — desktop must pass type=vm-agent, webchat must pass type=openclaw
+	containerType := strings.TrimSpace(r.URL.Query().Get("type"))
+	if containerType != store.ContainerTypeVMAgent && containerType != store.ContainerTypeOpenClaw {
+		writeWSHTTPJSON(w, http.StatusBadRequest, map[string]string{"error": "missing or invalid 'type' query parameter (must be 'vm-agent' or 'openclaw')"})
 		return
 	}
 

@@ -39,7 +39,7 @@ export default function App() {
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
   const { bootstrapDone, bootstrapError, retryBootstrap } = useAgentBootstrap(authenticated);
-  const ocConnection = useCoworkConnection();
+  const ocConnection = useCoworkConnection(authenticated && bootstrapDone);
 
   // One-time memory sync on app ready (after auth + cloud ready)
   const memorySyncDoneRef = useRef(false);
@@ -93,13 +93,7 @@ export default function App() {
     return () => window.removeEventListener("auth-expired", handler);
   }, []);
 
-  // Cloud-only: establish container connection immediately after auth + bootstrap.
-  useEffect(() => {
-    if (!authenticated || !bootstrapDone) return;
-    if (ocConnection.phase === "idle") {
-      ocConnection.connect();
-    }
-  }, [authenticated, bootstrapDone, ocConnection.phase, ocConnection.connect]);
+  // Cloud container connection is driven by useCoworkConnection(authenticated && bootstrapDone).
 
   // Sync active session workspace path to cowork file handler
   useEffect(() => {

@@ -163,7 +163,7 @@ func (c *Client) Create(name, userID string, envVars map[string]string, hostPort
 		port := nat.Port(fmt.Sprintf("%d/tcp", c.agentPort))
 		hostCfg.PortBindings = nat.PortMap{
 			port: []nat.PortBinding{
-				{HostIP: c.hostIP, HostPort: fmt.Sprintf("%d", hostPort)},
+				{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", hostPort)},
 			},
 		}
 	}
@@ -249,13 +249,11 @@ func (c *Client) Unfreeze(name string) error {
 		return fmt.Errorf("container %s in unexpected state: %s", name, status.Status)
 	}
 
+	// Wait briefly for container networking to stabilize after unpause/start.
+	// Health check is handled by the caller (VMAgentDialer.waitForHealth) which
+	// correctly uses host port mapping for remote Docker hosts.
 	time.Sleep(2 * time.Second)
-
-	ip, err := c.GetIP(name)
-	if err != nil {
-		return fmt.Errorf("get IP after unfreeze: %w", err)
-	}
-	return c.WaitForHealth(ip, 30*time.Second)
+	return nil
 }
 
 // Destroy force-removes a container.

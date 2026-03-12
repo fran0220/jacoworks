@@ -50,6 +50,7 @@ function buildWebSocketUrl(ticket: string, lastSeq: number): string {
   url.pathname = "/ws/oc";
   url.search = "";
   url.searchParams.set("ticket", ticket);
+  url.searchParams.set("type", "vm-agent");
   if (lastSeq > 0) {
     url.searchParams.set("lastSeq", String(lastSeq));
   }
