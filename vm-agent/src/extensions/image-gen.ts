@@ -76,9 +76,15 @@ async function generateWithProxy(
   }
 
   const data = await res.json() as {
-    choices?: Array<{ message?: { images?: Array<{ image_url?: { url?: string } }> } }>;
+    choices?: Array<{
+      message?: {
+        content?: Array<{ type?: string; image_url?: { url?: string } }>;
+      };
+    }>;
   };
-  const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+  const content = data.choices?.[0]?.message?.content;
+  const imgPart = content?.find((p) => p.type === "image_url" || p.image_url?.url);
+  const imageUrl = imgPart?.image_url?.url;
   if (!imageUrl) throw new Error("Proxy API: no image in response");
 
   const b64Data = imageUrl.replace(/^data:image\/\w+;base64,/, "");

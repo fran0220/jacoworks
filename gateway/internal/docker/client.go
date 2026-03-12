@@ -103,10 +103,26 @@ func agentDataDirs(userID string) (workspace, memory, home string) {
 }
 
 // fixBindMountOwnership sets correct ownership on bind-mounted dirs inside the container.
+// Must run as root because bind-mounted dirs are created as root on the host.
 func (c *Client) fixBindMountOwnership(containerName string) error {
-	_, err := c.Exec(containerName, "chown", "-R", "1000:1000",
-		"/home/agent/workspace", "/home/agent/memory", "/home/agent/home")
-	return err
+	ctx := context.Background()
+	execCfg := types.ExecConfig{
+		User:         "root",
+		Cmd:          []string{"chown", "-R", "1000:1000", "/home/agent/workspace", "/home/agent/memory", "/home/agent/home"},
+		AttachStdout: true,
+		AttachStderr: true,
+	}
+	resp, err := c.cli.ContainerExecCreate(ctx, containerName, execCfg)
+	if err != nil {
+		return fmt.Errorf("exec create %s: %w", containerName, err)
+	}
+	attach, err := c.cli.ContainerExecAttach(ctx, resp.ID, types.ExecStartCheck{})
+	if err != nil {
+		return fmt.Errorf("exec attach %s: %w", containerName, err)
+	}
+	defer attach.Close()
+	_, _ = io.Copy(io.Discard, attach.Reader)
+	return nil
 }
 
 // Create creates and starts a new container from the configured image.
