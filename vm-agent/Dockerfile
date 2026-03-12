@@ -46,14 +46,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Preinstall common CLI tooling for sandboxed bash commands
 RUN npm install -g typescript tsx prettier @types/node && \
-    pip3 install --no-cache-dir \
+    pip3 install --no-cache-dir --break-system-packages \
       requests beautifulsoup4 markdown \
       pandas numpy matplotlib Pillow openpyxl \
       flask fastapi uvicorn \
       scipy sympy
 
 # Browser automation (Playwright + Chromium)
-RUN pip3 install --no-cache-dir playwright && \
+RUN pip3 install --no-cache-dir --break-system-packages playwright && \
     playwright install --with-deps chromium
 
 # Install Godot binary + Web export templates
