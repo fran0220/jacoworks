@@ -103,7 +103,7 @@ if (Test-Path (Join-Path $BashDir "bash.exe")) {
     Write-Host "   Copied bash + $copied coreutils"
 
     $size = (Get-ChildItem $BashDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-    Write-Host "✅ runtimes/bash ready ({0:N1} MB)" -f $size
+    Write-Host ("✅ runtimes/bash ready: {0:N1} MB" -f $size)
 }
 
 # ─── 2. Python (embeddable package) ──────────────────────────────────────────
@@ -124,7 +124,7 @@ if (Test-Path (Join-Path $PythonDir "python.exe")) {
     Expand-Archive -Path $PythonZip -DestinationPath $PythonDir -Force
 
     $size = (Get-ChildItem $PythonDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-    Write-Host "✅ runtimes/python ready ({0:N1} MB)" -f $size
+    Write-Host ("✅ runtimes/python ready: {0:N1} MB" -f $size)
 }
 
 # ─── 3. Node/Bun ─────────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ if (Test-Path (Join-Path $NodeDir "bun.exe")) {
     Copy-Item $BunExe.FullName (Join-Path $NodeDir "node.exe")
 
     $size = (Get-ChildItem $NodeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-    Write-Host "✅ runtimes/node ready ({0:N1} MB)" -f $size
+    Write-Host ("✅ runtimes/node ready: {0:N1} MB" -f $size)
 }
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
