@@ -37,9 +37,9 @@ if (Test-Path (Join-Path $BashDir "bash.exe")) {
 
     # Check if Git Bash is already installed system-wide
     $GitBashPaths = @(
-        "C:\Program Files\Git\usr\bin",
-        "C:\Program Files (x86)\Git\usr\bin",
-        "${env:LOCALAPPDATA}\Programs\Git\usr\bin"
+        'C:\Program Files\Git\usr\bin',
+        'C:\Program Files (x86)\Git\usr\bin',
+        "$env:LOCALAPPDATA\Programs\Git\usr\bin"
     )
 
     $SourceBin = $null
@@ -62,7 +62,7 @@ if (Test-Path (Join-Path $BashDir "bash.exe")) {
         $ExtractDir = Join-Path $TmpDir "git-portable"
         if (Test-Path $ExtractDir) { Remove-Item -Recurse -Force $ExtractDir }
         & 7z x "-o$ExtractDir" $GitArchive -y | Out-Null
-        $SourceBin = Join-Path $ExtractDir "usr\bin"
+        $SourceBin = Join-Path $ExtractDir 'usr\bin'
     }
 
     New-Item -ItemType Directory -Force -Path $BashDir | Out-Null
