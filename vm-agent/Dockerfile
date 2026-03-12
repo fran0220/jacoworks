@@ -40,7 +40,7 @@ ARG GODOT_VERSION=4.6
 # System packages: dev tools + Godot runtime deps (X11/GL for headless rendering)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash tini curl wget git ca-certificates nodejs npm \
-    python3 python3-pip jq zip unzip wkhtmltopdf pandoc \
+    python3 python3-pip jq zip unzip pandoc weasyprint \
     xvfb imagemagick libfontconfig1 libgl1 libxcursor1 libxinerama1 libxrandr2 libxi6 libasound2 && \
     rm -rf /var/lib/apt/lists/*
 
