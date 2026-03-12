@@ -1,22 +1,20 @@
-# ============================================================================
-# setup-win-runtimes.ps1 — Populate runtimes/ on Windows build VM
+# setup-win-runtimes.ps1 - Populate runtimes/ on Windows build VM
 #
-# Run this ON the Windows build VM (win-build) to download and set up:
-#   1. runtimes/bash/  — MSYS2 bash + coreutils from Git for Windows
-#   2. runtimes/python/ — Python embeddable package
-#   3. runtimes/node/  — bun.exe (+ node.exe alias)
+# Run ON the Windows build VM to download and set up:
+#   1. runtimes/bash/  - MSYS2 bash + coreutils from Git for Windows
+#   2. runtimes/python/ - Python embeddable package
+#   3. runtimes/node/  - bun.exe (+ node.exe alias)
 #
 # Usage (from repo root):
 #   powershell -ExecutionPolicy Bypass -File desktop\src-tauri\scripts\setup-win-runtimes.ps1
 #
 # Idempotent: skips downloads if target directories already populated.
-# ============================================================================
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TauriDir = Split-Path -Parent $ScriptDir
-$RuntimesDir = Join-Path $TauriDir "resources\runtimes"
+$RuntimesDir = Join-Path $TauriDir 'resources\runtimes'
 $TmpDir = Join-Path $env:TEMP "jacoworks-win-runtimes"
 
 # Versions
@@ -26,14 +24,14 @@ $BunVersion = "1.3.10"
 
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
 
-# ─── 1. Bash (from Git for Windows portable) ─────────────────────────────────
+# --- 1. Bash (from Git for Windows portable) ---
 
 $BashDir = Join-Path $RuntimesDir "bash"
 
 if (Test-Path (Join-Path $BashDir "bash.exe")) {
-    Write-Host "✅ runtimes/bash already populated, skipping"
+    Write-Host "[OK] runtimes/bash already populated, skipping"
 } else {
-    Write-Host "📦 Setting up bash from Git for Windows..."
+    Write-Host "[*] Setting up bash from Git for Windows..."
 
     # Check if Git Bash is already installed system-wide
     $GitBashPaths = @(
@@ -103,17 +101,17 @@ if (Test-Path (Join-Path $BashDir "bash.exe")) {
     Write-Host "   Copied bash + $copied coreutils"
 
     $size = (Get-ChildItem $BashDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-    Write-Host ("✅ runtimes/bash ready: {0:N1} MB" -f $size)
+    Write-Host ("[OK] runtimes/bash ready: {0:N1} MB" -f $size)
 }
 
-# ─── 2. Python (embeddable package) ──────────────────────────────────────────
+# --- 2. Python (embeddable package) ---
 
 $PythonDir = Join-Path $RuntimesDir "python"
 
 if (Test-Path (Join-Path $PythonDir "python.exe")) {
-    Write-Host "✅ runtimes/python already populated, skipping"
+    Write-Host "[OK] runtimes/python already populated, skipping"
 } else {
-    Write-Host "📦 Setting up Python embeddable package..."
+    Write-Host "[*] Setting up Python embeddable package..."
     $PythonZip = Join-Path $TmpDir "python-${PythonVersion}-embed-amd64.zip"
     if (-not (Test-Path $PythonZip)) {
         $PythonUrl = "https://www.python.org/ftp/python/${PythonVersion}/python-${PythonVersion}-embed-amd64.zip"
@@ -124,17 +122,17 @@ if (Test-Path (Join-Path $PythonDir "python.exe")) {
     Expand-Archive -Path $PythonZip -DestinationPath $PythonDir -Force
 
     $size = (Get-ChildItem $PythonDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-    Write-Host ("✅ runtimes/python ready: {0:N1} MB" -f $size)
+    Write-Host ("[OK] runtimes/python ready: {0:N1} MB" -f $size)
 }
 
-# ─── 3. Node/Bun ─────────────────────────────────────────────────────────────
+# --- 3. Node/Bun ---
 
 $NodeDir = Join-Path $RuntimesDir "node"
 
 if (Test-Path (Join-Path $NodeDir "bun.exe")) {
-    Write-Host "✅ runtimes/node already populated, skipping"
+    Write-Host "[OK] runtimes/node already populated, skipping"
 } else {
-    Write-Host "📦 Setting up Bun for Windows..."
+    Write-Host "[*] Setting up Bun for Windows..."
     $BunZip = Join-Path $TmpDir "bun-windows-x64.zip"
     if (-not (Test-Path $BunZip)) {
         $BunUrl = "https://github.com/oven-sh/bun/releases/download/bun-v${BunVersion}/bun-windows-x64.zip"
@@ -151,15 +149,14 @@ if (Test-Path (Join-Path $NodeDir "bun.exe")) {
     Copy-Item $BunExe.FullName (Join-Path $NodeDir "node.exe")
 
     $size = (Get-ChildItem $NodeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-    Write-Host ("✅ runtimes/node ready: {0:N1} MB" -f $size)
+    Write-Host ("[OK] runtimes/node ready: {0:N1} MB" -f $size)
 }
 
-# ─── Summary ──────────────────────────────────────────────────────────────────
+# --- Summary ---
 
 Write-Host ""
-Write-Host "════════════════════════════════════════════════════"
 $totalSize = (Get-ChildItem $RuntimesDir -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
-Write-Host ("✅ All runtimes ready! Total: {0:N1} MB" -f $totalSize)
+Write-Host ("[OK] All runtimes ready! Total: {0:N1} MB" -f $totalSize)
 Write-Host "   bash:   $BashDir"
 Write-Host "   python: $PythonDir"
 Write-Host "   node:   $NodeDir"
