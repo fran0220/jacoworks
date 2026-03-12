@@ -4,12 +4,35 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
 
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
+
+// httpHealthPollExternal polls a health URL until HTTP 200 or timeout (seconds).
+func httpHealthPollExternal(url string, timeoutSec int) error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+
+	log.Debug().Str("url", url).Int("timeout_sec", timeoutSec).Msg("waiting for health (external)")
+
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("health check %s not ready after %ds", url, timeoutSec)
+}
 
 // VMAgentDialer implements UpstreamDialer for vm-agent containers.
 type VMAgentDialer struct {
@@ -64,10 +87,20 @@ func (d *VMAgentDialer) EnsureRunning(ctx context.Context, info *store.Container
 	return d.handleContainerStatus(ctx, status, info, userID)
 }
 
+func (d *VMAgentDialer) waitForHealth(info *store.ContainerInfo) error {
+	// Use host port mapping (hostIP:hostPort) for remote Docker hosts
+	// because container internal IPs are not reachable from the gateway.
+	if info.HostPort > 0 && d.dockerHostIP != "" {
+		url := fmt.Sprintf("http://%s:%d/health", d.dockerHostIP, info.HostPort)
+		return httpHealthPollExternal(url, 30)
+	}
+	return d.backend.WaitForHealth(info.ContainerName, info.ContainerIP)
+}
+
 func (d *VMAgentDialer) handleContainerStatus(ctx context.Context, status string, info *store.ContainerInfo, userID string) error {
 	switch normalizeStatus(status) {
 	case "running":
-		if err := d.backend.WaitForHealth(info.ContainerName, info.ContainerIP); err == nil {
+		if err := d.waitForHealth(info); err == nil {
 			return nil
 		}
 		return fmt.Errorf("container running but not healthy")
@@ -81,7 +114,7 @@ func (d *VMAgentDialer) handleContainerStatus(ctx context.Context, status string
 		if d.onContainerReady != nil {
 			go d.onContainerReady(userID, info.ContainerName)
 		}
-		return d.backend.WaitForHealth(info.ContainerName, info.ContainerIP)
+		return d.waitForHealth(info)
 	case "stopped", "exited":
 		if err := d.backend.Start(info.ContainerName); err != nil {
 			return err
@@ -92,7 +125,7 @@ func (d *VMAgentDialer) handleContainerStatus(ctx context.Context, status string
 		if d.onContainerReady != nil {
 			go d.onContainerReady(userID, info.ContainerName)
 		}
-		return d.backend.WaitForHealth(info.ContainerName, info.ContainerIP)
+		return d.waitForHealth(info)
 	case "not_found":
 		if d.containerEnvVars == nil {
 			return fmt.Errorf("container destroyed and no env vars configured for reprovision")
