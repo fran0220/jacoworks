@@ -253,6 +253,7 @@ func TestResolveFeishuRedirect(t *testing.T) {
 		{name: "default redirect", raw: "", wantErr: false, wantQuery: false},
 		{name: "desktop localhost", raw: "http://localhost:1420/callback", wantErr: false, wantQuery: false},
 		{name: "tauri localhost", raw: "https://tauri.localhost", wantErr: false, wantQuery: false},
+		{name: "tauri scheme", raw: "tauri://localhost", wantErr: false, wantQuery: false},
 		{name: "admin callback uses query", raw: "https://jaco.jingao.club/admin/feishu/callback", wantErr: false, wantQuery: true},
 		{name: "reject javascript scheme", raw: "javascript:alert(1)", wantErr: true},
 		{name: "reject unknown host", raw: "https://evil.example.com/cb", wantErr: true},

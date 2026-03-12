@@ -360,7 +360,7 @@ func resolveFeishuRedirect(raw string) (string, bool, error) {
 	}
 
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
+	if scheme != "http" && scheme != "https" && scheme != "tauri" {
 		return "", false, fmt.Errorf("unsupported redirect scheme")
 	}
 
