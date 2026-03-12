@@ -24,6 +24,9 @@ fn allowed_roots(workspace: Option<&str>) -> Vec<PathBuf> {
             roots.push(PathBuf::from(ws));
         }
     }
+    if let Some(agent_ws) = sidecar::agent_workspace() {
+        roots.push(agent_ws);
+    }
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd);
     }
@@ -56,7 +59,7 @@ fn resolve_scoped_path(path: &str, workspace: Option<&str>) -> Result<PathBuf, S
 /// and the user explicitly clicked a button to access it.
 ///
 /// When an absolute (or tilde-expanded) path doesn't exist on disk, we fall back to
-/// searching by filename in the session workspace / CWD, because
+/// searching by filename in the agent workspace / session workspace / CWD, because
 /// the LLM may hallucinate an absolute path while the file actually lives in the
 /// agent's default working directory.
 fn resolve_read_path(path: &str, workspace: Option<&str>) -> Result<PathBuf, String> {
@@ -120,14 +123,21 @@ fn resolve_path(path: &str, workspace: Option<&str>) -> PathBuf {
             }
         }
     }
-    // 2) Fallback: process CWD
+    // 2) Fallback: running agent's workspace directory
+    if let Some(agent_ws) = sidecar::agent_workspace() {
+        let full = agent_ws.join(path);
+        if full.exists() {
+            return full;
+        }
+    }
+    // 3) Fallback: process CWD
     if let Ok(cwd) = std::env::current_dir() {
         let full = cwd.join(path);
         if full.exists() {
             return full;
         }
     }
-    // 3) Fallback: user home directory
+    // 4) Fallback: user home directory
     if let Some(home) = dirs::home_dir() {
         let full = home.join(path);
         if full.exists() {
@@ -663,10 +673,19 @@ pub fn run() {
             cowork::write_file_text,
             cowork::list_directory,
             cowork::file_stat,
+            sidecar::start_agent,
+            sidecar::agent_rpc_send,
+            sidecar::stop_agent,
+            sidecar::agent_status,
+            sidecar::get_memory_stats,
             sidecar::clear_memory,
             sidecar::list_memory_files,
             sidecar::write_memory_files,
             sidecar::get_memory_root,
+            sidecar::list_skill_files,
+            sidecar::get_user_skills_dir,
+            sidecar::delete_user_skill,
+            sidecar::reveal_user_skill,
             ensure_default_workspace,
             ensure_session_sync_dir,
             reveal_in_finder,
@@ -690,5 +709,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 
-    app.run(|_app, _event| {});
+    app.run(|_app, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            let _ = sidecar::stop_agent();
+        }
+    });
 }

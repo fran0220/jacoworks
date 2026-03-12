@@ -75,15 +75,14 @@ async function generateWithProxy(
     throw new Error(`Proxy API error: HTTP ${res.status} — ${errText.slice(0, 300)}`);
   }
 
+  interface ImagePart { type?: string; image_url?: { url?: string } }
   const data = await res.json() as {
     choices?: Array<{
-      message?: {
-        content?: Array<{ type?: string; image_url?: { url?: string } }>;
-      };
+      message?: { content?: ImagePart[] };
     }>;
   };
-  const content = data.choices?.[0]?.message?.content;
-  const imgPart = content?.find((p) => p.type === "image_url" || p.image_url?.url);
+  const parts = data.choices?.[0]?.message?.content;
+  const imgPart = parts?.find((p: ImagePart) => p.type === "image_url" || p.image_url?.url);
   const imageUrl = imgPart?.image_url?.url;
   if (!imageUrl) throw new Error("Proxy API: no image in response");
 

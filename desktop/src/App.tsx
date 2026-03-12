@@ -38,7 +38,7 @@ export default function App() {
   const [unreadSessions, setUnreadSessions] = useState<Set<string>>(() => new Set());
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
-  const { bootstrapDone, bootstrapError, retryBootstrap } = useAgentBootstrap(authenticated);
+  const { bootstrapDone, bootstrapError, retryBootstrap, transport } = useAgentBootstrap(authenticated);
   const ocConnection = useCoworkConnection(authenticated && bootstrapDone);
 
   // One-time memory sync on app ready (after auth + cloud ready)
@@ -292,9 +292,7 @@ export default function App() {
                 pendingFiles={pendingFiles}
                 clearPending={() => { setPendingMessage(null); setPendingFiles([]); }}
                 onSessionUpdate={refreshSessions}
-                cloudWsRef={ocConnection.wsRef}
-                cloudReady={ocConnection.phase === "ready"}
-                setCloudMessageHandler={ocConnection.setMessageHandler}
+                transport={transport}
               />
             ) : (
               <NewSessionPanel

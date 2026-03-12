@@ -56,7 +56,8 @@
     ],
     "resources": {
       "resources/fonts/NotoSansSC-Regular.otf": "resources/fonts/NotoSansSC-Regular.otf",
-      "../../vm-agent/skills": "resources/skills"
+      "../../vm-agent/skills": "resources/skills",
+      "resources/runtimes": "resources/runtimes"
     }
   },
   "plugins": {

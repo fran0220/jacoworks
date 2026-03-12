@@ -1,13 +1,13 @@
 # Desktop — Tauri v2 + React 18 桌面客户端
 
-> 云端模式: 对话通过 CloudAgentWS → ticket auth (`POST /api/agent/ws-ticket`) → Gateway `/ws/oc?ticket=&lastSeq=` → ChannelPool → 云端 vm-agent 容器。信封帧 `{seq, event, data}` 协议，RingBuffer 事件缓冲，lastSeq 断点续传，离线消息队列 (pendingQueue)。本地仅保留文件管理能力 (记忆文件、附件、预览)。技能通过 Gateway REST API CRUD，修改后热推送到容器。记忆同步可选 (默认关闭)。
+> 本地优先: vm-agent 作为 sidecar 进程运行 (stdin/stdout JSON lines RPC)，对话、文件操作、记忆全部本地执行。LLM 密钥由 Gateway 下发。无需云端 Docker 容器。
 
 ## 代码结构
 
 ```
 src-tauri/src/
   lib.rs                       Tauri 入口 (文件预览/导入/路径解析)
-  sidecar.rs                   本地文件管理 (记忆文件读写), 不含 Agent 生命周期
+  sidecar.rs                   Sidecar 进程管理 (start/stop/send) + 本地文件管理 (记忆/技能)
   stream.rs                    http_fetch (网关 API)
   cowork.rs                    远程文件系统 Tauri 命令 (read/write/list/stat + safe_resolve 安全校验) + 目录选择/tar (保留兼容)
 
@@ -18,11 +18,12 @@ src/
     components/                LoginPanel Sidebar TopBar ChatView Composer
                                MessageBubble Markdown StreamingMarkdown
                                ToolStatus SkillMenu NewSessionPanel SettingsModal
-                               TaskPanel (时间线 UI + 云端对话入口) RpcLogPanel
+                               TaskPanel (时间线 UI + 协作入口) RpcLogPanel
     hooks/                     use-agent-bootstrap use-chat-stream
                                use-cowork-connection use-responsive-sidebar
                                use-session-state use-cron-results
-    lib/                       auth sessions agent cloud-agent-ws cloud-file-handler
+    lib/                       auth sessions agent agent-transport local-sidecar-transport
+                               cloud-agent-ws (仅 webchat 使用) cloud-file-handler
                                transport config recentFolders session-persistence
                                skills memory-sync (记忆双向同步)
     cowork/                    容器 API (api.ts) + 遗留类型 (types.ts)
@@ -60,12 +61,10 @@ npm test
 
 - **React 18 纯 CSS 变量** (无 CSS-in-JS, 无 Tailwind)
 - **CSS 模块化**: 样式拆分到 `react/styles/` 按组件分文件
-- **云端对话**: 所有对话通过 `CloudAgentWS` → ticket auth (`POST /api/agent/ws-ticket`) → `/ws/oc?ticket=&lastSeq=` → ChannelPool。使用信封帧 `{seq, event, data}` 协议，客户端解包后处理 vm-agent RPC 协议 (prompt/abort/session_event/done)。支持 lastSeq 断点续传、pendingQueue 离线消息队列、无硬重连上限 (前 20 次快速退避，之后 30s 慢速重试)
-- **本地无 Agent**: 不再运行本地 sidecar，`sidecar.rs` 仅提供文件系统 Tauri 命令
-- **WebSocket 文件通道**: 云端容器通过 WS 按需读写桌面端本地文件 (替代旧 tar 上传/下载)。`CloudAgentWS` 拦截 `fs.*` 消息 → `onFileRequest` → `cloud-file-handler.ts` 分发到 Tauri 命令 (`read_file_text` / `write_file_text` / `list_directory` / `file_stat`)。`use-cowork-connection.ts` 注入 workspace 路径，`cowork.rs` 用 `dunce::canonicalize` + `safe_resolve` 做路径安全校验 (防 `..` 遍历和符号链接逃逸)。目录列表上限 5000 条
+- **本地对话**: vm-agent sidecar 通过 Tauri 命令 `start_agent` / `agent_rpc_send` / `stop_agent` 管理。启动时注入 `LLM_PROXY_URL` / `LLM_PROXY_KEY` (由 Gateway `GET /api/agent/config` 下发)。RPC 协议为 stdin/stdout JSON lines，事件通过 Tauri `agent-rpc-event` 分发到 React 层
+- **本地 Agent**: vm-agent sidecar 为 Bun 编译二进制 (`bun build --compile`)，Pi SDK 提供 `read` / `write` / `glob` / `grep` 等文件操作 (纯 Node.js fs，跨平台)。bash 工具跨平台 (macOS/Linux 原生, Windows 需要 Git for Windows)
+- **WebSocket 文件通道** (仅云端容器使用, 桌面端不涉及): 云端容器通过 WS 按需读写桌面端本地文件 (替代旧 tar 上传/下载)。`CloudAgentWS` 拦截 `fs.*` 消息 → `onFileRequest` → `cloud-file-handler.ts` 分发到 Tauri 命令 (`read_file_text` / `write_file_text` / `list_directory` / `file_stat`)。`use-cowork-connection.ts` 注入 workspace 路径，`cowork.rs` 用 `dunce::canonicalize` + `safe_resolve` 做路径安全校验 (防 `..` 遍历和符号链接逃逸)。目录列表上限 5000 条
 - **三色模式体系**: 默认 (陶土 `--accent`)、隐私 (紫灰 `--accent-anonymous`)、云端 (蓝 `--accent-cloud`)。通过 composer/input-card 的 `inset box-shadow` + 发送按钮色 + chat-view 背景微调区分
-- **TopBar 云端按钮**: 纯状态指示 — idle 显示「新建云端」触发连接、busy 时 disabled、ready 显示「已连接」toggle 面板、error 显示「重试连接」
-- **面板仅 ready 可见**: 连接成功自动打开面板，面板内无连接状态 UI
 - **记忆同步**: `memorySyncEnabled` 设置 (默认关)，开启后 syncMemory() 在登录和对话结束后自动执行 (30s 防抖)
 - 开发: `make dev-desktop` (Vite HMR + Tauri)
 - sidecar 需预编译: `cd ../vm-agent && bun build --compile src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin`
@@ -74,19 +73,20 @@ npm test
 
 **数据源**: Gateway DB `skill_files` 表 (owner + file_path UNIQUE)。桌面端通过 REST API CRUD。
 
-**内置技能** (`vm-agent/skills/`): 通过 `make push-skills` 上传到 Gateway DB (owner=system)，容器 provision 时自动推送。
+**内置技能** (`vm-agent/skills/`): 通过 `make push-skills` 上传到 Gateway DB (owner=system)，桌面端启动后拉取并写入本地技能目录供 sidecar 使用。
 
-**用户自建技能**: 通过设置面板创建/删除，`skills.ts` 调用 Gateway API (`GET/PUT/DELETE /api/skills/{skillId}`)。修改后自动热推送到运行中容器。
+**用户自建技能**: 通过设置面板创建/删除，`skills.ts` 调用 Gateway API (`GET/PUT/DELETE /api/skills/{skillId}`)。本地保存到用户 skills 目录后由 sidecar 直接加载。
 
 **SkillMenu 初始化**: `use-agent-bootstrap.ts` 登录后调用 `fetchSkills()` → `setSkills()`，SkillMenu 显示 system + user 技能列表。
 
-**容器热推送**: upsert/delete handler 成功后，异步清空容器 skills 目录并全量重推 (system + user)。无运行中容器时静默跳过。
+**本地生效**: upsert/delete handler 成功后，刷新本地 skills 目录并触发 sidecar 下一轮会话读取，无需容器热推送。
 
 **向后兼容**: 旧 `POST /api/skills/upload` + `GET /api/skills/checksum` + `GET /api/skills/pull` 保留，`push-skills.sh` 继续工作。
 
-## 云端连接排查
+## 排查
 
 1. 看 RPC 日志面板 (`agent-rpc-log`)
-2. `需要 LLM_PROXY_KEY` → 检查管理后台「系统设置」中 LLM 密钥配置
-3. 连接失败 → 检查 Gateway 和容器状态
+2. Agent 未启动 → 检查 sidecar 二进制是否存在
+3. LLM 密钥缺失 (`需要 LLM_PROXY_KEY`) → 检查管理后台「系统设置」中 LLM 密钥配置
+4. bash 不可用 (Windows) → 安装 Git for Windows
 - sidecar 需预编译: `cd ../vm-agent && bun build --compile src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin`

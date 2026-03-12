@@ -44,8 +44,12 @@ vm-agent/memory/
 # === Sidecar binaries (built by bun compile) ===
 desktop/src-tauri/binaries/vm-agent-*
 desktop/src-tauri/resources/doc-packages.tar.gz
-desktop/src-tauri/resources/win-bash/
-desktop/src-tauri/resources/win-bin/
+desktop/src-tauri/resources/runtimes/bash/*
+desktop/src-tauri/resources/runtimes/python/*
+desktop/src-tauri/resources/runtimes/node/*
+!desktop/src-tauri/resources/runtimes/bash/.gitkeep
+!desktop/src-tauri/resources/runtimes/python/.gitkeep
+!desktop/src-tauri/resources/runtimes/node/.gitkeep
 
 # === Release artifacts ===
 dist-release/

@@ -3,6 +3,7 @@
 # prepare-release.sh — Unified desktop release preparation
 #
 # Single source of truth for: sidecar placement, doc-packages bundling,
+# bundled runtimes (Python all-platform, bash/bun Windows-only),
 # skills validation, and resource integrity checks.
 #
 # Usage:
@@ -21,6 +22,7 @@ TAURI_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(cd "$TAURI_DIR/../.." && pwd)"
 BINARIES_DIR="$TAURI_DIR/binaries"
 RESOURCES_DIR="$TAURI_DIR/resources"
+RUNTIMES_DIR="$RESOURCES_DIR/runtimes"
 
 SIDECAR_FROM=""
 while [[ $# -gt 0 ]]; do
@@ -124,16 +126,110 @@ else
   echo "  ⚠️  pi-meta: package.json not found (optional)"
 fi
 
-# ─── 6. Windows dependencies (bash + bun) ───────────────────────
+# ─── 6. Bundled Python (ALL platforms — guaranteed available) ────
+
+# python-build-standalone: self-contained CPython for all targets.
+# https://github.com/indygreg/python-build-standalone
+PYTHON_VERSION="3.12.8"
+PBS_RELEASE="20241219"
+PBS_BASE_URL="https://github.com/indygreg/python-build-standalone/releases/download/${PBS_RELEASE}"
+
+# Map Rust/Tauri target triple → python-build-standalone archive name
+case "$TARGET" in
+  aarch64-apple-darwin)
+    PBS_ARCHIVE="cpython-${PYTHON_VERSION}+${PBS_RELEASE}-aarch64-apple-darwin-install_only_stripped.tar.gz" ;;
+  x86_64-apple-darwin)
+    PBS_ARCHIVE="cpython-${PYTHON_VERSION}+${PBS_RELEASE}-x86_64-apple-darwin-install_only_stripped.tar.gz" ;;
+  x86_64-pc-windows-msvc)
+    PBS_ARCHIVE="cpython-${PYTHON_VERSION}+${PBS_RELEASE}-x86_64-pc-windows-msvc-install_only_stripped.tar.gz" ;;
+  aarch64-unknown-linux-gnu)
+    PBS_ARCHIVE="cpython-${PYTHON_VERSION}+${PBS_RELEASE}-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz" ;;
+  x86_64-unknown-linux-gnu)
+    PBS_ARCHIVE="cpython-${PYTHON_VERSION}+${PBS_RELEASE}-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz" ;;
+  *)
+    echo "❌ Unsupported target for python-build-standalone: $TARGET"
+    exit 1 ;;
+esac
+
+PYTHON_DIR="$RUNTIMES_DIR/python"
+
+# Check if already populated (bin/python3 on unix, python.exe on windows)
+if [[ "$TARGET" == *"windows"* ]]; then
+  PYTHON_CHECK="$PYTHON_DIR/python.exe"
+else
+  PYTHON_CHECK="$PYTHON_DIR/bin/python3"
+fi
+
+if [[ -f "$PYTHON_CHECK" ]]; then
+  echo "  ✅ Python: already populated"
+else
+  echo "📦 Downloading python-build-standalone for $TARGET..."
+  PBS_DOWNLOAD="$TMPD/$PBS_ARCHIVE"
+  curl -L --progress-bar -o "$PBS_DOWNLOAD" "${PBS_BASE_URL}/${PBS_ARCHIVE}"
+
+  # python-build-standalone extracts to python/ subdirectory
+  mkdir -p "$RUNTIMES_DIR"
+  rm -rf "$PYTHON_DIR"
+  tar -xzf "$PBS_DOWNLOAD" -C "$RUNTIMES_DIR"
+  # The archive extracts as "python/" which is exactly our target dir name
+
+  if [[ ! -f "$PYTHON_CHECK" ]]; then
+    echo "❌ Python extraction failed: $PYTHON_CHECK not found"
+    ls -la "$PYTHON_DIR/" 2>/dev/null || echo "   (directory does not exist)"
+    exit 1
+  fi
+
+  # Strip unnecessary files to reduce bundle size (~100MB → ~50MB)
+  find "$PYTHON_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+  find "$PYTHON_DIR" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+  find "$PYTHON_DIR" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/lib/python3.12/tkinter" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/lib/python3.12/idlelib" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/lib/python3.12/turtle"* 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/lib/python3.12/ensurepip" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/lib/python3.12/lib2to3" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/lib/python3.12/distutils" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/Lib/tkinter" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/Lib/idlelib" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/Lib/turtle"* 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/Lib/ensurepip" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/Lib/lib2to3" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/Lib/distutils" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/Lib/test" 2>/dev/null || true
+  rm -rf "$PYTHON_DIR/include" 2>/dev/null || true
+  find "$PYTHON_DIR" -name "*.pyc" -delete 2>/dev/null || true
+  find "$PYTHON_DIR" -name "*.pyo" -delete 2>/dev/null || true
+
+  PYTHON_SIZE=$(du -sh "$PYTHON_DIR" | cut -f1)
+  echo "  ✅ Python: $PYTHON_VERSION ($PYTHON_SIZE)"
+fi
+
+# ─── 7. Windows runtimes (bash + bun) ───────────────────────────
 
 if [[ "$TARGET" == *"windows"* ]]; then
   echo ""
-  echo "📦 Checking Windows dependencies..."
-  if [[ -f "$RESOURCES_DIR/win-bash/usr/bin/bash.exe" ]] && [[ -f "$RESOURCES_DIR/win-bin/bun.exe" ]]; then
-    echo "  ✅ win-bash + win-bin already populated"
+  echo "📦 Checking Windows runtimes (bash + bun)..."
+
+  BASH_OK=false
+  BUN_OK=false
+  [[ -f "$RUNTIMES_DIR/bash/bash.exe" ]] && BASH_OK=true
+  [[ -f "$RUNTIMES_DIR/node/bun.exe" ]] && BUN_OK=true
+
+  if $BASH_OK && $BUN_OK; then
+    echo "  ✅ runtimes/bash + runtimes/node already populated"
   else
-    echo "  ⚠️  win-bash/win-bin empty — running prepare-win-deps.sh..."
+    echo "  ⚠️  Missing runtimes — running prepare-win-deps.sh..."
     bash "$SCRIPT_DIR/prepare-win-deps.sh"
+  fi
+
+  # Final check: MUST have bash + bun for Windows — fail hard
+  if [[ ! -f "$RUNTIMES_DIR/bash/bash.exe" ]]; then
+    echo "❌ runtimes/bash/bash.exe missing — Windows build cannot proceed"
+    exit 1
+  fi
+  if [[ ! -f "$RUNTIMES_DIR/node/bun.exe" ]]; then
+    echo "❌ runtimes/node/bun.exe missing — Windows build cannot proceed"
+    exit 1
   fi
 fi
 

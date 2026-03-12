@@ -4,16 +4,23 @@ set -euo pipefail
 # ============================================================================
 # prepare-win-deps.sh
 #
-# Downloads and prepares minimal Windows dependencies for Tauri bundling:
-#   1. Git for Windows portable — extract minimal bash + coreutils
+# Downloads and prepares minimal Windows dependencies for Tauri bundling
+# into the unified resources/runtimes/ layout:
+#   1. Git for Windows portable — extract minimal bash + coreutils (flat)
 #   2. Standalone bun.exe — plus a node.exe copy (bun can run as node)
+#   3. Python embeddable package (CPython official)
 #
-# Output layout:
-#   resources/win-bash/usr/bin/bash.exe
-#   resources/win-bash/usr/bin/msys-2.0.dll
-#   resources/win-bash/usr/bin/... (coreutils + DLLs)
-#   resources/win-bin/bun.exe
-#   resources/win-bin/node.exe   (copy of bun.exe)
+# Output layout (flat — sidecar.rs expects these exact paths):
+#   resources/runtimes/bash/bash.exe
+#   resources/runtimes/bash/sh.exe
+#   resources/runtimes/bash/msys-2.0.dll
+#   resources/runtimes/bash/... (coreutils + DLLs, all flat in bash/)
+#   resources/runtimes/node/bun.exe
+#   resources/runtimes/node/node.exe   (copy of bun.exe)
+#   resources/runtimes/python/python.exe
+#   resources/runtimes/python/python312.dll
+#   resources/runtimes/python/python312.zip  (stdlib)
+#   resources/runtimes/python/...
 #
 # Designed to run on macOS (cross-compilation prep). Requires: curl, 7z, unzip.
 # Idempotent: skips downloads if output directories already exist.
@@ -21,8 +28,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/resources"
-WIN_BASH_DIR="$RESOURCES_DIR/win-bash"
-WIN_BIN_DIR="$RESOURCES_DIR/win-bin"
+RUNTIMES_DIR="$RESOURCES_DIR/runtimes"
 TMP_DIR="${TMPDIR:-/tmp}/jacoworks-win-deps"
 
 # Git for Windows portable version & URL
@@ -38,6 +44,12 @@ BUN_VERSION="1.3.10"
 BUN_ZIP="bun-windows-x64.zip"
 BUN_URL="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_ZIP}"
 BUN_SHA256=""  # Not pinned: version-locked URL is sufficient
+
+# Python embeddable package version & URL (Windows x64)
+PYTHON_VERSION="3.12.8"
+PYTHON_ZIP="python-${PYTHON_VERSION}-embed-amd64.zip"
+PYTHON_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_ZIP}"
+PYTHON_SHA256=""  # Not pinned: version-locked URL is sufficient
 
 # Coreutils to extract from Git for Windows (MSYS2 usr/bin)
 COREUTILS=(
@@ -120,15 +132,17 @@ verify_sha256() {
   echo "   ✅ SHA256 verified"
 }
 
-# ─── Step 1: Git for Windows (minimal bash + coreutils) ──────────────────────
+# ─── Step 1: Git for Windows (minimal bash + coreutils, flat layout) ─────────
 
-prepare_win_bash() {
-  if [[ -f "$WIN_BASH_DIR/usr/bin/bash.exe" ]]; then
-    echo "✅ win-bash already exists, skipping"
+prepare_bash() {
+  local BASH_DIR="$RUNTIMES_DIR/bash"
+
+  if [[ -f "$BASH_DIR/bash.exe" ]]; then
+    echo "✅ runtimes/bash already exists, skipping"
     return 0
   fi
 
-  echo "📦 Preparing Git for Windows minimal bash..."
+  echo "📦 Preparing Git for Windows minimal bash (flat layout)..."
 
   local SEVENZ
   if ! SEVENZ=$(find_7z); then
@@ -168,8 +182,8 @@ prepare_win_bash() {
     exit 1
   }
 
-  # Create output directory structure
-  mkdir -p "$WIN_BASH_DIR/usr/bin"
+  # Create flat output directory — everything goes directly into runtimes/bash/
+  mkdir -p "$BASH_DIR"
 
   # Copy bash.exe
   local git_bin="$extract_dir/usr/bin"
@@ -179,7 +193,12 @@ prepare_win_bash() {
   fi
 
   echo "   Copying bash.exe..."
-  cp "$git_bin/bash.exe" "$WIN_BASH_DIR/usr/bin/"
+  cp "$git_bin/bash.exe" "$BASH_DIR/"
+
+  # Copy sh.exe (often a copy of bash.exe, needed by some scripts)
+  if [[ -f "$git_bin/sh.exe" ]]; then
+    cp "$git_bin/sh.exe" "$BASH_DIR/"
+  fi
 
   # Copy essential MSYS2 DLLs
   echo "   Copying MSYS2 DLLs..."
@@ -187,7 +206,7 @@ prepare_win_bash() {
   local dll_missing=0
   for dll in "${MSYS_DLLS[@]}"; do
     if [[ -f "$git_bin/$dll" ]]; then
-      cp "$git_bin/$dll" "$WIN_BASH_DIR/usr/bin/"
+      cp "$git_bin/$dll" "$BASH_DIR/"
       dll_copied=$((dll_copied + 1))
     else
       echo "   ⚠️  DLL not found (may not be needed): $dll"
@@ -202,7 +221,7 @@ prepare_win_bash() {
   local missing=0
   for util in "${COREUTILS[@]}"; do
     if [[ -f "$git_bin/$util.exe" ]]; then
-      cp "$git_bin/$util.exe" "$WIN_BASH_DIR/usr/bin/"
+      cp "$git_bin/$util.exe" "$BASH_DIR/"
       copied=$((copied + 1))
     else
       echo "   ⚠️  Not found: $util.exe"
@@ -211,23 +230,10 @@ prepare_win_bash() {
   done
   echo "   Copied $copied utilities ($missing not found)"
 
-  # Also copy sh.exe (often a copy of bash.exe, needed by some scripts)
-  if [[ -f "$git_bin/sh.exe" ]]; then
-    cp "$git_bin/sh.exe" "$WIN_BASH_DIR/usr/bin/"
-  fi
-
-  # Copy /etc/profile if it exists (bash startup)
-  if [[ -d "$extract_dir/etc" ]]; then
-    mkdir -p "$WIN_BASH_DIR/etc"
-    for f in profile bash.bashrc; do
-      [[ -f "$extract_dir/etc/$f" ]] && cp "$extract_dir/etc/$f" "$WIN_BASH_DIR/etc/"
-    done
-  fi
-
   # Smoke test: verify bash.exe can be identified as PE executable
   if command -v file &>/dev/null; then
     local ftype
-    ftype=$(file "$WIN_BASH_DIR/usr/bin/bash.exe")
+    ftype=$(file "$BASH_DIR/bash.exe")
     if [[ "$ftype" == *"PE32+"* ]] || [[ "$ftype" == *"executable"* ]]; then
       echo "   ✅ bash.exe smoke check passed (PE executable)"
     else
@@ -237,15 +243,17 @@ prepare_win_bash() {
 
   # Show final size
   local size
-  size=$(du -sh "$WIN_BASH_DIR" | cut -f1)
-  echo "✅ win-bash ready ($size) → $WIN_BASH_DIR"
+  size=$(du -sh "$BASH_DIR" | cut -f1)
+  echo "✅ runtimes/bash ready ($size) → $BASH_DIR"
 }
 
 # ─── Step 2: Bun for Windows (+ node.exe alias) ─────────────────────────────
 
-prepare_win_bun() {
-  if [[ -f "$WIN_BIN_DIR/bun.exe" && -f "$WIN_BIN_DIR/node.exe" ]]; then
-    echo "✅ win-bin already exists, skipping"
+prepare_node() {
+  local NODE_DIR="$RUNTIMES_DIR/node"
+
+  if [[ -f "$NODE_DIR/bun.exe" && -f "$NODE_DIR/node.exe" ]]; then
+    echo "✅ runtimes/node already exists, skipping"
     return 0
   fi
 
@@ -281,19 +289,73 @@ prepare_win_bun() {
     exit 1
   fi
 
-  mkdir -p "$WIN_BIN_DIR"
+  mkdir -p "$NODE_DIR"
 
   # Copy bun.exe
-  cp "$bun_exe" "$WIN_BIN_DIR/bun.exe"
+  cp "$bun_exe" "$NODE_DIR/bun.exe"
   echo "   Copied bun.exe"
 
   # Create node.exe as a copy of bun.exe (bun supports running as node)
-  cp "$bun_exe" "$WIN_BIN_DIR/node.exe"
+  cp "$bun_exe" "$NODE_DIR/node.exe"
   echo "   Created node.exe (copy of bun.exe)"
 
   local size
-  size=$(du -sh "$WIN_BIN_DIR" | cut -f1)
-  echo "✅ win-bin ready ($size) → $WIN_BIN_DIR"
+  size=$(du -sh "$NODE_DIR" | cut -f1)
+  echo "✅ runtimes/node ready ($size) → $NODE_DIR"
+}
+
+# ─── Step 3: Python embeddable package for Windows ───────────────────────────
+
+prepare_python() {
+  local PYTHON_DIR="$RUNTIMES_DIR/python"
+
+  if [[ -f "$PYTHON_DIR/python.exe" ]]; then
+    echo "✅ runtimes/python already exists, skipping"
+    return 0
+  fi
+
+  echo "📦 Preparing Python ${PYTHON_VERSION} embeddable package..."
+
+  local zip_file="$TMP_DIR/$PYTHON_ZIP"
+  mkdir -p "$TMP_DIR"
+
+  if [[ -f "$zip_file" ]]; then
+    echo "   Archive already downloaded: $zip_file"
+  else
+    echo "   Downloading Python ${PYTHON_VERSION} embeddable (amd64)..."
+    echo "   URL: $PYTHON_URL"
+    curl -L --progress-bar -o "$zip_file" "$PYTHON_URL"
+    echo "   Downloaded: $(du -h "$zip_file" | cut -f1)"
+  fi
+
+  verify_sha256 "$zip_file" "$PYTHON_SHA256"
+
+  # Extract directly into runtimes/python/
+  # The embeddable zip has files at the root level (python.exe, python312.dll, etc.)
+  mkdir -p "$PYTHON_DIR"
+
+  echo "   Extracting..."
+  unzip -q -o "$zip_file" -d "$PYTHON_DIR"
+
+  if [[ ! -f "$PYTHON_DIR/python.exe" ]]; then
+    echo "❌ python.exe not found after extraction"
+    exit 1
+  fi
+
+  # Smoke test: verify python.exe can be identified as PE executable
+  if command -v file &>/dev/null; then
+    local ftype
+    ftype=$(file "$PYTHON_DIR/python.exe")
+    if [[ "$ftype" == *"PE32+"* ]] || [[ "$ftype" == *"executable"* ]]; then
+      echo "   ✅ python.exe smoke check passed (PE executable)"
+    else
+      echo "   ⚠️  python.exe may not be valid: $ftype"
+    fi
+  fi
+
+  local size
+  size=$(du -sh "$PYTHON_DIR" | cut -f1)
+  echo "✅ runtimes/python ready ($size) → $PYTHON_DIR"
 }
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -303,21 +365,24 @@ main() {
   echo "║  JAcoworks — Prepare Windows Dependencies       ║"
   echo "╚══════════════════════════════════════════════════╝"
   echo ""
-  echo "Output: $RESOURCES_DIR"
+  echo "Output: $RUNTIMES_DIR"
   echo ""
 
   preflight
 
-  prepare_win_bash
+  prepare_bash
   echo ""
-  prepare_win_bun
+  prepare_node
+  echo ""
+  prepare_python
 
   echo ""
   echo "════════════════════════════════════════════════════"
   echo "✅ All Windows dependencies ready!"
   echo ""
-  echo "  win-bash → $WIN_BASH_DIR"
-  echo "  win-bin  → $WIN_BIN_DIR"
+  echo "  runtimes/bash   → $RUNTIMES_DIR/bash"
+  echo "  runtimes/node   → $RUNTIMES_DIR/node"
+  echo "  runtimes/python → $RUNTIMES_DIR/python"
   echo ""
 
   # Cleanup temp files (keep archives for re-runs)

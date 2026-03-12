@@ -1,4 +1,4 @@
-import type { CloudAgentWS } from "./cloud-agent-ws";
+import type { AgentTransport } from "./agent-transport";
 
 export interface PromptPayload {
   session_id: string;
@@ -74,9 +74,8 @@ function nextCommandId(prefix: string): string {
 }
 
 export async function startCloudStream(
-  ws: CloudAgentWS,
+  transport: AgentTransport,
   payload: CloudPromptPayload,
-  onMessage: (handler: ((packet: AgentRpcEvent) => void) | null) => void,
 ): Promise<{
   requestId: string;
   stream: AsyncGenerator<AgentRpcEvent>;
@@ -85,7 +84,7 @@ export async function startCloudStream(
   const requestId = nextCommandId("prompt");
   const queue = new AsyncEventQueue<AgentRpcEvent>();
 
-  onMessage((packet) => {
+  transport.onMessage((packet) => {
     if (!packet.id && packet.type === "error") {
       queue.push(packet);
       queue.close();
@@ -99,15 +98,15 @@ export async function startCloudStream(
   });
 
   try {
-    ws.send({ id: requestId, type: "prompt", ...payload });
+    transport.send({ id: requestId, type: "prompt", ...payload });
   } catch (err) {
-    onMessage(null);
+    transport.onMessage(null);
     throw err;
   }
 
   const cancel = () => {
     queue.close();
-    onMessage(null);
+    transport.onMessage(null);
   };
 
   const stream = (async function* () {
@@ -118,23 +117,22 @@ export async function startCloudStream(
         yield next.value;
       }
     } finally {
-      onMessage(null);
+      transport.onMessage(null);
     }
   })();
 
   return { requestId, stream, cancel };
 }
 
-export function abortCloudSession(ws: CloudAgentWS, sessionId: string): void {
+export function abortCloudSession(transport: AgentTransport, sessionId: string): void {
   const id = nextCommandId("abort");
-  ws.send({ id, type: "abort", session_id: sessionId });
+  transport.send({ id, type: "abort", session_id: sessionId });
 }
 
 export async function requestCloudTitleGeneration(
-  ws: CloudAgentWS,
+  transport: AgentTransport,
   userMessage: string,
   assistantMessage: string,
-  onMessage: (handler: ((packet: AgentRpcEvent) => void) | null) => void,
 ): Promise<string | null> {
   const id = nextCommandId("title");
   return new Promise<string | null>((resolve) => {
@@ -143,13 +141,13 @@ export async function requestCloudTitleGeneration(
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
-      onMessage(null);
+      transport.onMessage(null);
       resolve(value);
     };
 
     const timeout = setTimeout(() => done(null), 15_000);
 
-    onMessage((packet) => {
+    transport.onMessage((packet) => {
       if (String(packet.id ?? "") !== id) return;
       if (packet.type === "response") {
         if (packet.success && (packet.data as { title?: string })?.title) {
@@ -161,7 +159,7 @@ export async function requestCloudTitleGeneration(
     });
 
     try {
-      ws.send({ id, type: "generate_title", user_message: userMessage, assistant_message: assistantMessage });
+      transport.send({ id, type: "generate_title", user_message: userMessage, assistant_message: assistantMessage });
     } catch {
       done(null);
     }

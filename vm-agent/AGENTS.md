@@ -1,6 +1,6 @@
-# vm-agent — 云端 Agent 容器
+# vm-agent — 本地 Sidecar / 云端 Agent 内核
 
-> Pi SDK + RPC。运行于 Docker 容器 (oracle ARM64)，通过 Gateway WS 代理与桌面端通信。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。
+> Pi SDK + RPC。可运行于桌面端本地 sidecar (stdin/stdout) 或 Docker 容器 (server 模式)。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。
 
 ## 代码结构
 
@@ -42,6 +42,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), �
 | `read_document` | `extensions/read-document.ts` | `LLM_PROXY_KEY` | 文档读取 + 扫描件 OCR |
 | `web_search` | `extensions/web-search.ts` | `LLM_PROXY_KEY` 或 `TAVILY_API_KEY` | 网络搜索 (Grok → Tavily fallback) |
 | `remote_read/write/list/stat` | `extensions/remote-fs.ts` | 云端/server 模式 (transport sender 可用) | WebSocket 文件通道, 按需读写桌面端本地文件 |
+| `bash` | Pi SDK `createCodingTools()` (内置) | 始终可用 | 跨平台命令执行 (macOS/Linux 原生 `bash`; Windows 需安装 Git for Windows 提供 `bash` + `grep/sed/awk/curl`) |
 | `cron_manage` | `services/cron.ts` | 始终注册 | 定时任务管理 (sidecar→Gateway 代理, server→本地执行) |
 | (compaction safeguard) | `extensions/compaction-safeguard.ts` | `MEMORY_ENABLED=true` | token 用量日志 + 压缩前记忆刷写 |
 | `powershell` | `tools/powershell.ts` | Windows only | 环境自修复 |
@@ -94,6 +95,15 @@ skills/                        内置技能包 (创作/办公/工具/开发), �
 - `SKILLS_PATHS` — 内置技能目录 (逗号分隔, 容器内默认 `/shared/skills`)
 - `USER_SKILLS_DIR` — 用户自建技能目录 (默认 `~/Library/Application Support/JAcoworks/skills`)
 - `TOOL_DENY_LIST` / `TAVILY_API_KEY`
+
+## 跨平台支持
+
+**bash 工具**:
+- macOS/Linux: 原生 `bash`
+- Windows: 需要 [Git for Windows](https://git-scm.com/download/win) (提供 MSYS2 bash + grep/sed/awk/curl 等常用工具)
+- 启动时自动检测 bash 可用性，不可用时返回安装提示
+
+**文件操作**: Pi SDK `createCodingTools()` 提供 read/write/glob/grep，纯 Node.js `fs` 实现，跨平台无需额外依赖。
 
 ## WebSocket 文件通道 (云端模式)
 

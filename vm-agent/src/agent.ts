@@ -28,7 +28,7 @@ import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
 import { createCronService, type CronService, type CronResultEvent } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
-import { createBashExtension } from "./tools/remote-bash.js";
+import { createPythonExtension } from "./tools/python.js";
 import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
 
@@ -391,11 +391,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   const extensionFactories: ExtensionFactory[] = [];
 
-  // Override built-in bash with the container-local executor.
-  if (!restricted) {
-    extensionFactories.push(createBashExtension());
-  }
-
   if (config.memoryEnabled && !opts?.anonymous) {
     const memRoot = userMemoryRootDir(opts?.userId);
     extensionFactories.push(
@@ -441,6 +436,11 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     extensionFactories.push(
       createRemoteFsExtension(() => currentSender, registerTransportResponseHandler),
     );
+  }
+
+  // Python tool (available when python is on PATH or bundled in runtimes/)
+  if (!restricted) {
+    extensionFactories.push(createPythonExtension());
   }
 
   // Intercept read tool for binary documents and images.

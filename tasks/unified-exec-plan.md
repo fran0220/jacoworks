@@ -1,3 +1,8 @@
+> ⚠️ **SUPERSEDED** — This plan has been replaced by the local-first sidecar restoration (v1.7.0).
+> The desktop app now runs vm-agent as a local sidecar process with cross-platform bash support
+> (Git for Windows prerequisite). Cloud Docker containers are no longer used for desktop.
+> See desktop/AGENTS.md and vm-agent/AGENTS.md for current architecture.
+
 # 统一执行架构：本地对话 + 云端 Bash
 
 ## 目标

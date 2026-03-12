@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { AlertCircle, ChevronDown, RotateCcw } from "lucide-react";
 import { useChatStream } from "../hooks/use-chat-stream";
+import type { AgentTransport } from "../lib/agent-transport";
 import type { AttachedFile, ChatSession } from "../types";
 import { toolArgsSummary } from "../lib/tool-utils";
 import Composer from "./Composer";
@@ -26,18 +27,14 @@ export default function ChatView({
   pendingFiles,
   clearPending,
   onSessionUpdate,
-  cloudWsRef,
-  cloudReady,
-  setCloudMessageHandler,
+  transport,
 }: {
   session: ChatSession;
   pendingMessage: string | null;
   pendingFiles: AttachedFile[];
   clearPending: () => void;
   onSessionUpdate: () => Promise<void>;
-  cloudWsRef?: React.MutableRefObject<import("../lib/cloud-agent-ws").CloudAgentWS | null>;
-  cloudReady?: boolean;
-  setCloudMessageHandler?: (handler: ((packet: import("../lib/agent").AgentRpcEvent) => void) | null) => void;
+  transport: AgentTransport | null;
 }) {
   const {
     sessionState,
@@ -54,16 +51,14 @@ export default function ChatView({
     handleMessagesScroll,
     updateWorkspacePath,
     updateModel,
-    cloudReady: isCloudReady,
+    agentReady: isAgentReady,
   } = useChatStream({
     session,
     pendingMessage,
     pendingFiles,
     clearPending,
     onSessionUpdate,
-    cloudWsRef,
-    cloudReady,
-    setCloudMessageHandler,
+    transport,
   });
 
   const lastUserMessage = visibleMessages.filter(m => m.role === "user").pop();
@@ -172,7 +167,7 @@ export default function ChatView({
         streamingStartedAt={streamingStartedAt}
         workspacePath={sessionState.workspacePath}
         model={sessionState.model}
-        disabled={!isCloudReady}
+        disabled={!isAgentReady}
         isAnonymous={!!session.anonymous}
         onWorkspaceChange={updateWorkspacePath}
         onModelChange={updateModel}

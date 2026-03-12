@@ -11,3 +11,11 @@
 
 # Skills archive built from vm-agent at build time
 /resources/skills.tar.gz
+
+# Windows runtime dependencies (populated by prepare-win-deps.sh)
+/resources/runtimes/bash/*
+/resources/runtimes/python/*
+/resources/runtimes/node/*
+!/resources/runtimes/bash/.gitkeep
+!/resources/runtimes/python/.gitkeep
+!/resources/runtimes/node/.gitkeep

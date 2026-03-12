@@ -5,7 +5,7 @@ import {
   startCloudStream,
 } from "../lib/agent";
 import type { AgentRpcEvent } from "../lib/agent";
-import type { CloudAgentWS } from "../lib/cloud-agent-ws";
+import type { AgentTransport } from "../lib/agent-transport";
 import { getUser } from "../lib/auth";
 import { getSettings } from "../lib/config";
 import { sessionStore, syncDirtyToServer } from "../lib/session-store";
@@ -77,10 +77,7 @@ interface UseChatStreamOptions {
   pendingFiles: AttachedFile[];
   clearPending: () => void;
   onSessionUpdate: () => Promise<void>;
-  // Cloud transport
-  cloudWsRef?: React.MutableRefObject<CloudAgentWS | null>;
-  cloudReady?: boolean;
-  setCloudMessageHandler?: (handler: ((packet: AgentRpcEvent) => void) | null) => void;
+  transport: AgentTransport | null;
 }
 
 export function useChatStream({
@@ -89,9 +86,7 @@ export function useChatStream({
   pendingFiles,
   clearPending,
   onSessionUpdate,
-  cloudWsRef,
-  cloudReady,
-  setCloudMessageHandler,
+  transport,
 }: UseChatStreamOptions) {
   const [sessionState, setSessionState] = useState(session);
   const [streaming, setStreaming] = useState(false);
@@ -263,9 +258,8 @@ export function useChatStream({
       const titleRequestVersion = titleRequestVersionRef.current;
 
       const titlePromise = (() => {
-        const ws = cloudWsRef?.current;
-        if (ws?.isReady && setCloudMessageHandler) {
-          return requestCloudTitleGeneration(ws, userMessage, assistantText, setCloudMessageHandler);
+        if (transport?.isReady) {
+          return requestCloudTitleGeneration(transport, userMessage, assistantText);
         }
         return Promise.resolve(null);
       })();
@@ -290,7 +284,7 @@ export function useChatStream({
         console.warn("[title] AI title generation failed:", err);
       });
     }
-  }, [onSessionUpdate, persistSession, cloudWsRef, setCloudMessageHandler]);
+  }, [onSessionUpdate, persistSession, transport]);
 
   const sendMessage = useCallback(
     async (text: string, files: AttachedFile[]) => {
@@ -335,7 +329,7 @@ export function useChatStream({
       stoppedByUserRef.current = false;
       stickToBottomRef.current = true;
 
-      // Shared stream processing for cloud mode
+      // Shared stream processing for local sidecar mode
       const processStream = async (response: { stream: AsyncGenerator<AgentRpcEvent>; cancel: () => void }) => {
         streamCancelRef.current = response.cancel;
         let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
@@ -566,19 +560,18 @@ export function useChatStream({
         }
       };
 
-      const ws = cloudWsRef?.current;
-      if (!ws || !ws.isReady || !setCloudMessageHandler) {
+      if (!transport?.isReady) {
         sendLockRef.current = false;
         setStreaming(false);
         setStreamingStartedAt(null);
-        setErrorText("云端连接尚未就绪");
+        setErrorText("本地 Agent 尚未就绪");
         activeStreamRef.current = null;
         return;
       }
 
       const currentUser = getUser();
       const appSettings = getSettings();
-      const response = await startCloudStream(ws, {
+      const response = await startCloudStream(transport, {
         session_id: sessionSnapshot.id,
         user_id: currentUser?.id || undefined,
         model: sessionSnapshot.model,
@@ -587,10 +580,10 @@ export function useChatStream({
         restricted: false,
         thinking_level: appSettings.thinkingLevel || undefined,
         anonymous: sessionSnapshot.anonymous || undefined,
-      }, setCloudMessageHandler);
+      });
       await processStream(response);
     },
-    [cancelRenderFrame, finalizeStream, persistSession, scheduleBlocksRender, cloudWsRef, setCloudMessageHandler],
+    [cancelRenderFrame, finalizeStream, persistSession, scheduleBlocksRender, transport],
   );
 
   const stopStreaming = useCallback(async () => {
@@ -604,9 +597,8 @@ export function useChatStream({
 
     const sessionId = ctx.id;
 
-    const ws = cloudWsRef?.current;
-    if (ws?.isReady) {
-      abortCloudSession(ws, sessionId);
+    if (transport?.isReady) {
+      abortCloudSession(transport, sessionId);
     }
 
     const assistantText = blocksRef.current
@@ -636,7 +628,7 @@ export function useChatStream({
     setBlocks([]);
     blocksRef.current = [];
     activeStreamRef.current = null;
-  }, [cancelRenderFrame, persistSession, cloudWsRef]);
+  }, [cancelRenderFrame, persistSession, transport]);
 
   useEffect(() => {
     if (!pendingMessage || streaming) return;
@@ -682,7 +674,7 @@ export function useChatStream({
     errorText,
     messagesRef,
     isAtBottom,
-    cloudReady: cloudReady ?? false,
+    agentReady: transport?.isReady ?? false,
     scrollToBottom,
     sendMessage,
     stopStreaming,
