@@ -35,7 +35,7 @@ export default defineConfig(async () => ({
       output: {
         manualChunks: {
           react: ["react", "react-dom"],
-          markdown: ["marked", "dompurify", "highlight.js"],
+          markdown: ["dompurify", "highlight.js"],
         },
       },
     },
