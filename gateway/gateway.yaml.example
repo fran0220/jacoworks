@@ -24,7 +24,7 @@ github:
   repo: "fran0220/jacoworks"
 
 docker:
-  ssh_target: "opc@100.94.98.106"
+  docker_host: "tcp://100.94.98.106:2375"
   image: "jacoworks/vm-agent:latest"
   network: "agent-net"
   agent_port: 18789
@@ -32,7 +32,7 @@ docker:
   gateway_token: ""
 
 openclaw:
-  ssh_target: "root@100.97.254.31"
+  docker_host: "tcp://100.97.254.31:2375"
   image: "ghcr.io/openclaw/openclaw:latest"
   port: 18789
   host_ip: "100.97.254.31"

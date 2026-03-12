@@ -6,8 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"os/exec"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -56,31 +55,28 @@ type ExecRunResult struct {
 
 // Client manages Docker containers via the Docker SDK.
 type Client struct {
-	sshTarget string // e.g. "opc@10.0.1.3"
-	image     string // e.g. "jacoworks/vm-agent:latest"
-	network   string // e.g. "agent-net"
-	agentPort int    // vm-agent port (default 18789)
-	hostIP    string // WireGuard IP to bind ports (e.g. "10.0.1.3")
-	cli       dockerAPI
+	dockerHost string // e.g. "tcp://10.0.1.3:2375" or "" for local
+	image      string // e.g. "jacoworks/vm-agent:latest"
+	network    string // e.g. "agent-net"
+	agentPort  int    // vm-agent port (default 18789)
+	hostIP     string // Tailscale IP to bind ports (e.g. "100.94.98.106")
+	cli        dockerAPI
 }
 
-func NewClient(sshTarget, image, network string, agentPort int, hostIP string) *Client {
+func NewClient(dockerHost, image, network string, agentPort int, hostIP string) *Client {
 	c := &Client{
-		sshTarget: sshTarget,
-		image:     image,
-		network:   network,
-		agentPort: agentPort,
-		hostIP:    hostIP,
+		dockerHost: dockerHost,
+		image:      image,
+		network:    network,
+		agentPort:  agentPort,
+		hostIP:     hostIP,
 	}
 
 	var opts []dockerclient.Opt
-	if sshTarget == "" || sshTarget == "local" {
+	if dockerHost == "" || dockerHost == "local" {
 		opts = append(opts, dockerclient.FromEnv)
 	} else {
-		opts = append(opts,
-			dockerclient.WithHost("http://docker"),
-			dockerclient.WithDialContext(c.sshDialContext),
-		)
+		opts = append(opts, dockerclient.WithHost(dockerHost)) // "tcp://host:2375"
 	}
 	opts = append(opts, dockerclient.WithAPIVersionNegotiation())
 
@@ -90,65 +86,6 @@ func NewClient(sshTarget, image, network string, agentPort int, hostIP string) *
 	}
 	c.cli = cli
 	return c
-}
-
-// sshDialContext creates a connection to the remote Docker daemon via SSH.
-// It spawns "ssh user@host docker system dial-stdio" and returns a net.Conn
-// backed by the SSH process's stdin/stdout.
-func (c *Client) sshDialContext(ctx context.Context, _, _ string) (net.Conn, error) {
-	args := []string{
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "ConnectTimeout=10",
-		c.sshTarget,
-		"docker", "system", "dial-stdio",
-	}
-	cmd := exec.CommandContext(ctx, "ssh", args...)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("ssh stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("ssh stdout pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("ssh start: %w", err)
-	}
-	return &sshConn{cmd: cmd, stdin: stdin, stdout: stdout}, nil
-}
-
-// sshConn wraps an SSH subprocess as a net.Conn.
-type sshConn struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-}
-
-func (c *sshConn) Read(p []byte) (int, error)  { return c.stdout.Read(p) }
-func (c *sshConn) Write(p []byte) (int, error) { return c.stdin.Write(p) }
-func (c *sshConn) Close() error {
-	_ = c.stdin.Close()
-	_ = c.stdout.Close()
-	return c.cmd.Wait()
-}
-func (c *sshConn) LocalAddr() net.Addr                { return &net.UnixAddr{Name: "ssh", Net: "ssh"} }
-func (c *sshConn) RemoteAddr() net.Addr               { return &net.UnixAddr{Name: "ssh", Net: "ssh"} }
-func (c *sshConn) SetDeadline(_ time.Time) error      { return nil }
-func (c *sshConn) SetReadDeadline(_ time.Time) error  { return nil }
-func (c *sshConn) SetWriteDeadline(_ time.Time) error { return nil }
-
-// RunSSH runs a command on the remote host via SSH.
-// Deprecated: Use Docker SDK methods or Exec instead. Kept for openclaw config writing.
-func (c *Client) RunSSH(args ...string) (string, error) {
-	if c.sshTarget == "" || c.sshTarget == "local" {
-		cmd := exec.Command("bash", append([]string{"-c"}, strings.Join(args, " "))...)
-		out, err := cmd.CombinedOutput()
-		return strings.TrimSpace(string(out)), err
-	}
-	cmdArgs := append([]string{"-o", "StrictHostKeyChecking=no", c.sshTarget}, args...)
-	cmd := exec.Command("ssh", cmdArgs...)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
 }
 
 const (
@@ -165,28 +102,19 @@ func agentDataDirs(userID string) (workspace, memory, home string) {
 	return base + "/workspace", base + "/memory", base + "/home"
 }
 
-// ensureAgentDirs creates per-user data directories on the remote host via SSH.
-func (c *Client) ensureAgentDirs(userID string) error {
-	workspace, memory, home := agentDataDirs(userID)
-	cmd := fmt.Sprintf("mkdir -p %s %s %s", workspace, memory, home)
-	if _, err := c.RunSSH(cmd); err != nil {
-		return fmt.Errorf("ensure agent dirs for %s: %w", userID, err)
-	}
-	return nil
+// fixBindMountOwnership sets correct ownership on bind-mounted dirs inside the container.
+func (c *Client) fixBindMountOwnership(containerName string) error {
+	_, err := c.Exec(containerName, "chown", "-R", "1000:1000",
+		"/home/agent/workspace", "/home/agent/memory", "/home/agent/home")
+	return err
 }
 
 // Create creates and starts a new container from the configured image.
 // userID is used to bind-mount persistent per-user data directories and set resource limits.
+// Docker bind mounts auto-create host directories; ownership is fixed inside the container after start.
 func (c *Client) Create(name, userID string, envVars map[string]string, hostPort int) error {
 	log.Info().Str("name", name).Str("image", c.image).Int("host_port", hostPort).Msg("creating container")
 	ctx := context.Background()
-
-	if userID != "" {
-		if err := c.ensureAgentDirs(userID); err != nil {
-			log.Warn().Err(err).Str("user_id", userID).Msg("failed to ensure agent dirs; continuing without bind mounts")
-			userID = "" // fall back to no bind mounts rather than failing provision
-		}
-	}
 
 	var env []string
 	for k, v := range envVars {
@@ -247,6 +175,13 @@ func (c *Client) Create(name, userID string, envVars map[string]string, hostPort
 
 	if err := c.cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker start %s: %w", name, err)
+	}
+
+	// Fix ownership on bind-mounted directories (Docker creates them as root)
+	if userID != "" {
+		if err := c.fixBindMountOwnership(name); err != nil {
+			log.Warn().Err(err).Str("name", name).Msg("fix bind mount ownership failed")
+		}
 	}
 	return nil
 }
@@ -421,26 +356,10 @@ func (c *Client) List() ([]ContainerInfo, error) {
 	return result, nil
 }
 
-// WaitForHealth polls the agent health endpoint until ready.
+// WaitForHealth polls the agent health endpoint via HTTP until ready.
 func (c *Client) WaitForHealth(ip string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
 	healthURL := fmt.Sprintf("http://%s:%d/healthz", ip, c.agentPort)
-	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 --max-time 5 %s", healthURL)
-
-	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
-
-	for time.Now().Before(deadline) {
-		out, err := c.RunSSH(curlCmd)
-		if err == nil {
-			code := strings.TrimSpace(strings.Trim(out, "'"))
-			if code == "200" {
-				log.Info().Str("url", healthURL).Str("status", code).Msg("container healthy")
-				return nil
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return fmt.Errorf("container at %s not healthy after %s", ip, timeout)
+	return httpHealthPoll(healthURL, timeout)
 }
 
 // Exec runs a command inside a container via docker exec.
@@ -824,24 +743,29 @@ func (c *Client) ContainerLogs(containerName string, lines int) (string, error) 
 
 // WaitForHealthPort polls the agent health endpoint via host port mapping until ready.
 func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
 	healthURL := fmt.Sprintf("http://%s:%d/healthz", c.hostIP, hostPort)
-	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 --max-time 5 %s", healthURL)
+	return httpHealthPoll(healthURL, timeout)
+}
 
-	log.Debug().Str("url", healthURL).Dur("timeout", timeout).Msg("waiting for container health")
+// httpHealthPoll polls a URL until HTTP 200 or timeout.
+func httpHealthPoll(url string, timeout time.Duration) error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	deadline := time.Now().Add(timeout)
+
+	log.Debug().Str("url", url).Dur("timeout", timeout).Msg("waiting for health")
 
 	for time.Now().Before(deadline) {
-		out, err := c.RunSSH(curlCmd)
+		resp, err := client.Get(url)
 		if err == nil {
-			code := strings.TrimSpace(strings.Trim(out, "'"))
-			if code == "200" {
-				log.Info().Str("url", healthURL).Str("status", code).Msg("container healthy")
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				log.Info().Str("url", url).Msg("health check passed")
 				return nil
 			}
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return fmt.Errorf("container at %s:%d not healthy after %s", c.hostIP, hostPort, timeout)
+	return fmt.Errorf("health check %s not ready after %s", url, timeout)
 }
 
 // ProvisionContainer creates a new container with env vars injected and waits for health.

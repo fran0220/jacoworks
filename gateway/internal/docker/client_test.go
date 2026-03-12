@@ -1,8 +1,10 @@
 package docker
 
 import (
+	"bufio"
 	"context"
 	"io"
+	"net"
 	"strings"
 	"testing"
 
@@ -102,8 +104,18 @@ func (m *mockDockerClient) ContainerExecCreate(_ context.Context, _ string, _ ty
 	return types.IDResponse{}, nil
 }
 
+// nopConn is a minimal net.Conn for testing HijackedResponse.Close().
+type nopConn struct{ net.Conn }
+
+func (nopConn) Close() error                     { return nil }
+func (nopConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (nopConn) Read(p []byte) (int, error)        { return 0, io.EOF }
+
 func (m *mockDockerClient) ContainerExecAttach(_ context.Context, _ string, _ types.ExecStartCheck) (types.HijackedResponse, error) {
-	return types.HijackedResponse{}, nil
+	return types.HijackedResponse{
+		Reader: bufio.NewReader(strings.NewReader("")),
+		Conn:   nopConn{},
+	}, nil
 }
 
 func (m *mockDockerClient) ContainerExecInspect(_ context.Context, _ string) (types.ContainerExecInspect, error) {
@@ -135,12 +147,12 @@ var _ dockerAPI = (*mockDockerClient)(nil)
 
 func newTestClient(mock *mockDockerClient) *Client {
 	return &Client{
-		sshTarget: "opc@10.0.1.3",
-		image:     "jacoworks/vm-agent:latest",
-		network:   "agent-net",
-		agentPort: 18789,
-		hostIP:    "10.0.1.3",
-		cli:       mock,
+		dockerHost: "tcp://10.0.1.3:2375",
+		image:      "jacoworks/vm-agent:latest",
+		network:    "agent-net",
+		agentPort:  18789,
+		hostIP:     "10.0.1.3",
+		cli:        mock,
 	}
 }
 

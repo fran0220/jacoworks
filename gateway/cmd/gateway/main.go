@@ -138,7 +138,7 @@ func main() {
 
 	// Initialize Docker client
 	dockerClient := dockerpkg.NewClient(
-		cfg.Docker.SSHTarget,
+		cfg.Docker.DockerHost,
 		cfg.Docker.Image,
 		cfg.Docker.Network,
 		cfg.Docker.AgentPort,
@@ -182,9 +182,9 @@ func main() {
 	// OpenClaw Docker client + freezer (separate host, "oc-" prefix)
 	var ocClient *dockerpkg.OpenClawClient
 	var ocFreezer *dockerpkg.Freezer
-	if cfg.OpenClaw.SSHTarget != "" {
+	if cfg.OpenClaw.DockerHost != "" {
 		ocDockerClient := dockerpkg.NewClient(
-			cfg.OpenClaw.SSHTarget,
+			cfg.OpenClaw.DockerHost,
 			cfg.OpenClaw.Image,
 			"",
 			cfg.OpenClaw.Port,
@@ -199,7 +199,7 @@ func main() {
 				log.Error().Err(err).Str("container", containerName).Msg("openclaw idle stop: update status failed")
 			}
 		})
-		log.Info().Str("ssh_target", cfg.OpenClaw.SSHTarget).Str("image", cfg.OpenClaw.Image).Msg("openclaw backend initialized")
+		log.Info().Str("docker_host", cfg.OpenClaw.DockerHost).Str("image", cfg.OpenClaw.Image).Msg("openclaw backend initialized")
 	}
 
 	// Initialize Goth providers
@@ -218,15 +218,27 @@ func main() {
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
 	proxyHandler := proxy.NewHandler(s, dockerClient, freezer, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
 	backendAdapter := dockerpkg.NewBackendAdapter(dockerClient)
-	agentProxy := agent.NewProxy(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
 	execHandler := execws.NewHandler(s, dockerClient, freezer)
 
 	// Inject container env vars for auto-reprovision of destroyed containers
 	envVars := containerEnvVars(cfg)
 	proxyHandler.SetContainerEnvVars(envVars)
-	agentProxy.SetContainerEnvVars(envVars)
 
-	channelPool := agent.NewChannelPool(agentProxy, 5*time.Minute, 1024)
+	// Build UpstreamDialer map for unified channel architecture
+	vmDialer := agent.NewVMAgentDialer(s, backendAdapter, freezer, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
+	vmDialer.SetContainerEnvVars(envVars)
+
+	dialers := map[string]agent.UpstreamDialer{
+		store.ContainerTypeVMAgent: vmDialer,
+	}
+
+	if ocClient != nil {
+		ocDialer := agent.NewOpenClawDialer(s, ocClient, ocFreezer)
+		ocDialer.SetAutoPairEnabled(true)
+		dialers[store.ContainerTypeOpenClaw] = ocDialer
+	}
+
+	channelPool := agent.NewChannelPool(s, dialers, 5*time.Minute, 1024)
 	defer channelPool.Close()
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
 	defer wsTicketStore.Close()
@@ -234,13 +246,6 @@ func main() {
 		ph.CaptureEvent(userID, event, properties)
 	})
 	sseHandler := agent.NewSSEHandler(channelPool)
-
-	// OpenClaw bridge for cloud containers
-	if ocClient != nil {
-		openclawBridge := agent.NewOpenClawBridge(s, ocClient, ocFreezer)
-		openclawBridge.SetAutoPairEnabled(true)
-		wsHandler.SetOpenClawBridge(openclawBridge)
-	}
 
 	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
@@ -313,11 +318,20 @@ func main() {
 	// Authenticated: chat proxy
 	mux.Handle("POST /v1/chat/completions", authMiddleware.Authenticate(http.HandlerFunc(proxyHandler.ChatCompletions)))
 
-	// Authenticated: Agent WebSocket proxy (direct desktop ↔ container)
-	mux.Handle("GET /ws/agent", authMiddleware.Authenticate(agentProxy))
 	mux.Handle("GET /ws/exec", authMiddleware.Authenticate(execHandler))
 
-	// Agent browser WebSocket bridge (ticket auth)
+	// Desktop ticket endpoint (same ticket store as webchat)
+	mux.Handle("POST /api/agent/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wsTicketStore.IssueTicket(w, r)
+		if user := auth.GetUser(r.Context()); user != nil {
+			ph.CaptureEvent(user.ID, "ws_ticket_issued", map[string]interface{}{
+				"user_name": user.Name,
+				"source":    "desktop",
+			})
+		}
+	})))
+
+	// Agent browser WebSocket bridge (ticket auth — unified for desktop + webchat)
 	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wsTicketStore.IssueTicket(w, r)
 		if user := auth.GetUser(r.Context()); user != nil {

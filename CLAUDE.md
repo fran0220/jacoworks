@@ -47,16 +47,16 @@ make release V=1.5.0      # 完整发布 (构建 macOS + 上传 COS + 注册 DB)
 
 ```
 桌面端 (Tauri + React)
-  └─ CloudAgentWS → Gateway /ws/agent → Docker 容器 (vm-agent RPC 协议)
+  └─ CloudAgentWS → ticket auth → Gateway /ws/oc → ChannelPool → Docker 容器 (vm-agent)
      本地仅保留文件管理 (记忆/技能文件读写、附件导入、文件预览)
 
 Web 聊天 (webchat React SPA, OpenClaw 专属)
-  └─ ticket auth → Gateway /ws/oc → OpenClaw 容器 (OpenClaw 帧协议)
+  └─ ticket auth → Gateway /ws/oc → ChannelPool → OpenClaw 容器 (OpenClaw 帧协议)
 
 Go 网关 (Gateway)
   ├─ 认证 (飞书 SSO / bcrypt / 激活码)
   ├─ 会话 CRUD + LLM 配置下发
-  ├─ WS 代理 (vm-agent + OpenClaw 双通道)
+  ├─ 统一 WS 代理 (UpstreamDialer + ChannelPool 架构, 事件缓冲 + 断点续传)
   ├─ Docker 容器管理 (SSH via Tailscale → oracle/local)
   ├─ 技能存储与分发 (system + user skills → 容器 provision 时推送)
   └─ 云端定时任务调度
@@ -68,6 +68,8 @@ Rust 官网 (Website, Axum + Askama)
 ```
 
 **双容器后端**: vm-agent (桌面端, oracle ARM64) / OpenClaw (webchat, local x86_64)，通过 `containers.container_type` 区分。
+
+**统一 WS 连接管理**: 所有 WS 连接（Desktop + Webchat）统一走 `/ws/oc` ticket 端点 → `ChannelPool` 持久上游连接。`UpstreamDialer` 接口抽象 vm-agent/OpenClaw 协议差异。`RingBuffer` 事件缓冲支持 `lastSeq` 断点续传。旧 `/ws/agent` 直连路由保留兼容但已标记 deprecated。
 
 ## 网络
 

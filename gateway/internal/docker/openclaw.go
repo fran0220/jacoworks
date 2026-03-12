@@ -831,8 +831,9 @@ func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, userID, toke
 	return oc.injectTemplateAgents(ctx, userID, data)
 }
 
-// WriteConfig generates and writes openclaw.json into the container via Docker SDK.
-func (oc *OpenClawClient) WriteConfig(userID, token string) error {
+// WriteConfig generates and writes openclaw.json into a running container via CopyToContainer.
+// Must be called after the container is started.
+func (oc *OpenClawClient) WriteConfig(containerName, userID, token string) error {
 	ctx := context.Background()
 
 	data, err := oc.GenerateConfigFromDB(ctx, userID, token)
@@ -840,50 +841,31 @@ func (oc *OpenClawClient) WriteConfig(userID, token string) error {
 		return fmt.Errorf("generate openclaw config: %w", err)
 	}
 
-	// Write config to host bind-mount directory via SSH (container doesn't exist yet at this point)
-	userDir := fmt.Sprintf("%s/%s", oc.dataRoot, userID)
-	{
-		configDir := userDir + "/.openclaw"
-
-		if _, sshErr := oc.client.RunSSH("mkdir", "-p", configDir); sshErr != nil {
-			return fmt.Errorf("mkdir config dir: %w", sshErr)
-		}
-		if _, sshErr := oc.client.RunSSH("mkdir", "-p", userDir+"/workspace"); sshErr != nil {
-			return fmt.Errorf("mkdir workspace dir: %w", sshErr)
-		}
-		if _, sshErr := oc.client.RunSSH("mkdir", "-p", userDir+"/workspace/jamoss/data", userDir+"/workspace/jamoss/logs"); sshErr != nil {
-			return fmt.Errorf("mkdir jamoss workspace dirs: %w", sshErr)
-		}
-
-		// Install team-builder skill to default agent skills (enables self-service team creation)
-		teamBuilderDir := configDir + "/skills/team-builder"
-		if _, sshErr := oc.client.RunSSH("mkdir", "-p", teamBuilderDir); sshErr != nil {
-			log.Warn().Err(sshErr).Msg("openclaw: mkdir team-builder skill dir failed")
-		} else {
-			if skillData, skillErr := oc.loadTeamBuilderSkill(); skillErr == nil {
-				escaped := strings.ReplaceAll(string(skillData), "'", "'\\''")
-				writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s/SKILL.md", escaped, teamBuilderDir)
-				if _, sshErr := oc.client.RunSSH("bash", "-c", fmt.Sprintf("'%s'", writeCmd)); sshErr != nil {
-					log.Warn().Err(sshErr).Msg("openclaw: write team-builder SKILL.md failed")
-				}
-			} else {
-				log.Warn().Err(skillErr).Msg("openclaw: load team-builder skill failed")
-			}
-		}
-
-		hostConfigPath := configDir + "/openclaw.json"
-		escaped := strings.ReplaceAll(string(data), "'", "'\\''")
-		writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s", escaped, hostConfigPath)
-		if _, sshErr := oc.client.RunSSH("bash", "-c", fmt.Sprintf("'%s'", writeCmd)); sshErr != nil {
-			return fmt.Errorf("write config: %w", sshErr)
-		}
-
-		if _, sshErr := oc.client.RunSSH("chown", "-R", "1000:1000", userDir); sshErr != nil {
-			return fmt.Errorf("chown user dir: %w", sshErr)
-		}
-
-		log.Info().Str("user_id", userID).Str("path", hostConfigPath).Msg("openclaw config written to host")
+	// 1. Write openclaw.json
+	configPath := "/home/node/.openclaw/openclaw.json"
+	if err := oc.client.copyFileToContainer(containerName, configPath, data); err != nil {
+		return fmt.Errorf("copy config: %w", err)
 	}
+
+	// 2. Write team-builder SKILL.md
+	if skillData, err := oc.loadTeamBuilderSkill(); err == nil {
+		skillPath := "/home/node/.openclaw/skills/team-builder/SKILL.md"
+		if err := oc.client.copyFileToContainer(containerName, skillPath, skillData); err != nil {
+			log.Warn().Err(err).Msg("openclaw: write team-builder skill failed")
+		}
+	} else {
+		log.Warn().Err(err).Msg("openclaw: load team-builder skill failed")
+	}
+
+	// 3. Create workspace directories
+	oc.client.Exec(containerName, "mkdir", "-p",
+		"/data/workspace/jamoss/data", "/data/workspace/jamoss/logs")
+
+	// 4. Fix ownership
+	oc.client.Exec(containerName, "chown", "-R", "1000:1000",
+		"/home/node/.openclaw", "/data/workspace")
+
+	log.Info().Str("user_id", userID).Str("container", containerName).Msg("openclaw config written to container")
 	return nil
 }
 
@@ -964,10 +946,6 @@ func (oc *OpenClawClient) ContainerEnvVars() map[string]string {
 func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (string, error) {
 	log.Info().Str("name", name).Str("user_id", userID).Int("host_port", hostPort).Msg("provisioning openclaw container")
 
-	if err := oc.WriteConfig(userID, token); err != nil {
-		return "", fmt.Errorf("write config: %w", err)
-	}
-
 	ctx := context.Background()
 	userDir := fmt.Sprintf("%s/%s", oc.dataRoot, userID)
 
@@ -1016,22 +994,30 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 		},
 	}
 
+	// 1. Create container (bind mounts auto-create host directories)
 	resp, err := oc.client.cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("docker run %s: %w", name, err)
 	}
 
+	// 2. Start container
 	if err := oc.client.cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
 		return "", fmt.Errorf("docker start %s: %w", name, err)
 	}
 
-	time.Sleep(3 * time.Second)
+	// 3. Write config into running container via CopyToContainer
+	if err := oc.WriteConfig(name, userID, token); err != nil {
+		return "", fmt.Errorf("write config: %w", err)
+	}
 
+	// 4. Wait for health
+	time.Sleep(3 * time.Second)
 	healthURL := fmt.Sprintf("http://%s:%d/healthz", oc.client.hostIP, hostPort)
-	if err := oc.waitForHealthURL(healthURL, 60*time.Second); err != nil {
+	if err := httpHealthPoll(healthURL, 60*time.Second); err != nil {
 		log.Warn().Err(err).Str("name", name).Msg("openclaw container started but health check failed")
 	}
 
+	// 5. Install JaMOSS
 	if err := oc.InstallJaMOSS(name, userID, token); err != nil {
 		log.Warn().Err(err).Str("container", name).Str("user_id", userID).Msg("jamoss install failed during provision")
 	}
@@ -1041,24 +1027,9 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 }
 
 // waitForHealthURL polls a URL until it returns HTTP 200.
+// Delegates to the package-level httpHealthPoll defined in client.go.
 func (oc *OpenClawClient) waitForHealthURL(url string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	curlCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --connect-timeout 2 --max-time 5 %s", url)
-
-	log.Debug().Str("url", url).Dur("timeout", timeout).Msg("waiting for openclaw health")
-
-	for time.Now().Before(deadline) {
-		out, err := oc.client.RunSSH(curlCmd)
-		if err == nil {
-			code := strings.TrimSpace(strings.Trim(out, "'"))
-			if code == "200" {
-				log.Info().Str("url", url).Msg("openclaw container healthy")
-				return nil
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return fmt.Errorf("openclaw at %s not healthy after %s", url, timeout)
+	return httpHealthPoll(url, timeout)
 }
 
 func (oc *OpenClawClient) waitForContainerHealthURL(containerName, url string, timeout time.Duration) error {

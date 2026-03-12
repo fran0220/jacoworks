@@ -38,7 +38,7 @@ func (h *SSEHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID)
+	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID, store.ContainerTypeVMAgent)
 	if err != nil {
 		writeSSEJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
@@ -123,7 +123,7 @@ func (h *SSEHandler) SendCommand(w http.ResponseWriter, r *http.Request) {
 		msgType = "prompt"
 	}
 
-	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID)
+	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID, store.ContainerTypeVMAgent)
 	if err != nil {
 		writeSSEJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
@@ -164,7 +164,7 @@ func (h *SSEHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := ChannelStatus{ContainerName: containerName}
-	if ch := h.pool.Get(user.ID); ch != nil {
+	if ch := h.pool.Get(user.ID, store.ContainerTypeVMAgent); ch != nil {
 		status = ch.Status()
 		if status.ContainerName == "" {
 			status.ContainerName = containerName

@@ -114,13 +114,13 @@ type WebSocketProbe = {
 function wsAgentUrl(ticket: string): string {
   const url = new URL(env!.gatewayUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/ws/agent";
+  url.pathname = "/ws/oc";
   url.search = `ticket=${encodeURIComponent(ticket)}`;
   return url.toString();
 }
 
 function wsAgentPath(ticket: string): string {
-  return `/ws/agent?ticket=${encodeURIComponent(ticket)}`;
+  return `/ws/oc?ticket=${encodeURIComponent(ticket)}`;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -1196,7 +1196,7 @@ describe("11. Cowork Bridge", () => {
     expect(res.status).toBe(401);
   });
 
-  test("POST /api/oc/ws-ticket → GET /ws/agent 完整流程", async () => {
+  test("POST /api/oc/ws-ticket → GET /ws/oc 完整流程", async () => {
     if (skip() || skipNoUser()) return;
 
     const status = await fetchContainerStatus(userToken);
@@ -1220,7 +1220,7 @@ describe("11. Cowork Bridge", () => {
     expect([401, 502]).toContain(fallback.status);
   });
 
-  test("GET /ws/agent — invalid ticket 被拒绝", async () => {
+  test("GET /ws/oc — invalid ticket 被拒绝", async () => {
     if (skip()) return;
 
     const invalidTicket = `${PREFIX}-invalid-ticket`;
@@ -1231,7 +1231,7 @@ describe("11. Cowork Bridge", () => {
     expect(probe.status).toBe(401);
   });
 
-  test("GET /ws/agent — ticket 单次使用，重复连接被拒绝", async () => {
+  test("GET /ws/oc — ticket 单次使用，重复连接被拒绝", async () => {
     if (skip()) return;
 
     const ticket = await issueWsTicket(adminToken);
@@ -1246,7 +1246,7 @@ describe("11. Cowork Bridge", () => {
     expect(probe.status).toBe(401);
   });
 
-  test("GET /ws/agent — 过期 ticket 被拒绝", async () => {
+  test("GET /ws/oc — 过期 ticket 被拒绝", async () => {
     if (skip()) return;
 
     const ticket = await issueWsTicket(adminToken);

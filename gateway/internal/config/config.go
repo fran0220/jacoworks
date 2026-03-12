@@ -24,7 +24,7 @@ type Config struct {
 }
 
 type OpenClawConfig struct {
-	SSHTarget string `yaml:"ssh_target"`
+	DockerHost string `yaml:"docker_host"`
 	Image     string `yaml:"image"`
 	Port      int    `yaml:"port"`
 	HostIP    string `yaml:"host_ip"`
@@ -76,7 +76,7 @@ type AuthConfig struct {
 }
 
 type DockerConfig struct {
-	SSHTarget    string `yaml:"ssh_target"`
+	DockerHost   string `yaml:"docker_host"`
 	Image        string `yaml:"image"`
 	Network      string `yaml:"network"`
 	AgentPort    int    `yaml:"agent_port"`
@@ -172,8 +172,8 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Auth.SessionTTLHours = ttl
 		}
 	}
-	if v := os.Getenv("GATEWAY_DOCKER_SSH_TARGET"); v != "" {
-		cfg.Docker.SSHTarget = v
+	if v := os.Getenv("GATEWAY_DOCKER_HOST"); v != "" {
+		cfg.Docker.DockerHost = v
 	}
 	if v := os.Getenv("GATEWAY_DOCKER_IMAGE"); v != "" {
 		cfg.Docker.Image = v
@@ -189,8 +189,8 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("GATEWAY_DOCKER_GATEWAY_TOKEN"); v != "" {
 		cfg.Docker.GatewayToken = v
 	}
-	if v := os.Getenv("GATEWAY_OPENCLAW_SSH_TARGET"); v != "" {
-		cfg.OpenClaw.SSHTarget = v
+	if v := os.Getenv("GATEWAY_OPENCLAW_HOST"); v != "" {
+		cfg.OpenClaw.DockerHost = v
 	}
 	if v := os.Getenv("GATEWAY_OPENCLAW_IMAGE"); v != "" {
 		cfg.OpenClaw.Image = v

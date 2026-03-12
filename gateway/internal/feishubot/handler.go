@@ -253,7 +253,7 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 // collects the streaming response. This uses the same WS protocol as the desktop,
 // ensuring conversation context is shared between both channels.
 func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, attachments []imageAttachment) (string, error) {
-	channel, _, err := h.channelPool.GetOrCreate(ctx, userID)
+	channel, _, err := h.channelPool.GetOrCreate(ctx, userID, store.ContainerTypeVMAgent)
 	if err != nil {
 		return "", fmt.Errorf("get channel: %w", err)
 	}

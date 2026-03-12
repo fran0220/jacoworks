@@ -43,17 +43,24 @@ type ChannelStatus struct {
 	Subscribers   int    `json:"subscribers"`
 }
 
-// ChannelPool manages one persistent upstream channel per user.
+// channelKey identifies a unique channel by user and container type.
+type channelKey struct {
+	userID        string
+	containerType string
+}
+
+// ChannelPool manages persistent upstream channels keyed by (userID, containerType).
 type ChannelPool struct {
-	proxy      *Proxy
+	dialers    map[string]UpstreamDialer // "vm-agent" → dialer, "openclaw" → dialer
+	store      *store.Store
 	idleTTL    time.Duration
 	bufferSize int
 
 	mu       sync.RWMutex
-	channels map[string]*UserChannel
+	channels map[channelKey]*UserChannel
 }
 
-func NewChannelPool(proxy *Proxy, idleTTL time.Duration, bufferSize int) *ChannelPool {
+func NewChannelPool(s *store.Store, dialers map[string]UpstreamDialer, idleTTL time.Duration, bufferSize int) *ChannelPool {
 	if idleTTL <= 0 {
 		idleTTL = defaultIdleTTL
 	}
@@ -62,28 +69,35 @@ func NewChannelPool(proxy *Proxy, idleTTL time.Duration, bufferSize int) *Channe
 	}
 
 	return &ChannelPool{
-		proxy:      proxy,
+		dialers:    dialers,
+		store:      s,
 		idleTTL:    idleTTL,
 		bufferSize: bufferSize,
-		channels:   make(map[string]*UserChannel),
+		channels:   make(map[channelKey]*UserChannel),
 	}
 }
 
-func (p *ChannelPool) GetOrCreate(ctx context.Context, userID string) (*UserChannel, *store.ContainerInfo, error) {
-	if p.proxy == nil || p.proxy.store == nil {
+func (p *ChannelPool) GetOrCreate(ctx context.Context, userID, containerType string) (*UserChannel, *store.ContainerInfo, error) {
+	if p.store == nil {
 		return nil, nil, fmt.Errorf("channel pool not initialized")
 	}
 
-	info, err := p.proxy.store.GetContainerInfo(ctx, userID, store.ContainerTypeVMAgent)
+	dialer, ok := p.dialers[containerType]
+	if !ok {
+		return nil, nil, fmt.Errorf("unsupported container type: %s", containerType)
+	}
+
+	info, err := p.store.GetContainerInfo(ctx, userID, containerType)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	key := channelKey{userID: userID, containerType: containerType}
 	p.mu.Lock()
-	ch := p.channels[userID]
+	ch := p.channels[key]
 	if ch == nil || ch.closed.Load() {
-		ch = newUserChannel(p, userID)
-		p.channels[userID] = ch
+		ch = newUserChannel(p, userID, containerType, dialer)
+		p.channels[key] = ch
 	}
 	p.mu.Unlock()
 
@@ -91,24 +105,25 @@ func (p *ChannelPool) GetOrCreate(ctx context.Context, userID string) (*UserChan
 	return ch, info, nil
 }
 
-func (p *ChannelPool) Get(userID string) *UserChannel {
+func (p *ChannelPool) Get(userID, containerType string) *UserChannel {
+	key := channelKey{userID: userID, containerType: containerType}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.channels[userID]
+	return p.channels[key]
 }
 
 func (p *ChannelPool) ContainerInfo(ctx context.Context, userID, containerType string) (*store.ContainerInfo, error) {
-	if p.proxy == nil || p.proxy.store == nil {
+	if p.store == nil {
 		return nil, fmt.Errorf("channel pool not initialized")
 	}
-	return p.proxy.store.GetContainerInfo(ctx, userID, containerType)
+	return p.store.GetContainerInfo(ctx, userID, containerType)
 }
 
-func (p *ChannelPool) removeIfMatch(userID string, ch *UserChannel) {
+func (p *ChannelPool) removeIfMatch(key channelKey, ch *UserChannel) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.channels[userID] == ch {
-		delete(p.channels, userID)
+	if p.channels[key] == ch {
+		delete(p.channels, key)
 	}
 }
 
@@ -118,7 +133,7 @@ func (p *ChannelPool) Close() {
 	for _, ch := range p.channels {
 		channels = append(channels, ch)
 	}
-	p.channels = make(map[string]*UserChannel)
+	p.channels = make(map[channelKey]*UserChannel)
 	p.mu.Unlock()
 
 	for _, ch := range channels {
@@ -128,8 +143,10 @@ func (p *ChannelPool) Close() {
 
 // UserChannel maintains one upstream WS session and fans out events to SSE/WS clients.
 type UserChannel struct {
-	pool   *ChannelPool
-	userID string
+	pool          *ChannelPool
+	userID        string
+	containerType string
+	dialer        UpstreamDialer
 
 	eventBuffer *RingBuffer
 
@@ -148,14 +165,16 @@ type UserChannel struct {
 	doneCh chan struct{}
 }
 
-func newUserChannel(pool *ChannelPool, userID string) *UserChannel {
+func newUserChannel(pool *ChannelPool, userID, containerType string, dialer UpstreamDialer) *UserChannel {
 	ch := &UserChannel{
-		pool:        pool,
-		userID:      userID,
-		eventBuffer: NewRingBuffer(pool.bufferSize),
-		subscribers: make(map[uint64]chan Event),
-		stopCh:      make(chan struct{}),
-		doneCh:      make(chan struct{}),
+		pool:          pool,
+		userID:        userID,
+		containerType: containerType,
+		dialer:        dialer,
+		eventBuffer:   NewRingBuffer(pool.bufferSize),
+		subscribers:   make(map[uint64]chan Event),
+		stopCh:        make(chan struct{}),
+		doneCh:        make(chan struct{}),
 	}
 
 	ch.reconnecting.Store(true)
@@ -217,17 +236,9 @@ func (c *UserChannel) Subscribe(lastSeq uint64) ([]Event, <-chan Event, func()) 
 	return replay, sub, unsubscribe
 }
 
-// SendRequest sends a vm-agent protocol message to the upstream container.
-// msgType is the vm-agent message type (e.g. "prompt", "abort", "health").
-// payload is the message body to merge with id and type.
+// SendRequest sends a protocol message to the upstream container.
+// Uses the channel's dialer to format the message according to the upstream protocol.
 func (c *UserChannel) SendRequest(msgType string, payload json.RawMessage, requestID string) error {
-	if msgType == "" {
-		return fmt.Errorf("message type is required")
-	}
-	if len(payload) == 0 {
-		payload = json.RawMessage(`{}`)
-	}
-
 	if c.reconnecting.Load() {
 		return ErrChannelReconnecting
 	}
@@ -241,19 +252,9 @@ func (c *UserChannel) SendRequest(msgType string, payload json.RawMessage, reque
 		return ErrChannelNotConnected
 	}
 
-	// vm-agent format: merge payload with id and type
-	var msg map[string]interface{}
-	if err := json.Unmarshal(payload, &msg); err != nil {
-		msg = make(map[string]interface{})
-	}
-	msg["id"] = requestID
-	if msg["type"] == nil {
-		msg["type"] = msgType
-	}
-
-	data, err := json.Marshal(msg)
+	data, err := c.dialer.FormatClientMessage(msgType, payload, requestID)
 	if err != nil {
-		return fmt.Errorf("encode request: %w", err)
+		return fmt.Errorf("format request: %w", err)
 	}
 
 	c.upstreamWriteMu.Lock()
@@ -268,8 +269,8 @@ func (c *UserChannel) SendRequest(msgType string, payload json.RawMessage, reque
 		return ErrChannelReconnecting
 	}
 
-	if c.pool.proxy.freezer != nil && containerName != "" {
-		c.pool.proxy.freezer.Touch(containerName)
+	if freezer := c.dialer.GetFreezer(); freezer != nil && containerName != "" {
+		freezer.Touch(containerName)
 	}
 
 	return nil
@@ -318,7 +319,7 @@ func (c *UserChannel) run() {
 
 		c.reconnecting.Store(true)
 
-		info, err := c.pool.proxy.store.GetContainerInfo(context.Background(), c.userID, store.ContainerTypeVMAgent)
+		info, err := c.pool.store.GetContainerInfo(context.Background(), c.userID, c.containerType)
 		if err != nil {
 			c.publishProxyError("container not provisioned")
 			if !c.waitReconnect(backoff) {
@@ -330,11 +331,11 @@ func (c *UserChannel) run() {
 
 		c.setContainerName(info.ContainerName)
 
-		if c.pool.proxy.freezer != nil {
-			c.pool.proxy.freezer.Touch(info.ContainerName)
+		if freezer := c.dialer.GetFreezer(); freezer != nil {
+			freezer.Touch(info.ContainerName)
 		}
 
-		if err := c.pool.proxy.ensureRunning(context.Background(), info, c.userID); err != nil {
+		if err := c.dialer.EnsureRunning(context.Background(), info, c.userID); err != nil {
 			log.Warn().Err(err).Str("user_id", c.userID).Str("container", info.ContainerName).Msg("agent channel: ensure running failed")
 			c.publishProxyError("container unavailable, reconnecting")
 			if !c.waitReconnect(backoff) {
@@ -344,10 +345,9 @@ func (c *UserChannel) run() {
 			continue
 		}
 
-		upstreamURL := c.pool.proxy.upstreamURL(info)
-		upstream, err := dialWithRetry(upstreamURL, dialRetryTotal)
+		upstream, err := c.dialer.Dial(info)
 		if err != nil {
-			log.Warn().Err(err).Str("user_id", c.userID).Str("url", upstreamURL).Msg("agent channel: upstream dial failed")
+			log.Warn().Err(err).Str("user_id", c.userID).Str("url", c.dialer.UpstreamURL(info)).Msg("agent channel: upstream dial failed")
 			c.publishProxyError("upstream connection failed, reconnecting")
 			if !c.waitReconnect(backoff) {
 				return
@@ -355,8 +355,6 @@ func (c *UserChannel) run() {
 			backoff = nextBackoff(backoff)
 			continue
 		}
-
-		// No handshake needed — vm-agent uses token query param auth
 
 		c.mu.Lock()
 		c.upstream = upstream
@@ -419,20 +417,20 @@ func (c *UserChannel) readLoop(upstream *websocket.Conn, containerName string) e
 			return err
 		}
 
-		if c.pool.proxy.freezer != nil {
-			c.pool.proxy.freezer.Touch(containerName)
+		if freezer := c.dialer.GetFreezer(); freezer != nil {
+			freezer.Touch(containerName)
 		}
 
 		if msgType != websocket.TextMessage {
 			continue
 		}
 
-		eventType, ok := mapUpstreamToEvent(msg)
+		eventType, data, ok := c.dialer.MapUpstreamMessage(msg)
 		if !ok {
 			continue
 		}
 
-		c.publish(eventType, msg)
+		c.publish(eventType, data)
 	}
 }
 
@@ -450,6 +448,13 @@ func (c *UserChannel) publish(eventType string, data []byte) {
 		select {
 		case sub <- event:
 		default:
+			// Subscriber queue full — event dropped. Attempt to notify via proxy.gap.
+			gapPayload, _ := json.Marshal(map[string]string{"type": "proxy.gap"})
+			gapEvent := c.eventBuffer.Push(Event{Event: "proxy.gap", Data: gapPayload})
+			select {
+			case sub <- gapEvent:
+			default:
+			}
 		}
 	}
 	c.mu.RUnlock()
@@ -470,6 +475,7 @@ func (c *UserChannel) scheduleIdleCloseLocked() {
 		c.idleCloseTimer.Stop()
 	}
 
+	key := channelKey{userID: c.userID, containerType: c.containerType}
 	c.idleCloseTimer = time.AfterFunc(c.pool.idleTTL, func() {
 		c.mu.RLock()
 		idle := len(c.subscribers) == 0
@@ -480,8 +486,8 @@ func (c *UserChannel) scheduleIdleCloseLocked() {
 		}
 
 		c.Close()
-		c.pool.removeIfMatch(c.userID, c)
-		log.Info().Str("user_id", c.userID).Msg("agent channel: closed idle channel")
+		c.pool.removeIfMatch(key, c)
+		log.Info().Str("user_id", c.userID).Str("container_type", c.containerType).Msg("agent channel: closed idle channel")
 	})
 }
 

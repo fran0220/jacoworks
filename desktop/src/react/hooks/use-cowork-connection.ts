@@ -50,7 +50,7 @@ function shouldShowWakeupHint(reason: string): boolean {
 }
 
 function isFatalBootstrapError(message: string): boolean {
-  return message.includes("未找到登录 token") || message.includes("不支持的网关协议");
+  return message.includes("未找到登录 token") || message.includes("不支持的网关协议") || message.includes("登录已过期");
 }
 
 export function useCoworkConnection(authenticated = false) {

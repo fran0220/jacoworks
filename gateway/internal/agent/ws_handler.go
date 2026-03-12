@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -18,6 +19,9 @@ import (
 const (
 	wsClientWriteQueueSize = 256
 	wsClientReadLimit      = 1 << 20
+
+	// Client-facing pongWait (shorter than upstream's 120s)
+	wsClientPongWait = 90 * time.Second
 )
 
 var wsClientUpgrader = websocket.Upgrader{
@@ -31,22 +35,34 @@ var wsClientUpgrader = websocket.Upgrader{
 // EventCallback is invoked for key WebSocket lifecycle events (connect, disconnect, etc.).
 type EventCallback func(userID, event string, properties map[string]interface{})
 
-// WSHandler exposes vm-agent events/commands over browser WebSocket with ticket auth.
-// For OpenClaw containers, it delegates to OpenClawBridge instead of ChannelPool.
+// WSHandler exposes unified container events/commands over browser WebSocket with ticket auth.
+// Handles both vm-agent and OpenClaw containers through the ChannelPool abstraction.
 type WSHandler struct {
-	pool          *ChannelPool
-	ticketStore   *TicketStore
-	onEvent       EventCallback
-	openclawBridge *OpenClawBridge
+	pool        *ChannelPool
+	ticketStore *TicketStore
+	onEvent     EventCallback
 }
 
 func NewWSHandler(pool *ChannelPool, ticketStore *TicketStore, onEvent EventCallback) *WSHandler {
 	return &WSHandler{pool: pool, ticketStore: ticketStore, onEvent: onEvent}
 }
 
-// SetOpenClawBridge enables OpenClaw container support.
-func (h *WSHandler) SetOpenClawBridge(bridge *OpenClawBridge) {
-	h.openclawBridge = bridge
+// resolveContainerType determines which container type to use for a user.
+// Prefers OpenClaw if provisioned; falls back to vm-agent.
+func (h *WSHandler) resolveContainerType(ctx context.Context, userID string) (string, *store.ContainerInfo, error) {
+	// Try OpenClaw first
+	info, err := h.pool.ContainerInfo(ctx, userID, store.ContainerTypeOpenClaw)
+	if err == nil {
+		return store.ContainerTypeOpenClaw, info, nil
+	}
+
+	// Fall back to vm-agent
+	info, err = h.pool.ContainerInfo(ctx, userID, store.ContainerTypeVMAgent)
+	if err == nil {
+		return store.ContainerTypeVMAgent, info, nil
+	}
+
+	return "", nil, err
 }
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,61 +83,21 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up OpenClaw container first; fall back to vm-agent for legacy users
-	info, err := h.pool.ContainerInfo(r.Context(), userID, store.ContainerTypeOpenClaw)
-	if err != nil {
-		info, err = h.pool.ContainerInfo(r.Context(), userID, store.ContainerTypeVMAgent)
-	}
-	if err != nil {
-		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
-		return
-	}
-
-	// Dispatch to OpenClaw bridge for openclaw containers
-	if info.ContainerType == "openclaw" && h.openclawBridge != nil {
-		conn, err := wsClientUpgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Warn().Err(err).Str("user_id", userID).Msg("openclaw ws: upgrade failed")
-			return
-		}
-
-		if h.onEvent != nil {
-			h.onEvent(userID, "ws_oc_connected", map[string]interface{}{
-				"container":      info.ContainerName,
-				"container_type": "openclaw",
-			})
-		}
-
-		log.Info().Str("user_id", userID).Str("container", info.ContainerName).Str("ip", info.ContainerIP).Int("port", info.HostPort).Msg("openclaw ws: ensuring container is running")
-
-		// EnsureRunning before handing off
-		if err := h.openclawBridge.EnsureRunning(r.Context(), info, userID); err != nil {
-			log.Error().Err(err).Str("container", info.ContainerName).Msg("openclaw ws: container unavailable")
-			writeWSError(conn, "container unavailable, try again")
-			conn.Close()
-			return
-		}
-
-		h.openclawBridge.ServeSession(conn, info, userID)
-
-		if h.onEvent != nil {
-			h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{
-				"container":      info.ContainerName,
-				"container_type": "openclaw",
-			})
-		}
-		return
-	}
-
-	// ── vm-agent path (existing) ──────────────────────────────────
-
 	lastSeq, err := parseWSLastSeq(r.URL.Query().Get("lastSeq"))
 	if err != nil {
 		writeWSHTTPJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lastSeq"})
 		return
 	}
 
-	channel, info, err := h.pool.GetOrCreate(r.Context(), userID)
+	// Determine container type
+	containerType, _, err := h.resolveContainerType(r.Context(), userID)
+	if err != nil {
+		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
+		return
+	}
+
+	// Unified path: all container types go through ChannelPool
+	channel, info, err := h.pool.GetOrCreate(r.Context(), userID, containerType)
 	if err != nil {
 		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
@@ -129,7 +105,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := wsClientUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Msg("agent ws bridge: upgrade failed")
+		log.Warn().Err(err).Str("user_id", userID).Msg("ws bridge: upgrade failed")
 		return
 	}
 	defer conn.Close()
@@ -145,13 +121,15 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().
 		Str("user_id", userID).
 		Str("container", containerName).
+		Str("container_type", containerType).
 		Uint64("last_seq", lastSeq).
-		Msg("agent ws bridge: client connected")
+		Msg("ws bridge: client connected")
 
 	if h.onEvent != nil {
 		h.onEvent(userID, "ws_oc_connected", map[string]interface{}{
-			"container": containerName,
-			"last_seq":  lastSeq,
+			"container":      containerName,
+			"container_type": containerType,
+			"last_seq":       lastSeq,
 		})
 	}
 
@@ -160,20 +138,22 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().
 		Str("user_id", userID).
 		Str("container", containerName).
-		Msg("agent ws bridge: client disconnected")
+		Str("container_type", containerType).
+		Msg("ws bridge: client disconnected")
 
 	if h.onEvent != nil {
 		h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{
-			"container": containerName,
+			"container":      containerName,
+			"container_type": containerType,
 		})
 	}
 }
 
 func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, userID string, replay []Event, updates <-chan Event) {
 	conn.SetReadLimit(wsClientReadLimit)
-	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	_ = conn.SetReadDeadline(time.Now().Add(wsClientPongWait))
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(pongWait))
+		return conn.SetReadDeadline(time.Now().Add(wsClientPongWait))
 	})
 
 	outbound := make(chan []byte, wsClientWriteQueueSize)
@@ -202,7 +182,7 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 		case <-done:
 			return false
 		default:
-			log.Warn().Str("user_id", userID).Int("queue_size", len(outbound)).Msg("agent ws bridge: outbound queue overflow")
+			log.Warn().Str("user_id", userID).Int("queue_size", len(outbound)).Msg("ws bridge: outbound queue overflow")
 			closeConn()
 			return false
 		}
@@ -217,7 +197,7 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 			case payload := <-outbound:
 				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
 				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws bridge: write failed")
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: write failed")
 					return
 				}
 			}
@@ -235,7 +215,7 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 			case <-ticker.C:
 				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
 				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
-					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws bridge: ping failed")
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: ping failed")
 					return
 				}
 			}
@@ -245,7 +225,7 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 	for _, event := range replay {
 		payload, err := marshalWSEventFrame(event)
 		if err != nil {
-			log.Debug().Err(err).Str("user_id", userID).Msg("agent ws bridge: skip invalid replay event")
+			log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: skip invalid replay event")
 			continue
 		}
 		if !enqueue(payload) {
@@ -278,7 +258,7 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 
 				payload, err := marshalWSEventFrame(event)
 				if err != nil {
-					log.Debug().Err(err).Str("user_id", userID).Msg("agent ws bridge: skip invalid update event")
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: skip invalid update event")
 					continue
 				}
 				if !enqueue(payload) {
@@ -292,9 +272,9 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Info().Str("user_id", userID).Msg("agent ws bridge: client pong timeout")
+				log.Info().Str("user_id", userID).Msg("ws bridge: client pong timeout")
 			} else if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Debug().Err(err).Str("user_id", userID).Msg("agent ws bridge: read failed")
+				log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: read failed")
 			}
 			closeConn()
 			<-done
@@ -307,7 +287,7 @@ func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, us
 
 		_, err = h.handleClientMessage(channel, payload, enqueue)
 		if err != nil {
-			log.Debug().Err(err).Str("user_id", userID).Msg("agent ws bridge: invalid client frame")
+			log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: invalid client frame")
 		}
 	}
 }
@@ -330,20 +310,8 @@ func (h *WSHandler) handleClientMessage(channel *UserChannel, payload []byte, en
 		pong, _ := json.Marshal(map[string]string{"type": "pong"})
 		enqueue(pong)
 		return true, nil
-	case "prompt", "abort", "health", "list_sessions", "list_skills":
-		// vm-agent protocol: forward the entire JSON payload with id
-		err := channel.SendRequest(frame.Type, payload, frame.ID)
-		if err != nil {
-			if errors.Is(err, ErrChannelReconnecting) || errors.Is(err, ErrChannelNotConnected) {
-				enqueueProxyError(enqueue, "agent reconnecting")
-				return true, err
-			}
-			enqueueProxyError(enqueue, "failed to send command")
-			return true, err
-		}
-		return true, nil
 	default:
-		// Forward unknown types to let vm-agent handle them
+		// Forward all message types through the channel's dialer
 		err := channel.SendRequest(frame.Type, payload, frame.ID)
 		if err != nil {
 			if errors.Is(err, ErrChannelReconnecting) || errors.Is(err, ErrChannelNotConnected) {

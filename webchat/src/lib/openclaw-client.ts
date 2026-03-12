@@ -23,6 +23,13 @@ export interface OpenClawResponseFrame {
 
 export type OpenClawFrame = OpenClawEventFrame | OpenClawResponseFrame | Record<string, unknown>;
 
+/** Gateway envelope frame wrapping upstream messages */
+interface GatewayEnvelopeFrame {
+  seq: number;
+  event: string;
+  data: Record<string, unknown>;
+}
+
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
@@ -32,6 +39,8 @@ export interface OpenClawClientOptions {
   onStateChange: (state: ConnectionState, message: string) => void;
   onFrame: (frame: OpenClawFrame) => void;
 }
+
+const APP_PING_INTERVAL_MS = 25_000;
 
 function makeID(prefix: string): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -54,6 +63,8 @@ export class OpenClawClient {
   private reconnectAttempt = 0;
   private handshakeInFlight = false;
   private handshakeDone = false;
+  private lastSeq = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private opts: OpenClawClientOptions;
 
   constructor(opts: OpenClawClientOptions) {
@@ -70,6 +81,7 @@ export class OpenClawClient {
     this.connected = false;
     this.handshakeDone = false;
     this.handshakeInFlight = false;
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -163,16 +175,22 @@ export class OpenClawClient {
     this.handshakeInFlight = false;
 
     const wsBase = GATEWAY_URL.replace(/^http/, "ws");
-    const ws = new WebSocket(`${wsBase}/ws/oc?ticket=${encodeURIComponent(ticket)}`);
+    let wsUrl = `${wsBase}/ws/oc?ticket=${encodeURIComponent(ticket)}`;
+    if (this.lastSeq > 0) {
+      wsUrl += `&lastSeq=${this.lastSeq}`;
+    }
+    const ws = new WebSocket(wsUrl);
     this.ws = ws;
 
     ws.onopen = () => {
       this.opts.onStateChange("connecting", "等待 OpenClaw 握手...");
+      this.startHeartbeat();
     };
 
     ws.onmessage = (evt) => {
       try {
-        this.handleFrame(JSON.parse(evt.data) as OpenClawFrame);
+        const parsed = JSON.parse(evt.data) as Record<string, unknown>;
+        this.handleIncomingMessage(parsed);
       } catch {
         // ignore malformed frames
       }
@@ -183,6 +201,7 @@ export class OpenClawClient {
       this.handshakeDone = false;
       this.handshakeInFlight = false;
       this.ws = null;
+      this.stopHeartbeat();
       this.rejectPending(new Error("gateway closed"));
       this.opts.onStateChange("disconnected", "连接断开");
       if (!this.disposed) this.scheduleReconnect();
@@ -191,6 +210,38 @@ export class OpenClawClient {
     ws.onerror = () => {
       // close callback handles reconnect/error state
     };
+  }
+
+  /** Handle incoming messages — unwrap gateway envelope if present */
+  private handleIncomingMessage(raw: Record<string, unknown>) {
+    // Check if this is a gateway envelope frame: {seq, event, data}
+    if (typeof raw.seq === "number" && typeof raw.event === "string" && raw.data !== undefined) {
+      const envelope = raw as unknown as GatewayEnvelopeFrame;
+      if (envelope.seq > 0) {
+        this.lastSeq = envelope.seq;
+      }
+
+      // Handle proxy-level events from the envelope
+      if (envelope.event === "proxy.ready") {
+        // Channel connected — the OC challenge will follow as a "message" event
+        return;
+      }
+      if (envelope.event === "proxy.error") {
+        const errMsg = typeof envelope.data?.error === "string" ? envelope.data.error : "代理错误";
+        this.opts.onStateChange("disconnected", errMsg);
+        return;
+      }
+
+      // Unwrap: pass the inner data to OC frame handler
+      this.handleFrame(envelope.data as OpenClawFrame);
+      return;
+    }
+
+    // Not an envelope — handle as direct OC frame (pong, legacy, etc.)
+    const frameType = typeof raw.type === "string" ? raw.type : "";
+    if (frameType === "pong") return; // Heartbeat pong, ignore
+
+    this.handleFrame(raw as OpenClawFrame);
   }
 
   private handleFrame(frame: OpenClawFrame) {
@@ -261,6 +312,26 @@ export class OpenClawClient {
       this.connected = false;
       this.opts.onFrame({ type: "error", error: String(err) });
       this.ws?.close(4008, "connect failed");
+    }
+  }
+
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: "ping" }));
+        } catch {
+          // connection error will be caught by onclose
+        }
+      }
+    }, APP_PING_INTERVAL_MS);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 

@@ -4,12 +4,14 @@ import type { AgentRpcEvent } from "./agent";
 
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 15_000;
+const RECONNECT_SLOW_DELAY_MS = 30_000;
 const RECONNECT_JITTER_RATIO = 0.2;
 const APP_PING_INTERVAL_MS = 25_000;
 const APP_PONG_TIMEOUT_MS = 5_000;
 const APP_PONG_MISSED_LIMIT = 2;
 const STABLE_CONNECTION_RESET_MS = 60_000;
-const DEFAULT_MAX_RECONNECT_ATTEMPTS = 20;
+/** After this many fast retries, switch to slow interval */
+const FAST_RECONNECT_LIMIT = 20;
 
 export interface CloudAgentWSHandlers {
   onReady?: () => void;
@@ -26,7 +28,14 @@ export interface CloudAgentWSOptions {
   maxReconnectAttempts?: number;
 }
 
-function buildWebSocketUrl(token: string): string {
+/** Envelope frame from the gateway WS bridge */
+interface EnvelopeFrame {
+  seq: number;
+  event: string;
+  data: Record<string, unknown>;
+}
+
+function buildWebSocketUrl(ticket: string, lastSeq: number): string {
   const base = GATEWAY_URL.replace(/\/$/, "");
   const url = new URL(base);
 
@@ -38,13 +47,21 @@ function buildWebSocketUrl(token: string): string {
     throw new Error(`不支持的网关协议: ${url.protocol}`);
   }
 
-  url.pathname = "/ws/agent";
+  url.pathname = "/ws/oc";
   url.search = "";
-  url.searchParams.set("token", token);
+  url.searchParams.set("ticket", ticket);
+  if (lastSeq > 0) {
+    url.searchParams.set("lastSeq", String(lastSeq));
+  }
   return url.toString();
 }
 
 function getReconnectDelayMs(attempt: number) {
+  if (attempt > FAST_RECONNECT_LIMIT) {
+    // Slow retry mode: 30s with jitter
+    const jitterSpan = RECONNECT_SLOW_DELAY_MS * RECONNECT_JITTER_RATIO;
+    return Math.round(RECONNECT_SLOW_DELAY_MS - jitterSpan + Math.random() * jitterSpan * 2);
+  }
   const exponential = Math.min(
     RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
     RECONNECT_MAX_DELAY_MS,
@@ -71,14 +88,13 @@ export class CloudAgentWS {
   private missedPongCount = 0;
   private lastPongAtTs = 0;
   private lastActivityAtTs = 0;
-  private readonly maxReconnectAttempts: number;
+  private lastSeq = 0;
+  private pendingQueue: Record<string, unknown>[] = [];
 
   constructor(
     private handlers: CloudAgentWSHandlers = {},
-    options: CloudAgentWSOptions = {},
-  ) {
-    this.maxReconnectAttempts = Math.max(1, options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS);
-  }
+    _options: CloudAgentWSOptions = {},
+  ) {}
 
   get isReady() {
     return this.ready;
@@ -96,7 +112,7 @@ export class CloudAgentWS {
       return;
     }
 
-    this.openSocket();
+    void this.openSocket();
   }
 
   close() {
@@ -105,6 +121,7 @@ export class CloudAgentWS {
     this.reconnectAttempt = 0;
     this.missedPongCount = 0;
     this.waitingForPong = false;
+    this.pendingQueue = [];
 
     this.cancelReconnectTimer();
     this.cancelPingTimer();
@@ -118,25 +135,63 @@ export class CloudAgentWS {
 
   send(command: Record<string, unknown>): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error("云端连接尚未建立");
+      // Queue for later delivery instead of throwing
+      this.pendingQueue.push(command);
+      return;
     }
     this.socket.send(JSON.stringify(command));
   }
 
-  private openSocket() {
-    if (this.connected || this.connecting) return;
-
+  private async fetchTicket(): Promise<string | null> {
     const token = getToken();
     if (!token) {
       this.handlers.onError?.(new Error("未找到登录 token，请重新登录"));
-      return;
+      return null;
     }
+
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/agent/ws-ticket`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.status === 401) {
+        this.handlers.onError?.(new Error("登录已过期，请重新登录"));
+        return null;
+      }
+      if (!res.ok) {
+        throw new Error(`获取凭证失败 (${res.status})`);
+      }
+
+      const data = (await res.json()) as { ticket?: string };
+      if (!data.ticket) throw new Error("无效的 ticket");
+      return data.ticket;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.handlers.onError?.(new Error(message));
+      return null;
+    }
+  }
+
+  private async openSocket() {
+    if (this.connected || this.connecting) return;
 
     this.connecting = true;
     const runId = ++this.connectRunId;
 
     try {
-      const wsUrl = buildWebSocketUrl(token);
+      const ticket = await this.fetchTicket();
+      if (runId !== this.connectRunId) return;
+
+      if (!ticket) {
+        this.connecting = false;
+        if (this.shouldReconnect) {
+          this.scheduleReconnect();
+        }
+        return;
+      }
+
+      const wsUrl = buildWebSocketUrl(ticket, this.lastSeq);
       const socket = new WebSocket(wsUrl);
       this.socket = socket;
 
@@ -203,14 +258,46 @@ export class CloudAgentWS {
   }
 
   private handleIncomingText(raw: string) {
-    let message: Record<string, unknown>;
+    let frame: Record<string, unknown>;
     try {
-      message = JSON.parse(raw);
+      frame = JSON.parse(raw);
     } catch {
       return;
     }
 
-    const type = typeof message.type === "string" ? message.type : "";
+    // Unwrap envelope frame: {seq, event, data}
+    if (typeof frame.seq === "number" && typeof frame.event === "string" && frame.data !== undefined) {
+      const envelope = frame as unknown as EnvelopeFrame;
+      if (envelope.seq > 0) {
+        this.lastSeq = envelope.seq;
+      }
+
+      // Handle envelope-level events
+      const event = envelope.event;
+      const innerData = envelope.data;
+
+      if (event === "proxy.ready") {
+        this.handleProxyReady();
+        return;
+      }
+      if (event === "proxy.error") {
+        const errMsg = typeof innerData?.error === "string" ? innerData.error : "云端代理错误";
+        this.handlers.onError?.(new Error(errMsg));
+        return;
+      }
+      if (event === "proxy.gap") {
+        // Buffer overflow — some events were lost
+        this.handlers.onError?.(new Error("部分事件丢失，建议刷新"));
+        return;
+      }
+
+      // Dispatch inner data as the actual message
+      this.dispatchMessage(innerData);
+      return;
+    }
+
+    // Legacy: direct message without envelope (during transition / pong responses)
+    const type = typeof frame.type === "string" ? frame.type : "";
 
     if (type === "pong") {
       this.lastPongAtTs = Date.now();
@@ -218,22 +305,49 @@ export class CloudAgentWS {
     }
 
     if (type === "proxy.ready") {
-      const recovered = this.reconnectAttempt > 0;
-      this.ready = true;
-      this.startPingLoop();
-      this.scheduleStableConnectionReset();
-      this.handlers.onReady?.();
-      if (recovered) {
-        this.handlers.onMessage?.({ type: "proxy.reconnected" } as AgentRpcEvent);
-      }
+      this.handleProxyReady();
       return;
     }
 
     if (type === "proxy.error") {
-      const errMsg = typeof message.error === "string" ? message.error : "云端代理错误";
+      const errMsg = typeof frame.error === "string" ? frame.error : "云端代理错误";
       this.handlers.onError?.(new Error(errMsg));
       return;
     }
+
+    this.dispatchMessage(frame);
+  }
+
+  private handleProxyReady() {
+    const recovered = this.reconnectAttempt > 0;
+    this.ready = true;
+    this.startPingLoop();
+    this.scheduleStableConnectionReset();
+    this.handlers.onReady?.();
+    if (recovered) {
+      this.handlers.onMessage?.({ type: "proxy.reconnected" } as AgentRpcEvent);
+    }
+    // Flush pending queue
+    this.flushPendingQueue();
+  }
+
+  private flushPendingQueue() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const queue = this.pendingQueue;
+    this.pendingQueue = [];
+    for (const cmd of queue) {
+      try {
+        this.socket.send(JSON.stringify(cmd));
+      } catch {
+        // Re-queue on failure
+        this.pendingQueue.push(cmd);
+        break;
+      }
+    }
+  }
+
+  private dispatchMessage(message: Record<string, unknown>) {
+    const type = typeof message.type === "string" ? message.type : "";
 
     // Remote filesystem requests from container
     if (type.startsWith("fs.") && !type.endsWith(".result")) {
@@ -267,14 +381,7 @@ export class CloudAgentWS {
 
     this.cancelReconnectTimer();
 
-    if (this.reconnectAttempt >= this.maxReconnectAttempts) {
-      this.shouldReconnect = false;
-      const error = new Error(`云端连接重试次数已达上限（${this.maxReconnectAttempts} 次）`);
-      this.handlers.onError?.(error);
-      this.handlers.onReconnectExhausted?.(error);
-      return;
-    }
-
+    // No hard upper limit — switch to slow retry after FAST_RECONNECT_LIMIT
     this.reconnectAttempt += 1;
     const delayMs = getReconnectDelayMs(this.reconnectAttempt);
     this.handlers.onReconnect?.(delayMs, this.reconnectAttempt);
@@ -282,7 +389,7 @@ export class CloudAgentWS {
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.shouldReconnect || this.connected || this.connecting) return;
-      this.openSocket();
+      void this.openSocket();
     }, delayMs);
   }
 
@@ -427,7 +534,7 @@ export class CloudAgentWS {
     }
 
     this.cancelReconnectTimer();
-    this.openSocket();
+    void this.openSocket();
   }
 
   private bindLifecycleListeners() {

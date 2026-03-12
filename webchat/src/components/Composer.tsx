@@ -12,6 +12,7 @@ export default function Composer({
   onAbort: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
@@ -32,7 +33,7 @@ export default function Composer({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !isComposingRef.current && !e.nativeEvent.isComposing) {
         e.preventDefault();
         if (!streaming) handleSend();
       }
@@ -50,6 +51,8 @@ export default function Composer({
           disabled={disabled}
           onInput={autoResize}
           onKeyDown={handleKeyDown}
+          onCompositionStart={() => { isComposingRef.current = true; }}
+          onCompositionEnd={() => { isComposingRef.current = false; }}
         />
         {streaming ? (
           <button className="abort-btn" onClick={onAbort}>停止</button>

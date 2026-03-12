@@ -1,6 +1,6 @@
 # Desktop — Tauri v2 + React 18 桌面客户端
 
-> 云端模式: 对话通过 CloudAgentWS → Gateway /ws/agent → 云端 vm-agent 容器。本地仅保留文件管理能力 (记忆文件、附件、预览)。技能通过 Gateway REST API CRUD，修改后热推送到容器。记忆同步可选 (默认关闭)。
+> 云端模式: 对话通过 CloudAgentWS → ticket auth (`POST /api/agent/ws-ticket`) → Gateway `/ws/oc?ticket=&lastSeq=` → ChannelPool → 云端 vm-agent 容器。信封帧 `{seq, event, data}` 协议，RingBuffer 事件缓冲，lastSeq 断点续传，离线消息队列 (pendingQueue)。本地仅保留文件管理能力 (记忆文件、附件、预览)。技能通过 Gateway REST API CRUD，修改后热推送到容器。记忆同步可选 (默认关闭)。
 
 ## 代码结构
 
@@ -60,7 +60,7 @@ npm test
 
 - **React 18 纯 CSS 变量** (无 CSS-in-JS, 无 Tailwind)
 - **CSS 模块化**: 样式拆分到 `react/styles/` 按组件分文件
-- **云端对话**: 所有对话通过 `CloudAgentWS` 连接 `/ws/agent?token=`，使用 vm-agent RPC 协议 (prompt/abort/session_event/done)
+- **云端对话**: 所有对话通过 `CloudAgentWS` → ticket auth (`POST /api/agent/ws-ticket`) → `/ws/oc?ticket=&lastSeq=` → ChannelPool。使用信封帧 `{seq, event, data}` 协议，客户端解包后处理 vm-agent RPC 协议 (prompt/abort/session_event/done)。支持 lastSeq 断点续传、pendingQueue 离线消息队列、无硬重连上限 (前 20 次快速退避，之后 30s 慢速重试)
 - **本地无 Agent**: 不再运行本地 sidecar，`sidecar.rs` 仅提供文件系统 Tauri 命令
 - **WebSocket 文件通道**: 云端容器通过 WS 按需读写桌面端本地文件 (替代旧 tar 上传/下载)。`CloudAgentWS` 拦截 `fs.*` 消息 → `onFileRequest` → `cloud-file-handler.ts` 分发到 Tauri 命令 (`read_file_text` / `write_file_text` / `list_directory` / `file_stat`)。`use-cowork-connection.ts` 注入 workspace 路径，`cowork.rs` 用 `dunce::canonicalize` + `safe_resolve` 做路径安全校验 (防 `..` 遍历和符号链接逃逸)。目录列表上限 5000 条
 - **三色模式体系**: 默认 (陶土 `--accent`)、隐私 (紫灰 `--accent-anonymous`)、云端 (蓝 `--accent-cloud`)。通过 composer/input-card 的 `inset box-shadow` + 发送按钮色 + chat-view 背景微调区分
