@@ -358,7 +358,7 @@ func (c *Client) List() ([]ContainerInfo, error) {
 
 // WaitForHealth polls the agent health endpoint via HTTP until ready.
 func (c *Client) WaitForHealth(ip string, timeout time.Duration) error {
-	healthURL := fmt.Sprintf("http://%s:%d/healthz", ip, c.agentPort)
+	healthURL := fmt.Sprintf("http://%s:%d/health", ip, c.agentPort)
 	return httpHealthPoll(healthURL, timeout)
 }
 
@@ -743,7 +743,7 @@ func (c *Client) ContainerLogs(containerName string, lines int) (string, error) 
 
 // WaitForHealthPort polls the agent health endpoint via host port mapping until ready.
 func (c *Client) WaitForHealthPort(hostPort int, timeout time.Duration) error {
-	healthURL := fmt.Sprintf("http://%s:%d/healthz", c.hostIP, hostPort)
+	healthURL := fmt.Sprintf("http://%s:%d/health", c.hostIP, hostPort)
 	return httpHealthPoll(healthURL, timeout)
 }
 
