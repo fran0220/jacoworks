@@ -204,6 +204,27 @@ else
   echo "  ✅ Python: $PYTHON_VERSION ($PYTHON_SIZE)"
 fi
 
+# ─── 6b. Sign Python binaries for macOS notarization ────────────
+
+if [[ "$TARGET" == *"apple-darwin"* ]]; then
+  SIGN_ID="${APPLE_SIGNING_IDENTITY:-Developer ID Application: fan Z (9UUWCMKMDH)}"
+  echo "🔏 Signing Python binaries with: $SIGN_ID"
+
+  SIGN_COUNT=0
+  # Sign all Mach-O binaries, dylibs, and .so files
+  while IFS= read -r -d '' binary; do
+    # Check if it's actually a Mach-O file
+    if file "$binary" | grep -q "Mach-O"; then
+      codesign --force --options runtime --timestamp \
+        --sign "$SIGN_ID" "$binary" 2>/dev/null && \
+        SIGN_COUNT=$((SIGN_COUNT + 1)) || \
+        echo "  ⚠️  Failed to sign: $binary"
+    fi
+  done < <(find "$PYTHON_DIR" \( -name "python*" -o -name "*.dylib" -o -name "*.so" \) -type f -print0 2>/dev/null)
+
+  echo "  ✅ Signed $SIGN_COUNT Python binaries"
+fi
+
 # ─── 7. Windows runtimes (bash + bun) ───────────────────────────
 
 if [[ "$TARGET" == *"windows"* ]]; then
