@@ -29,7 +29,7 @@ const AgentationDevTools = import.meta.env.DEV
 export default function App() {
   const [authenticated, setAuthenticated] = useState(isAuthenticated());
   const [showSettings, setShowSettings] = useState(false);
-  const [taskPanelOpen, setTaskPanelOpen] = useState(true);
+  const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [debugEnabled, setDebugEnabled] = useState(() => getSettings().debugLogEnabled);
   const [showRpcLog, setShowRpcLog] = useState(false);
@@ -99,7 +99,10 @@ export default function App() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.path) setPreviewPath(detail.path);
+      if (detail?.path) {
+        setPreviewPath(detail.path);
+        setTaskPanelOpen(false);
+      }
     };
     window.addEventListener("preview-file", handler);
     return () => window.removeEventListener("preview-file", handler);
@@ -218,7 +221,12 @@ export default function App() {
           onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
           onOpenSettings={() => setShowSettings(true)}
           taskPanelOpen={showTaskPanel}
-          onToggleTaskPanel={() => setTaskPanelOpen((v) => !v)}
+          onToggleTaskPanel={() => {
+            setTaskPanelOpen((v) => {
+              if (!v) setPreviewPath(null);
+              return !v;
+            });
+          }}
           debugEnabled={debugEnabled}
           showRpcLog={showRpcLog}
           onToggleRpcLog={() => setShowRpcLog(v => !v)}
