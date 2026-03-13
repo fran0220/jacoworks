@@ -34,8 +34,8 @@ COS_REGION="ap-beijing"
 COS_BASE_URL="https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/v${VERSION}"
 
 TARGETS=(
-  "aarch64-apple-darwin:darwin-aarch64:dmg,updater"
-  "x86_64-apple-darwin:darwin-x86_64:dmg,updater"
+  "aarch64-apple-darwin:darwin-aarch64:app,dmg"
+  "x86_64-apple-darwin:darwin-x86_64:app,dmg"
 )
 
 # ─── Load secrets ────────────────────────────────────────────────
@@ -179,9 +179,9 @@ do_build() {
     if [[ -d "${BUNDLE_DIR}/dmg" ]]; then
       cp ${BUNDLE_DIR}/dmg/*.dmg "$PLATFORM_DIR/" 2>/dev/null || true
     fi
-    # tar.gz (updater)
+    # tar.gz (updater) — only .app.tar.gz, exclude doc-packages
     if [[ -d "${BUNDLE_DIR}/macos" ]]; then
-      find "${BUNDLE_DIR}/macos" -name '*.tar.gz' -exec cp {} "$PLATFORM_DIR/" \; 2>/dev/null || true
+      find "${BUNDLE_DIR}/macos" -name '*.app.tar.gz' -exec cp {} "$PLATFORM_DIR/" \; 2>/dev/null || true
     fi
     # Signatures
     find "${BUNDLE_DIR}" -name '*.sig' -exec cp {} "$PLATFORM_DIR/" \; 2>/dev/null || true

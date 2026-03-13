@@ -34,6 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "externalBin": ["binaries/vm-agent"],
     "macOS": {
       "entitlements": "Entitlements.plist"
@@ -68,7 +69,7 @@
       "endpoints": [
         "https://jaco.jingao.club/api/update/{{target}}/{{arch}}/{{current_version}}"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3QzVGODQ5ODYwMkEyRjMKUldUem9nS0dTZmpGUi9kaDRzMGR4TmdKZXBITWNieCszTXZiYnlQT29kTWdoT0MrZ2s3Wms1K0YK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA3RTY1RDc0OTQzOTdFNTcKUldSWGZqbVVkRjNtQi9NYzhwbGpQZHd6TTBUbE01dlJYUURiWWo1VEVzNjZRNjlzNXdtN053MlMK"
     }
   }
 }
