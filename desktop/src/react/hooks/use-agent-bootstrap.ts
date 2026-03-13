@@ -4,7 +4,7 @@ import { fetchAgentConfig } from "../lib/auth";
 import type { AgentTransport } from "../lib/agent-transport";
 import { ensureDefaultWorkspace, getSettings } from "../lib/config";
 import { LocalSidecarTransport } from "../lib/local-sidecar-transport";
-import { fetchSkills, setSkills } from "../lib/skills";
+import { setSkills } from "../lib/skills";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -90,12 +90,10 @@ export function useAgentBootstrap(authenticated: boolean) {
       transportRef.current = nextTransport;
       setTransport(nextTransport);
 
-      // Fetch skill list from gateway DB to populate SkillMenu.
-      const skills = await fetchSkills().catch((err) => {
-        console.warn("[boot] fetch skills failed:", err);
-        return [];
-      });
-      setSkills(skills);
+      // Use skills from sidecar ready event — this is the actual LLM-visible skill list.
+      // The sidecar loads skills from local filesystem (SKILLS_PATHS + USER_SKILLS_DIR),
+      // which is exactly what gets injected into the system prompt.
+      setSkills(nextTransport.loadedSkills);
     })(), 30_000, "本地 Agent 初始化超时，请重试")
       .then(() => {
         if (cancelled) return;

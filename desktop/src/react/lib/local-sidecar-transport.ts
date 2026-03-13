@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AgentRpcEvent } from "./agent";
 import type { AgentTransport } from "./agent-transport";
+import type { SkillDefinition } from "./skills";
 
 export interface SidecarConfig {
   agentDir: string;
@@ -13,6 +14,16 @@ interface StartAgentResponse {
   transport: string;
 }
 
+/** Skill info as emitted by sidecar `ready` event. */
+interface SidecarSkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  group?: string;
+  source: "builtin" | "user";
+  editable: boolean;
+}
+
 export class LocalSidecarTransport implements AgentTransport {
   private ready = false;
   private connecting = false;
@@ -21,10 +32,18 @@ export class LocalSidecarTransport implements AgentTransport {
   private errorHandler: ((error: Error) => void) | null = null;
   private unlisten: UnlistenFn | null = null;
 
+  /** Skills reported by sidecar in its `ready` event (actual LLM-visible skills). */
+  private _loadedSkills: SkillDefinition[] = [];
+
   constructor(private readonly config: SidecarConfig) {}
 
   get isReady() {
     return this.ready;
+  }
+
+  /** Skills actually loaded by the sidecar (source of truth for LLM). */
+  get loadedSkills(): SkillDefinition[] {
+    return this._loadedSkills;
   }
 
   async connect(): Promise<void> {
@@ -38,6 +57,17 @@ export class LocalSidecarTransport implements AgentTransport {
       if (!payload || typeof payload !== "object") return;
 
       if (payload.type === "ready") {
+        // Capture skills from sidecar ready event — this is what the LLM actually sees
+        if (Array.isArray(payload.skills)) {
+          this._loadedSkills = (payload.skills as SidecarSkillInfo[]).map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            group: s.group,
+            source: s.source,
+            editable: s.editable,
+          }));
+        }
         this.markReady();
       } else if (payload.type === "error" && typeof payload.error === "string") {
         this.errorHandler?.(new Error(payload.error));
