@@ -8,7 +8,6 @@ import TopBar from "./react/components/TopBar";
 import PreviewDrawer from "./react/components/PreviewDrawer";
 import TaskPanel from "./react/components/TaskPanel";
 import { useAgentBootstrap } from "./react/hooks/use-agent-bootstrap";
-import { useCoworkConnection } from "./react/hooks/use-cowork-connection";
 import { useUpdater } from "./react/hooks/use-updater";
 import { useResponsiveSidebar } from "./react/hooks/use-responsive-sidebar";
 import { useSessionState } from "./react/hooks/use-session-state";
@@ -39,9 +38,8 @@ export default function App() {
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
   const { bootstrapDone, bootstrapError, retryBootstrap, transport } = useAgentBootstrap(authenticated);
-  const ocConnection = useCoworkConnection(authenticated && bootstrapDone);
 
-  // One-time memory sync on app ready (after auth + cloud ready)
+  // One-time memory sync on app ready (after auth + local agent ready)
   const memorySyncDoneRef = useRef(false);
   useEffect(() => {
     if (!authenticated) {
@@ -50,12 +48,12 @@ export default function App() {
   }, [authenticated]);
 
   useEffect(() => {
-    if (!authenticated || !bootstrapDone || ocConnection.phase !== "ready" || memorySyncDoneRef.current) return;
+    if (!authenticated || !bootstrapDone || memorySyncDoneRef.current) return;
     memorySyncDoneRef.current = true;
     if (getSettings().memorySyncEnabled) {
       syncMemory().catch(() => {});
     }
-  }, [authenticated, bootstrapDone, ocConnection.phase]);
+  }, [authenticated, bootstrapDone]);
 
   const updater = useUpdater();
   const {
@@ -71,7 +69,6 @@ export default function App() {
     selectSession,
     createNewSession,
     handleSessionCreated,
-    ensureCoworkSession,
     deleteSessionById,
   } = useSessionState(authenticated);
 
@@ -93,19 +90,7 @@ export default function App() {
     return () => window.removeEventListener("auth-expired", handler);
   }, []);
 
-  // Cloud container connection is driven by useCoworkConnection(authenticated && bootstrapDone).
-
-  // Sync active session workspace path to cowork file handler
-  useEffect(() => {
-    ocConnection.setWorkspacePath(currentSession?.workspacePath ?? "");
-  }, [currentSession?.workspacePath, ocConnection.setWorkspacePath]);
-
-  // Auto-open panel when cloud becomes ready
-  useEffect(() => {
-    if (ocConnection.phase === "ready") {
-      setTaskPanelOpen(true);
-    }
-  }, [ocConnection.phase]);
+  // Cloud container connection is no longer used — local sidecar handles all conversations.
 
   useEffect(() => {
     handleOAuthCallback().catch(() => {});
@@ -166,7 +151,7 @@ export default function App() {
     return (
       <div className="agent-loading">
         <LoaderCircle size={24} className="spinning" />
-        <p>正在初始化云端配置</p>
+        <p>正在初始化本地 Agent</p>
         <button className="agent-debug-btn" onClick={() => setShowRpcLog(v => !v)}>
           <Bug size={14} />
           调试日志
@@ -194,32 +179,7 @@ export default function App() {
     );
   }
 
-  if (ocConnection.phase !== "ready") {
-    const isCloudError = ocConnection.phase === "error";
-    return (
-      <div className={isCloudError ? "agent-error" : "agent-loading"}>
-        {!isCloudError && <LoaderCircle size={24} className="spinning" />}
-        <p>
-          {isCloudError ? (
-            <>
-              <AlertTriangle size={16} />
-              {ocConnection.errorText || "连接容器失败"}
-            </>
-          ) : (
-            ocConnection.statusText || "正在连接容器"
-          )}
-        </p>
-        {isCloudError && <button onClick={ocConnection.retry}>重试连接</button>}
-        <button className="agent-debug-btn" onClick={() => setShowRpcLog(v => !v)}>
-          <Bug size={14} />
-          调试日志
-        </button>
-        {showRpcLog && <Suspense fallback={null}><RpcLogPanel onClose={() => setShowRpcLog(false)} /></Suspense>}
-      </div>
-    );
-  }
-
-  const showTaskPanel = taskPanelOpen && ocConnection.phase === "ready";
+  const showTaskPanel = taskPanelOpen;
 
   return (
     <div className="app-layout">
@@ -257,17 +217,8 @@ export default function App() {
           sidebarOpen={isSidebarOpen}
           onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
           onOpenSettings={() => setShowSettings(true)}
-          ocPhase={ocConnection.phase}
           taskPanelOpen={showTaskPanel}
-          onCloudAction={() => {
-            if (ocConnection.phase === "error") {
-              ocConnection.retry();
-            } else if (ocConnection.phase === "idle") {
-              ocConnection.connect();
-            } else if (ocConnection.phase === "ready") {
-              setTaskPanelOpen((v) => !v);
-            }
-          }}
+          onToggleTaskPanel={() => setTaskPanelOpen((v) => !v)}
           debugEnabled={debugEnabled}
           showRpcLog={showRpcLog}
           onToggleRpcLog={() => setShowRpcLog(v => !v)}
@@ -287,6 +238,7 @@ export default function App() {
             )}
             {currentSession ? (
               <ChatView
+                key={currentSession.id}
                 session={currentSession}
                 pendingMessage={pendingMessage}
                 pendingFiles={pendingFiles}
@@ -313,11 +265,11 @@ export default function App() {
             <div className="oc-drawer-inner">
               {showTaskPanel && (
                 <TaskPanel
-                  results={ocConnection.cronResults}
-                  onClearResults={ocConnection.clearCronResults}
-                  onNewCoworkSession={ensureCoworkSession}
+                  results={[]}
+                  onClearResults={() => {}}
+                  onNewCoworkSession={createNewSession}
                   onCreateCronTask={async (prompt) => {
-                    await ensureCoworkSession();
+                    createNewSession();
                     setPendingMessage(prompt);
                   }}
                   onClose={() => setTaskPanelOpen(false)}

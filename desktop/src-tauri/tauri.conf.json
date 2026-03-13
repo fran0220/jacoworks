@@ -34,6 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/vm-agent"],
     "macOS": {
       "entitlements": "Entitlements.plist"
     },
@@ -56,6 +57,8 @@
     ],
     "resources": {
       "resources/fonts/NotoSansSC-Regular.otf": "resources/fonts/NotoSansSC-Regular.otf",
+      "resources/doc-packages.tar.gz": "resources/doc-packages.tar.gz",
+      "resources/pi-meta": "resources/pi-meta",
       "../../vm-agent/skills": "resources/skills",
       "resources/runtimes": "resources/runtimes"
     }

@@ -45,7 +45,7 @@ export default function ToolStatus({
   const isError = status === "error";
 
   return (
-    <div className={`tool-status ${isRunning ? "" : "tool-done"}`}>
+    <span className={`tool-status ${isRunning ? "" : "tool-done"}`}>
       <Icon size={14} className="tool-icon" />
       <span className="label">
         {isRunning ? meta.label : isError ? `${meta.doneLabel} (错误)` : meta.doneLabel}
@@ -57,6 +57,6 @@ export default function ToolStatus({
       ) : (
         <Check size={12} className="tool-check-icon" />
       )}
-    </div>
+    </span>
   );
 }

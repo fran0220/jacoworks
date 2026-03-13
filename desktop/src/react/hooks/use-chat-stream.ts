@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   abortCloudSession,
   requestCloudTitleGeneration,
@@ -18,6 +18,22 @@ import type {
 } from "../types";
 import { formatSize } from "../lib/file-utils";
 import { syncMemory } from "../lib/memory-sync";
+import {
+  clearBlocks,
+  finishStreaming,
+  getEntryById,
+  getOrCreateEntry,
+  getSnapshot,
+  patchSnapshot,
+  scheduleBlocksPublish,
+  setDirty,
+  startStreaming as storeStartStreaming,
+  subscribe,
+  syncSessionFromProps,
+  updateSessionState,
+  type SessionStreamEntry,
+  type StreamSessionContext,
+} from "../lib/chat-stream-store";
 
 // ─── Debounced memory sync ─────────────────────────────
 let lastSyncTime = 0;
@@ -88,54 +104,48 @@ export function useChatStream({
   onSessionUpdate,
   transport,
 }: UseChatStreamOptions) {
-  const [sessionState, setSessionState] = useState(session);
-  const [streaming, setStreaming] = useState(false);
-  const [streamingStartedAt, setStreamingStartedAt] = useState<number | null>(null);
-  const [blocks, setBlocks] = useState<StreamBlock[]>([]);
-  const [errorText, setErrorText] = useState<string | null>(null);
+  // ── Subscribe to per-session stream store ──────────
+  const streamSnapshot = useSyncExternalStore(
+    useCallback((onChange: () => void) => subscribe(session, onChange), [session]),
+    useCallback(() => getSnapshot(session), [session]),
+    useCallback(() => getSnapshot(session), [session]),
+  );
+
+  const { sessionState, streaming, streamingStartedAt, blocks, errorText } = streamSnapshot;
+
+  // ── View-only local state ──────────────────────────
   const [isAtBottom, setIsAtBottom] = useState(true);
-
-  type StreamSessionContext = Pick<ChatSession, "id" | "anonymous" | "title">;
-
-  const sessionStateRef = useRef(session);
-  const activeStreamRef = useRef<StreamSessionContext | null>(null);
-  const abortedRef = useRef(false);
-  const sendLockRef = useRef(false);
-  const stoppedByUserRef = useRef(false);
-  const streamCancelRef = useRef<(() => void) | null>(null);
-  const blocksRef = useRef<StreamBlock[]>([]);
-  const streamBaseRef = useRef<ChatMessage[]>([]);
   const messagesRef = useRef<HTMLDivElement | null>(null);
-  const blocksRenderRafRef = useRef<number | null>(null);
   const scrollRafRef = useRef<number | null>(null);
   const stickToBottomRef = useRef(true);
-  const titleRequestVersionRef = useRef(0);
 
+  // ── Sync incoming session prop into store ──────────
+  useEffect(() => {
+    syncSessionFromProps(session);
+  }, [session]);
+
+  // Bump titleRequestVersion when session changes
+  useEffect(() => {
+    const entry = getOrCreateEntry(session);
+    entry.runtime.titleRequestVersion += 1;
+  }, [session.id]);
+
+  const visibleMessages = useMemo(
+    () => sessionState.messages.filter((m) => m.role !== "system"),
+    [sessionState.messages],
+  );
+
+  // ── Scroll helpers ─────────────────────────────────
   const isNearBottom = (container: HTMLDivElement) => {
     const remaining = container.scrollHeight - container.scrollTop - container.clientHeight;
     return remaining <= 96;
   };
-
-  const cancelRenderFrame = useCallback(() => {
-    if (blocksRenderRafRef.current !== null) {
-      window.cancelAnimationFrame(blocksRenderRafRef.current);
-      blocksRenderRafRef.current = null;
-    }
-  }, []);
 
   const cancelScrollFrame = useCallback(() => {
     if (scrollRafRef.current !== null) {
       window.cancelAnimationFrame(scrollRafRef.current);
       scrollRafRef.current = null;
     }
-  }, []);
-
-  const scheduleBlocksRender = useCallback(() => {
-    if (blocksRenderRafRef.current !== null) return;
-    blocksRenderRafRef.current = window.requestAnimationFrame(() => {
-      blocksRenderRafRef.current = null;
-      setBlocks([...blocksRef.current]);
-    });
   }, []);
 
   const scheduleScrollToBottom = useCallback(() => {
@@ -147,214 +157,166 @@ export function useChatStream({
     });
   }, []);
 
-  // Track whether local sessionState has optimistic updates not yet reflected
-  // in the parent session prop. While dirty, we must not overwrite local state.
-  const dirtyRef = useRef(false);
-
-  useEffect(() => {
-    setSessionState((prev) => {
-      if (prev.id !== session.id) return session;
-      // Keep local state while streaming or while we have un-persisted optimistic
-      // updates (dirtyRef). Once the DB round-trip completes the parent session
-      // will carry the same data, at which point we accept it.
-      if (streaming || dirtyRef.current) return prev;
-      return session;
-    });
-  }, [session, streaming]);
-
-  useEffect(() => {
-    titleRequestVersionRef.current += 1;
-  }, [session.id]);
-
-  useEffect(() => {
-    sessionStateRef.current = sessionState;
-  }, [sessionState]);
-
-  const visibleMessages = useMemo(
-    () => sessionState.messages.filter((message) => message.role !== "system"),
-    [sessionState.messages],
-  );
-
   useEffect(() => {
     scheduleScrollToBottom();
   }, [visibleMessages, blocks, scheduleScrollToBottom]);
 
   useEffect(() => {
-    return () => {
-      cancelRenderFrame();
-      cancelScrollFrame();
-    };
-  }, [cancelRenderFrame, cancelScrollFrame]);
+    return () => { cancelScrollFrame(); };
+  }, [cancelScrollFrame]);
 
+  // ── Persist session ────────────────────────────────
   const persistSession = useCallback(
     async (ctx: StreamSessionContext, messages: ChatMessage[], title?: string) => {
       if (ctx.anonymous) {
-        setSessionState((prev) => (prev.id === ctx.id ? { ...prev, messages, ...(title ? { title } : {}) } : prev));
+        updateSessionState(ctx.id, (prev) => ({
+          ...prev,
+          messages,
+          ...(title ? { title } : {}),
+        }));
+        setDirty(ctx.id, false);
         return;
       }
-      // Local-first: write all messages to local SQLite (instant)
       await sessionStore.setMessages(ctx.id, messages);
       if (title) {
         await sessionStore.updateMeta(ctx.id, { title });
       }
-      // Background sync to server (non-blocking)
       syncDirtyToServer().catch(() => {});
-      // Notify parent to re-read from local DB
       await onSessionUpdate();
-      dirtyRef.current = false;
+      setDirty(ctx.id, false);
     },
     [onSessionUpdate],
   );
 
-  const finalizeStream = useCallback(async (ctx: StreamSessionContext) => {
-    const assistantText = blocksRef.current
-      .filter((block): block is Extract<StreamBlock, { type: "text" }> => block.type === "text")
-      .map((block) => block.content)
-      .join("\n\n");
+  // ── Finalize stream ────────────────────────────────
+  const finalizeStream = useCallback(
+    async (entry: SessionStreamEntry, ctx: StreamSessionContext) => {
+      const assistantText = entry.runtime.blocksBuffer
+        .filter((b): b is Extract<StreamBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.content)
+        .join("\n\n");
 
-    const metaBlocks = collectMetaBlocks(blocksRef.current);
+      const metaBlocks = collectMetaBlocks(entry.runtime.blocksBuffer);
 
-    if (!assistantText.trim() && metaBlocks.length === 0) {
-      // Stream completed but produced no content — surface this to the user
-      setErrorText("模型未返回任何内容，请重试");
-      setBlocks([]);
-      setStreaming(false);
-      return;
-    }
+      if (!assistantText.trim() && metaBlocks.length === 0) {
+        patchSnapshot(ctx.id, { errorText: "模型未返回任何内容，请重试" });
+        clearBlocks(ctx.id);
+        return;
+      }
 
-    const assistantMessage: ChatMessage = {
-      role: "assistant",
-      content: assistantText,
-      ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
-    };
-    const finalMessages = [...streamBaseRef.current, assistantMessage];
+      const assistantMessage: ChatMessage = {
+        role: "assistant",
+        content: assistantText,
+        ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
+      };
+      const finalMessages = [...entry.runtime.streamBaseMessages, assistantMessage];
 
-    // Update local state with final messages BEFORE clearing blocks,
-    // so the assistant reply is visible immediately when streaming blocks disappear.
-    // Mark dirty so the sync effect won't clobber this with a stale parent session.
-    dirtyRef.current = true;
-    setSessionState((prev) =>
-      prev.id === ctx.id ? { ...prev, messages: finalMessages } : prev,
-    );
+      setDirty(ctx.id, true);
+      updateSessionState(ctx.id, (prev) => ({
+        ...prev,
+        messages: finalMessages,
+      }));
+      clearBlocks(ctx.id);
 
-    setBlocks([]);
-    setStreaming(false);
+      const assistantCount = finalMessages.filter((m) => m.role === "assistant").length;
+      const isUntitled = isUntitledTitle(ctx.title);
 
-    const assistantCount = finalMessages.filter((message) => message.role === "assistant").length;
-    const isUntitled = isUntitledTitle(ctx.title);
+      const fallbackTitle =
+        isUntitled && assistantCount === 1 ? generateTitle(assistantText) : undefined;
 
-    const fallbackTitle =
-      isUntitled && assistantCount === 1
-        ? generateTitle(assistantText)
-        : undefined;
+      await persistSession(ctx, finalMessages, fallbackTitle);
 
-    await persistSession(ctx, finalMessages, fallbackTitle);
+      // AI title generation (fire-and-forget)
+      if (isUntitled && assistantCount === 1 && !ctx.anonymous && transport?.isReady) {
+        const lastUserContent =
+          entry.runtime.streamBaseMessages.filter((m) => m.role === "user").pop()?.content || "";
+        const userMessage = typeof lastUserContent === "string" ? lastUserContent : "";
+        const titleVersion = entry.runtime.titleRequestVersion;
 
-    if (isUntitled && assistantCount === 1 && !ctx.anonymous) {
-      const lastUserContent =
-        streamBaseRef.current.filter((message) => message.role === "user").pop()?.content || "";
-      const userMessage = typeof lastUserContent === "string" ? lastUserContent : "";
-      const targetSessionId = ctx.id;
-      const titleRequestVersion = titleRequestVersionRef.current;
+        requestCloudTitleGeneration(transport, userMessage, assistantText)
+          .then(async (aiTitle) => {
+            if (!aiTitle) return;
+            if (entry.runtime.titleRequestVersion !== titleVersion) return;
+            updateSessionState(ctx.id, (prev) =>
+              prev.id === ctx.id ? { ...prev, title: aiTitle } : prev,
+            );
+            if (entry.runtime.titleRequestVersion !== titleVersion) return;
+            await sessionStore.updateMeta(ctx.id, { title: aiTitle });
+            syncDirtyToServer().catch(() => {});
+            await onSessionUpdate();
+          })
+          .catch((err) => {
+            console.warn("[title] AI title generation failed:", err);
+          });
+      }
+    },
+    [onSessionUpdate, persistSession, transport],
+  );
 
-      const titlePromise = (() => {
-        if (transport?.isReady) {
-          return requestCloudTitleGeneration(transport, userMessage, assistantText);
-        }
-        return Promise.resolve(null);
-      })();
-
-      titlePromise.then(async (aiTitle) => {
-        if (!aiTitle) return;
-
-        if (titleRequestVersionRef.current !== titleRequestVersion) return;
-        const latestSession = sessionStateRef.current;
-        if (latestSession.id !== targetSessionId) return;
-
-        setSessionState((prev) => {
-          if (prev.id !== targetSessionId) return prev;
-          return { ...prev, title: aiTitle };
-        });
-
-        if (titleRequestVersionRef.current !== titleRequestVersion) return;
-        await sessionStore.updateMeta(targetSessionId, { title: aiTitle });
-        syncDirtyToServer().catch(() => {});
-        await onSessionUpdate();
-      }).catch((err) => {
-        console.warn("[title] AI title generation failed:", err);
-      });
-    }
-  }, [onSessionUpdate, persistSession, transport]);
-
+  // ── Send message ───────────────────────────────────
   const sendMessage = useCallback(
     async (text: string, files: AttachedFile[]) => {
-      if (sendLockRef.current) return;
-      sendLockRef.current = true;
-      setErrorText(null);
+      const entry = getOrCreateEntry(session);
+      if (entry.runtime.sendLock) return;
 
-      const sessionSnapshot = sessionStateRef.current;
+      const sessionSnap = entry.snapshot.sessionState;
       const streamCtx: StreamSessionContext = {
-        id: sessionSnapshot.id,
-        anonymous: sessionSnapshot.anonymous,
-        title: sessionSnapshot.title,
+        id: sessionSnap.id,
+        anonymous: sessionSnap.anonymous,
+        title: sessionSnap.title,
       };
-      activeStreamRef.current = streamCtx;
+
       const fileRefs = files.length > 0
-        ? files.map(f => ({ name: f.name, size: f.size }))
+        ? files.map((f) => ({ name: f.name, size: f.size }))
         : undefined;
       const userMessage: ChatMessage = {
         role: "user",
         content: text,
         ...(fileRefs ? { files: fileRefs } : {}),
       };
-      const nextMessages = [...sessionSnapshot.messages, userMessage];
+      const nextMessages = [...sessionSnap.messages, userMessage];
+
       // Local-first: append user message without waiting
       if (!streamCtx.anonymous) {
         sessionStore.appendMessage(streamCtx.id, userMessage).catch(() => {});
       }
-      // Update local state immediately
-      dirtyRef.current = true;
-      setSessionState((prev) =>
-        prev.id === streamCtx.id ? { ...prev, messages: nextMessages } : prev,
-      );
 
-      setStreamingStartedAt(Date.now());
-      setStreaming(true);
-      window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: sessionSnapshot.id, streaming: true } }));
-      setBlocks([]);
-      cancelRenderFrame();
-      blocksRef.current = [];
-      streamBaseRef.current = nextMessages;
-      abortedRef.current = false;
-      stoppedByUserRef.current = false;
+      setDirty(sessionSnap.id, true);
+      updateSessionState(sessionSnap.id, (prev) => ({
+        ...prev,
+        messages: nextMessages,
+      }));
+
+      storeStartStreaming(sessionSnap, nextMessages);
       stickToBottomRef.current = true;
 
-      // Shared stream processing for local sidecar mode
+      // ── processStream: consumes the sidecar async generator ──
       const processStream = async (response: { stream: AsyncGenerator<AgentRpcEvent>; cancel: () => void }) => {
-        streamCancelRef.current = response.cancel;
+        entry.runtime.cancel = response.cancel;
         let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
         try {
           inactivityTimer = window.setTimeout(() => {
-            if (!abortedRef.current) {
-              abortedRef.current = true;
+            if (!entry.runtime.aborted) {
+              entry.runtime.aborted = true;
               response.cancel();
-              setErrorText("响应超时，模型长时间未返回数据");
+              patchSnapshot(streamCtx.id, { errorText: "响应超时，模型长时间未返回数据" });
             }
           }, 45_000);
+
           const resetInactivityTimer = () => {
             if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
             inactivityTimer = window.setTimeout(() => {
-              if (!abortedRef.current) {
-                abortedRef.current = true;
+              if (!entry.runtime.aborted) {
+                entry.runtime.aborted = true;
                 response.cancel();
-                setErrorText("响应超时，模型长时间未返回数据");
+                patchSnapshot(streamCtx.id, { errorText: "响应超时，模型长时间未返回数据" });
               }
             }, 45_000);
           };
 
           for await (const packet of response.stream) {
-            if (abortedRef.current) break;
+            if (entry.runtime.aborted) break;
             resetInactivityTimer();
 
             if (packet.type === "response") {
@@ -391,47 +353,47 @@ export function useChatStream({
                 console.log("[thinking-ui]", assistantEvent.type, assistantEvent.delta?.slice?.(0, 50));
               }
               if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
-                const last = blocksRef.current[blocksRef.current.length - 1];
+                const last = entry.runtime.blocksBuffer[entry.runtime.blocksBuffer.length - 1];
                 if (last?.type === "text") {
                   last.content += assistantEvent.delta;
                 } else {
-                  blocksRef.current.push({ type: "text", content: assistantEvent.delta });
+                  entry.runtime.blocksBuffer.push({ type: "text", content: assistantEvent.delta });
                 }
-                scheduleBlocksRender();
+                scheduleBlocksPublish(streamCtx.id);
               } else if (assistantEvent?.type === "thinking_delta" && assistantEvent.delta) {
-                const last = blocksRef.current[blocksRef.current.length - 1];
+                const last = entry.runtime.blocksBuffer[entry.runtime.blocksBuffer.length - 1];
                 if (last?.type === "thinking") {
                   last.content += assistantEvent.delta;
                 } else {
-                  blocksRef.current.push({ type: "thinking", content: assistantEvent.delta });
+                  entry.runtime.blocksBuffer.push({ type: "thinking", content: assistantEvent.delta });
                 }
-                scheduleBlocksRender();
+                scheduleBlocksPublish(streamCtx.id);
               } else if (assistantEvent?.type === "toolcall_start") {
                 const partial = (assistantEvent as { partial?: { content?: Array<{ type: string; id?: string; name?: string }> }; contentIndex?: number }).partial;
                 const idx = (assistantEvent as { contentIndex?: number }).contentIndex;
                 const toolBlock = idx != null ? partial?.content?.[idx] : undefined;
                 const toolName = toolBlock?.name || "tool";
                 const toolId = toolBlock?.id || `tool-${Date.now()}`;
-                blocksRef.current.push({
+                entry.runtime.blocksBuffer.push({
                   type: "tool",
                   id: toolId,
                   name: toolName,
                   status: "running",
                 });
-                scheduleBlocksRender();
+                scheduleBlocksPublish(streamCtx.id);
               }
             }
 
             if (event.type === "tool_execution_start") {
               const execId = String(event.toolCallId || "");
               const existing = execId
-                ? blocksRef.current.find((b) => b.type === "tool" && b.id === execId)
+                ? entry.runtime.blocksBuffer.find((b) => b.type === "tool" && b.id === execId)
                 : undefined;
               if (existing && existing.type === "tool") {
                 existing.args = event.args ? JSON.stringify(event.args, null, 2) : undefined;
               } else {
                 const argsStr = event.args ? JSON.stringify(event.args, null, 2) : undefined;
-                blocksRef.current.push({
+                entry.runtime.blocksBuffer.push({
                   type: "tool",
                   id: String(event.toolCallId || `tool-${Date.now()}`),
                   name: String(event.toolName || "tool"),
@@ -439,13 +401,13 @@ export function useChatStream({
                   args: argsStr,
                 });
               }
-              scheduleBlocksRender();
+              scheduleBlocksPublish(streamCtx.id);
             }
 
             if (event.type === "tool_execution_end") {
               const endId = String(event.toolCallId || "");
-              for (let i = blocksRef.current.length - 1; i >= 0; i -= 1) {
-                const block = blocksRef.current[i];
+              for (let i = entry.runtime.blocksBuffer.length - 1; i >= 0; i -= 1) {
+                const block = entry.runtime.blocksBuffer[i];
                 if (
                   block.type === "tool" &&
                   (endId ? block.id === endId : block.name === String(event.toolName) && block.status === "running")
@@ -456,15 +418,13 @@ export function useChatStream({
                     block.result = raw.length > 4000 ? `${raw.slice(0, 4000)}\n…[截断]` : raw;
                   }
                   // Extract filePath for file card rendering
-                  // Only show cards for ARTIFACTS (generated/written outputs), not for reads or edits.
-                  // Artifacts: generate_image output, write/write_file of images/documents.
                   if (!event.isError) {
                     const toolName = block.name;
                     const ARTIFACT_EXTS = new Set([
-                      "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp",  // images
-                      "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv",  // documents
-                      "mp4", "mp3", "wav", "mov",  // media
-                      "html", "zip",  // packaged outputs
+                      "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp",
+                      "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv",
+                      "mp4", "mp3", "wav", "mov",
+                      "html", "zip",
                     ]);
                     if (toolName === "generate_image") {
                       try {
@@ -497,116 +457,111 @@ export function useChatStream({
                   break;
                 }
               }
-              scheduleBlocksRender();
+              scheduleBlocksPublish(streamCtx.id);
             }
 
             if (event.type === "auto_compaction_start") {
-              blocksRef.current.push({
+              entry.runtime.blocksBuffer.push({
                 type: "status",
                 text: `上下文压缩中 (${String(event.reason || "auto")})`,
               });
-              scheduleBlocksRender();
+              scheduleBlocksPublish(streamCtx.id);
             }
 
             if (event.type === "auto_retry_start") {
-              blocksRef.current.push({
+              entry.runtime.blocksBuffer.push({
                 type: "status",
                 text: `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
               });
-              scheduleBlocksRender();
+              scheduleBlocksPublish(streamCtx.id);
             }
           }
 
           if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
 
-          if (!abortedRef.current) {
-            await finalizeStream(streamCtx);
-          } else if (!stoppedByUserRef.current) {
-            const hasPartialText = blocksRef.current.some(
+          if (!entry.runtime.aborted) {
+            await finalizeStream(entry, streamCtx);
+          } else if (!entry.runtime.stoppedByUser) {
+            const hasPartialText = entry.runtime.blocksBuffer.some(
               (b) => b.type === "text" && b.content.trim(),
             );
             if (hasPartialText) {
-              await finalizeStream(streamCtx);
+              await finalizeStream(entry, streamCtx);
             }
           }
         } catch (error) {
-          if (!abortedRef.current) {
+          if (!entry.runtime.aborted) {
             const msg = error instanceof Error ? error.message : "请求失败";
-            setErrorText(msg);
-            const errorMessages = [...streamBaseRef.current, {
+            patchSnapshot(streamCtx.id, { errorText: msg });
+            const errorMessages = [...entry.runtime.streamBaseMessages, {
               role: "assistant" as const,
               content: `⚠️ ${msg}`,
             }];
-            dirtyRef.current = true;
-            setSessionState((prev) =>
-              prev.id === streamCtx.id ? { ...prev, messages: errorMessages } : prev,
-            );
+            setDirty(streamCtx.id, true);
+            updateSessionState(streamCtx.id, (prev) => ({
+              ...prev,
+              messages: errorMessages,
+            }));
             await persistSession(streamCtx, errorMessages).catch(() => {});
           }
         } finally {
           if (inactivityTimer !== null) window.clearTimeout(inactivityTimer);
-          streamCancelRef.current = null;
-          sendLockRef.current = false;
-          // finalizeStream already set streaming=false and cleared blocks;
-          // these are safe no-ops in the normal path, and necessary for the
-          // error / aborted paths that skip finalizeStream.
-          setStreaming(false);
-          setStreamingStartedAt(null);
-          window.dispatchEvent(new CustomEvent("session-streaming-change", { detail: { id: streamCtx.id, streaming: false } }));
-          cancelRenderFrame();
-          blocksRef.current = [];
-          activeStreamRef.current = null;
+          finishStreaming(streamCtx.id);
           debouncedSyncMemory().catch(() => {});
         }
       };
 
       if (!transport?.isReady) {
-        sendLockRef.current = false;
-        setStreaming(false);
-        setStreamingStartedAt(null);
-        setErrorText("本地 Agent 尚未就绪");
-        activeStreamRef.current = null;
+        entry.runtime.sendLock = false;
+        finishStreaming(sessionSnap.id);
+        patchSnapshot(sessionSnap.id, { errorText: "本地 Agent 尚未就绪" });
         return;
       }
 
       const currentUser = getUser();
       const appSettings = getSettings();
-      const response = await startCloudStream(transport, {
-        session_id: sessionSnapshot.id,
-        user_id: currentUser?.id || undefined,
-        model: sessionSnapshot.model,
-        message: buildPrompt(text, files),
-        workspace: sessionSnapshot.workspacePath || undefined,
-        restricted: false,
-        thinking_level: appSettings.thinkingLevel || undefined,
-        anonymous: sessionSnapshot.anonymous || undefined,
-      });
-      await processStream(response);
+      try {
+        const response = await startCloudStream(transport, {
+          session_id: sessionSnap.id,
+          user_id: currentUser?.id || undefined,
+          model: sessionSnap.model,
+          message: buildPrompt(text, files),
+          workspace: sessionSnap.workspacePath || undefined,
+          restricted: false,
+          thinking_level: appSettings.thinkingLevel || undefined,
+          anonymous: sessionSnap.anonymous || undefined,
+        });
+        await processStream(response);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "请求失败";
+        patchSnapshot(sessionSnap.id, { errorText: msg });
+        finishStreaming(sessionSnap.id);
+      }
     },
-    [cancelRenderFrame, finalizeStream, persistSession, scheduleBlocksRender, transport],
+    [session, finalizeStream, persistSession, transport],
   );
 
+  // ── Stop streaming ─────────────────────────────────
   const stopStreaming = useCallback(async () => {
-    const ctx = activeStreamRef.current;
-    if (!ctx) return;
+    const entry = getEntryById(session.id);
+    const ctx = entry?.runtime.activeStream;
+    if (!entry || !ctx) return;
 
-    stoppedByUserRef.current = true;
-    abortedRef.current = true;
-    streamCancelRef.current?.();
-    streamCancelRef.current = null;
-
-    const sessionId = ctx.id;
+    entry.runtime.stoppedByUser = true;
+    entry.runtime.aborted = true;
+    entry.runtime.cancel?.();
+    entry.runtime.cancel = null;
 
     if (transport?.isReady) {
-      abortCloudSession(transport, sessionId);
+      abortCloudSession(transport, ctx.id);
     }
 
-    const assistantText = blocksRef.current
-      .filter((block): block is Extract<StreamBlock, { type: "text" }> => block.type === "text")
-      .map((block) => block.content)
+    const assistantText = entry.runtime.blocksBuffer
+      .filter((b): b is Extract<StreamBlock, { type: "text" }> => b.type === "text")
+      .map((b) => b.content)
       .join("\n\n");
 
-    const metaBlocks = collectMetaBlocks(blocksRef.current);
+    const metaBlocks = collectMetaBlocks(entry.runtime.blocksBuffer);
 
     if (assistantText.trim() || metaBlocks.length > 0) {
       const assistantMessage: ChatMessage = {
@@ -614,22 +569,19 @@ export function useChatStream({
         content: assistantText,
         ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
       };
-      const finalMessages = [...streamBaseRef.current, assistantMessage];
-      dirtyRef.current = true;
-      setSessionState((prev) =>
-        prev.id === ctx.id ? { ...prev, messages: finalMessages } : prev,
-      );
+      const finalMessages = [...entry.runtime.streamBaseMessages, assistantMessage];
+      setDirty(ctx.id, true);
+      updateSessionState(ctx.id, (prev) => ({
+        ...prev,
+        messages: finalMessages,
+      }));
       await persistSession(ctx, finalMessages);
     }
 
-    sendLockRef.current = false;
-    setStreaming(false);
-    cancelRenderFrame();
-    setBlocks([]);
-    blocksRef.current = [];
-    activeStreamRef.current = null;
-  }, [cancelRenderFrame, persistSession, transport]);
+    finishStreaming(ctx.id);
+  }, [session.id, transport, persistSession]);
 
+  // ── Auto-send pending message ──────────────────────
   useEffect(() => {
     if (!pendingMessage || streaming) return;
     const filesToSend = pendingFiles;
@@ -637,6 +589,7 @@ export function useChatStream({
     sendMessage(pendingMessage, filesToSend);
   }, [clearPending, pendingMessage, pendingFiles, sendMessage, streaming]);
 
+  // ── Scroll handlers ────────────────────────────────
   const handleMessagesScroll = useCallback(() => {
     if (!messagesRef.current) return;
     const atBottom = isNearBottom(messagesRef.current);
@@ -651,19 +604,18 @@ export function useChatStream({
     setIsAtBottom(true);
   }, []);
 
+  // ── Workspace / model update ───────────────────────
   const updateWorkspacePath = useCallback((workspacePath: string) => {
-    const sessionId = sessionStateRef.current.id;
-    setSessionState((prev) => ({ ...prev, workspacePath }));
-    sessionStore.updateMeta(sessionId, { workspacePath }).catch(() => {});
+    updateSessionState(session.id, (prev) => ({ ...prev, workspacePath }));
+    sessionStore.updateMeta(session.id, { workspacePath }).catch(() => {});
     syncDirtyToServer().catch(() => {});
-  }, []);
+  }, [session.id]);
 
   const updateModel = useCallback((model: string) => {
-    const sessionId = sessionStateRef.current.id;
-    setSessionState((prev) => ({ ...prev, model }));
-    sessionStore.updateMeta(sessionId, { model }).catch(() => {});
+    updateSessionState(session.id, (prev) => ({ ...prev, model }));
+    sessionStore.updateMeta(session.id, { model }).catch(() => {});
     syncDirtyToServer().catch(() => {});
-  }, []);
+  }, [session.id]);
 
   return {
     sessionState,

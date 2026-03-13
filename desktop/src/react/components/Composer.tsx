@@ -17,9 +17,10 @@ import { useClickOutside } from "../hooks/use-click-outside";
 import { MODEL_OPTIONS } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
-import { folderName, selectFolder } from "../lib/cowork";
+import { folderName, selectFolder, isDefaultSyncDir } from "../lib/cowork";
 import { importFiles, formatSize, type ImportedFile } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
+import { getSettings } from "../lib/config";
 import type { AttachedFile } from "../types";
 
 function ElapsedTime({ startedAt }: { startedAt: number }) {
@@ -70,6 +71,9 @@ export default function Composer({
   const folderMenuRef = useRef<HTMLDivElement | null>(null);
 
   const sendDisabled = disabled || isStreaming || (!text.trim() && files.length === 0);
+  const syncRoot = getSettings().defaultWorkspace;
+  const isDefault = isDefaultSyncDir(workspacePath, syncRoot);
+  const showFolder = workspacePath && !isDefault;
 
   useClickOutside(plusMenuRef, () => setPlusMenuOpen(false), plusMenuOpen);
   useClickOutside(folderMenuRef, () => setFolderMenuOpen(false), folderMenuOpen);
@@ -215,11 +219,11 @@ export default function Composer({
               className="ns-btn-folder"
               onClick={() => setFolderMenuOpen((v) => !v)}
               disabled={isStreaming}
-              title={workspacePath || "选择同步目录"}
+              title={showFolder ? workspacePath : "选择同步目录"}
             >
               <FolderOpen size={14} />
               <span className="ns-folder-label">
-                {workspacePath ? folderName(workspacePath) : "文件夹"}
+                {showFolder ? folderName(workspacePath) : "文件夹"}
               </span>
               <ChevronDown size={12} />
             </button>

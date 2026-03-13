@@ -79,6 +79,9 @@ export function useSessionState(authenticated: boolean) {
       return;
     }
 
+    // Clear stale session immediately so ChatView won't briefly show old data
+    setCurrentSession((prev) => (prev?.id === currentSessionId ? prev : null));
+
     let cancelled = false;
     sessionStore.getSession(currentSessionId)
       .then((session) => {
@@ -126,6 +129,7 @@ export function useSessionState(authenticated: boolean) {
     async (sessionId: string) => {
       const isAnon = sessions.find((s) => s.id === sessionId)?.anonymous;
       if (isAnon) {
+        await sessionStore.deleteSession(sessionId).catch(() => {});
         setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       } else {
         await sessionStore.deleteSession(sessionId).catch(() => {});

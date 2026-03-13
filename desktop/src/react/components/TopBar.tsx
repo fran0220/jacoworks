@@ -1,42 +1,16 @@
-import { AlertCircle, ArrowDownCircle, Bug, CheckCircle2, ChevronDown, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
+import { ArrowDownCircle, Bug, CheckCircle2, ChevronDown, ListTodo, LoaderCircle, LogOut, PanelLeft, Settings, UserCircle2 } from "lucide-react";
 import { useRef, useState } from "react";
-import type { OcConnectionPhase } from "../hooks/use-cowork-connection";
 import type { UpdatePhase } from "../hooks/use-updater";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { getUser, logout } from "../lib/auth";
-
-function phaseLabel(phase: OcConnectionPhase): string {
-  switch (phase) {
-    case "idle": return "未连接";
-    case "checking": return "检查容器";
-    case "provisioning": return "分配容器";
-    case "connecting": return "连接中";
-    case "ready": return "已连接";
-    case "reconnecting": return "重连中";
-    case "error": return "连接失败";
-  }
-}
-
-function phaseColor(phase: OcConnectionPhase): string {
-  switch (phase) {
-    case "idle": return "idle";
-    case "checking":
-    case "provisioning":
-    case "connecting":
-    case "reconnecting": return "busy";
-    case "ready": return "ready";
-    case "error": return "error";
-  }
-}
 
 export default function TopBar({
   title,
   sidebarOpen,
   onToggleSidebar,
   onOpenSettings,
-  ocPhase,
   taskPanelOpen,
-  onCloudAction,
+  onToggleTaskPanel,
   debugEnabled,
   showRpcLog,
   onToggleRpcLog,
@@ -48,9 +22,8 @@ export default function TopBar({
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
-  ocPhase: OcConnectionPhase;
   taskPanelOpen: boolean;
-  onCloudAction: () => void;
+  onToggleTaskPanel: () => void;
   debugEnabled: boolean;
   showRpcLog: boolean;
   onToggleRpcLog: () => void;
@@ -62,20 +35,7 @@ export default function TopBar({
   const menuRef = useRef<HTMLDivElement>(null);
   const user = getUser();
 
-  const isBusy = ocPhase === "checking" || ocPhase === "provisioning" || ocPhase === "connecting" || ocPhase === "reconnecting";
-
   useClickOutside(menuRef, () => setMenuOpen(false), menuOpen);
-
-  let icon: React.ReactNode;
-  if (isBusy) icon = <LoaderCircle size={14} className="spinning" />;
-  else if (ocPhase === "error") icon = <AlertCircle size={14} />;
-  else icon = <CheckCircle2 size={14} />;
-
-  const btnClass = [
-    "btn-cowork",
-    taskPanelOpen && "active",
-    `phase-${phaseColor(ocPhase)}`,
-  ].filter(Boolean).join(" ");
 
   return (
     <header className="topbar">
@@ -128,22 +88,11 @@ export default function TopBar({
         )}
         <button
           type="button"
-          className={btnClass}
-          title={ocPhase === "error" ? "点击重试连接" : "任务面板"}
-          onClick={onCloudAction}
-          disabled={isBusy}
+          className={`btn-cowork${taskPanelOpen ? " active" : ""}`}
+          title="任务面板"
+          onClick={onToggleTaskPanel}
         >
-          {icon}
-          {ocPhase === "idle" ? (
-            <span className="btn-cowork-label">连接</span>
-          ) : ocPhase === "error" ? (
-            <span className="btn-cowork-label">重试</span>
-          ) : (
-            <span className={`oc-phase-badge ${phaseColor(ocPhase)}`}>
-              <span className={`oc-phase-dot ${phaseColor(ocPhase)}`} />
-              {phaseLabel(ocPhase)}
-            </span>
-          )}
+          <ListTodo size={14} />
         </button>
 
         <div className="user-menu-wrapper" ref={menuRef}>
