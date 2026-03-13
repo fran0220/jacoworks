@@ -93,6 +93,17 @@ CRITICAL ENCODING RULE: When creating scripts (.mjs, .js) that contain non-ASCII
     parts.push(`\n<active_services>\n${activeFeatures.join("\n")}\n</active_services>`);
   }
 
+  if (opts.memoryEnabled) {
+    parts.push(`
+<context_management>
+Tool output (bash/file/document text) is temporary: older tool results are truncated and old history is compacted. Large read_document content is indexed to memory.
+Use memory_save after major steps to preserve key decisions, findings, file paths, and progress.
+Use memory_search to recall saved or indexed information instead of re-reading files.
+Do not rely on old tool outputs remaining visible.
+Treat tool output as working memory; memory_save is your persistent notebook.
+</context_management>`);
+  }
+
   return parts.join("\n");
 }
 

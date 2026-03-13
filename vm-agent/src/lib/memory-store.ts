@@ -40,12 +40,26 @@ export interface SearchResult {
   score: number;
 }
 
+export interface HybridSearchOptions {
+  mmrLambda?: number;
+  decayWindowDays?: number;
+}
+
 interface BM25Row {
   hash: string;
   text: string;
   source: string;
+  timestamp: number;
   rank: number;
 }
+
+interface ScoredCandidate extends SearchResult {
+  timestamp: number;
+}
+
+const MS_PER_DAY = 86_400_000;
+const DEFAULT_MMR_LAMBDA = 0.7;
+const DEFAULT_DECAY_WINDOW_DAYS = 30;
 
 // ─── Helpers ────────────────────────────────────────
 
@@ -62,6 +76,31 @@ function blobToEmbedding(blob: Uint8Array): number[] {
   const aligned = new ArrayBuffer(blob.byteLength);
   new Uint8Array(aligned).set(blob);
   return Array.from(new Float32Array(aligned));
+}
+
+export function jaccardSimilarity(a: string, b: string): number {
+  const tokensA = new Set(
+    cjkSegment(a)
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean),
+  );
+  const tokensB = new Set(
+    cjkSegment(b)
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean),
+  );
+
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+
+  let intersection = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) intersection++;
+  }
+
+  const union = tokensA.size + tokensB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }
 
 // ─── MemoryStore ────────────────────────────────────
@@ -182,7 +221,7 @@ export class MemoryStore {
     if (!sanitized) return [];
 
     const sql = `
-      SELECT c.hash, c.text, c.source, f.rank
+      SELECT c.hash, c.text, c.source, c.timestamp, f.rank
       FROM chunks_fts f
       JOIN chunks c ON c.rowid = f.rowid
       WHERE chunks_fts MATCH ?
@@ -208,13 +247,72 @@ export class MemoryStore {
     }
   }
 
-  /** Hybrid search: BM25 candidates → optional vector reranking */
-  async hybridSearch(query: string, topK = 5): Promise<SearchResult[]> {
+  private applyTimeDecay(
+    baseScore: number,
+    timestamp: number,
+    now: number,
+    decayWindowDays: number,
+  ): number {
+    const ageDays = Math.max(0, (now - timestamp) / MS_PER_DAY);
+    const decayFactor = Math.exp(-ageDays / decayWindowDays);
+    return baseScore * (0.7 + 0.3 * decayFactor);
+  }
+
+  private selectWithMmr(
+    scored: ScoredCandidate[],
+    topK: number,
+    lambda: number,
+  ): SearchResult[] {
+    const selected: ScoredCandidate[] = [];
+    const remaining = [...scored];
+
+    while (selected.length < topK && remaining.length > 0) {
+      let bestIndex = 0;
+      let bestMmrScore = -Infinity;
+
+      for (let i = 0; i < remaining.length; i++) {
+        const candidate = remaining[i];
+        const maxSimilarity = selected.length
+          ? Math.max(
+              ...selected.map((picked) =>
+                jaccardSimilarity(candidate.text, picked.text),
+              ),
+            )
+          : 0;
+        const mmrScore = lambda * candidate.score - (1 - lambda) * maxSimilarity;
+        if (mmrScore > bestMmrScore) {
+          bestMmrScore = mmrScore;
+          bestIndex = i;
+        }
+      }
+
+      selected.push(remaining.splice(bestIndex, 1)[0]);
+    }
+
+    return selected.map(({ text, source, score }) => ({ text, source, score }));
+  }
+
+  /** Hybrid search: BM25 candidates → optional vector reranking + time decay + MMR */
+  async hybridSearch(
+    query: string,
+    topK = 5,
+    options: HybridSearchOptions = {},
+  ): Promise<SearchResult[]> {
+    if (topK <= 0) return [];
+
     const candidates = this.searchBm25(query, 200);
     if (candidates.length === 0) return [];
 
     const rawScores = candidates.map((c) => Math.max(-c.rank, 0.001));
     const maxScore = Math.max(...rawScores);
+    const now = Date.now();
+    const mmrLambda = Math.min(1, Math.max(0, options.mmrLambda ?? DEFAULT_MMR_LAMBDA));
+    const decayWindowDays = Math.max(
+      1,
+      options.decayWindowDays ?? DEFAULT_DECAY_WINDOW_DAYS,
+    );
+
+    let scored: ScoredCandidate[] | null = null;
 
     if (isEmbeddingAvailable()) {
       try {
@@ -223,32 +321,48 @@ export class MemoryStore {
           candidates.map((c) => c.hash),
         );
 
-        const scored: SearchResult[] = candidates.map((c, i) => {
+        scored = candidates.map((c, i) => {
           const bm25 = rawScores[i] / maxScore;
           const cached = cachedMap.get(c.hash);
           const vec = cached
             ? Math.max(0, cosineSimilarity(queryEmb, cached))
             : bm25;
+          const baseScore =
+            this.config.hybridWBm25 * bm25 + this.config.hybridWVec * vec;
+
           return {
             text: c.text,
             source: c.source,
-            score:
-              this.config.hybridWBm25 * bm25 + this.config.hybridWVec * vec,
+            timestamp: c.timestamp,
+            score: this.applyTimeDecay(
+              baseScore,
+              c.timestamp,
+              now,
+              decayWindowDays,
+            ),
           };
         });
-
-        scored.sort((a, b) => b.score - a.score);
-        return scored.slice(0, topK);
       } catch (e) {
         console.error("[memory-store] Vector rerank failed, using BM25:", e);
       }
     }
 
-    return candidates.slice(0, topK).map((c, i) => ({
-      text: c.text,
-      source: c.source,
-      score: rawScores[i] / maxScore,
-    }));
+    if (!scored) {
+      scored = candidates.map((c, i) => ({
+        text: c.text,
+        source: c.source,
+        timestamp: c.timestamp,
+        score: this.applyTimeDecay(
+          rawScores[i] / maxScore,
+          c.timestamp,
+          now,
+          decayWindowDays,
+        ),
+      }));
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+    return this.selectWithMmr(scored, topK, mmrLambda);
   }
 
   /** Read cached embeddings for given hashes */
@@ -350,6 +464,22 @@ export class MemoryStore {
   close(): void {
     this.db.close();
   }
+}
+
+// ─── Shared Store Cache ─────────────────────────────
+
+const storeCache = new Map<string, MemoryStore>();
+
+export function getMemoryStore(
+  memoryRootDir: string,
+  config: MemoryStoreConfig,
+): MemoryStore {
+  let store = storeCache.get(memoryRootDir);
+  if (!store) {
+    store = new MemoryStore(memoryRootDir, config);
+    storeCache.set(memoryRootDir, store);
+  }
+  return store;
 }
 
 // ─── Migration from vectors.json ────────────────────

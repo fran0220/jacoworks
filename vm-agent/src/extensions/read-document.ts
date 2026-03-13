@@ -1,7 +1,8 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, extname } from "node:path";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { resolve, extname, basename, join } from "node:path";
+import { chunkMarkdown, getMemoryStore, type MemoryStoreConfig } from "../lib/memory-store.js";
 
 // ─── Parameter Schema ───────────────────────────────
 
@@ -13,15 +14,14 @@ const ReadDocumentParams = Type.Object({
   max_rows: Type.Optional(
     Type.Number({ description: "Max rows to return for Excel/CSV (default: 500)" }),
   ),
-  ocr: Type.Optional(
-    Type.Boolean({ description: "Force OCR via vision model (for scanned PDFs or images, default: auto-detect)" }),
-  ),
 });
 
 // ─── Supported extensions ───────────────────────────
 
 const DOC_EXTS = new Set([".docx", ".doc", ".xlsx", ".xls", ".csv", ".pdf", ".pptx", ".ppt"]);
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]);
+const LARGE_CONTENT_THRESHOLD = 2000;
+const SUMMARY_PREVIEW_CHARS = 500;
 
 function isSupported(ext: string): boolean {
   return DOC_EXTS.has(ext) || IMAGE_EXTS.has(ext);
@@ -35,10 +35,20 @@ async function readDocx(filePath: string): Promise<string> {
   return result.value.trim() || "(empty document)";
 }
 
-async function readXlsx(filePath: string, sheet?: string, maxRows?: number): Promise<string> {
+interface XlsxReadResult {
+  text: string;
+  sheetNames: string[];
+  selectedSheet: string;
+  totalRows: number;
+  shownRows: number;
+}
+
+async function readXlsx(filePath: string, sheet?: string, maxRows?: number): Promise<XlsxReadResult> {
   const ExcelJS = await import("exceljs");
   const workbook = new ExcelJS.default.Workbook();
   await workbook.xlsx.readFile(filePath);
+
+  const sheetNames = workbook.worksheets.map((s) => s.name);
 
   // Select sheet
   let ws;
@@ -47,7 +57,15 @@ async function readXlsx(filePath: string, sheet?: string, maxRows?: number): Pro
     ws = isNaN(idx) ? workbook.getWorksheet(sheet) : workbook.getWorksheet(idx);
   }
   ws ??= workbook.worksheets[0];
-  if (!ws) return "(no sheets found)";
+  if (!ws) {
+    return {
+      text: "(no sheets found)",
+      sheetNames,
+      selectedSheet: "",
+      totalRows: 0,
+      shownRows: 0,
+    };
+  }
 
   const limit = maxRows || 500;
   const rows: string[][] = [];
@@ -60,39 +78,62 @@ async function readXlsx(filePath: string, sheet?: string, maxRows?: number): Pro
     rows.push(cells);
   });
 
-  if (rows.length === 0) return "(empty sheet)";
+  if (rows.length === 0) {
+    return {
+      text: "(empty sheet)",
+      sheetNames,
+      selectedSheet: ws.name,
+      totalRows: Math.max(ws.rowCount - 1, 0),
+      shownRows: 0,
+    };
+  }
+
+  const shownRows = Math.max(rows.length - 1, 0);
+  const totalRows = Math.max(ws.rowCount - 1, 0);
 
   // Format as markdown table
   const header = rows[0];
   const lines = [
-    `Sheet: ${ws.name} (${rows.length} rows)`,
+    `Sheet: ${ws.name} (${shownRows} rows shown)`,
     "",
     "| " + header.join(" | ") + " |",
     "| " + header.map(() => "---").join(" | ") + " |",
     ...rows.slice(1).map((r) => "| " + r.join(" | ") + " |"),
   ];
 
-  if (ws.rowCount > limit + 1) {
-    lines.push("", `(truncated, showing ${limit} of ${ws.rowCount - 1} data rows)`);
+  if (totalRows > limit) {
+    lines.push("", `(truncated, showing ${limit} of ${totalRows} data rows)`);
   }
 
-  // List all sheets
-  const sheetNames = workbook.worksheets.map((s) => s.name);
   if (sheetNames.length > 1) {
     lines.push("", `Sheets: ${sheetNames.join(", ")}`);
   }
 
-  return lines.join("\n");
+  return {
+    text: lines.join("\n"),
+    sheetNames,
+    selectedSheet: ws.name,
+    totalRows,
+    shownRows,
+  };
 }
 
-async function readCsv(filePath: string, maxRows?: number): Promise<string> {
+interface CsvReadResult {
+  text: string;
+  rowCount: number;
+  shownRows: number;
+}
+
+async function readCsv(filePath: string, maxRows?: number): Promise<CsvReadResult> {
   const { parse } = await import("csv-parse/sync");
   const content = readFileSync(filePath, "utf-8");
   const records = parse(content, { columns: true, skip_empty_lines: true, relax_column_count: true }) as Record<string, string>[];
 
   const limit = maxRows || 500;
   const sliced = records.slice(0, limit);
-  if (sliced.length === 0) return "(empty CSV)";
+  if (sliced.length === 0) {
+    return { text: "(empty CSV)", rowCount: 0, shownRows: 0 };
+  }
 
   const keys = Object.keys(sliced[0]);
   const lines = [
@@ -107,7 +148,11 @@ async function readCsv(filePath: string, maxRows?: number): Promise<string> {
     lines.push("", `(truncated, showing ${limit} of ${records.length} rows)`);
   }
 
-  return lines.join("\n");
+  return {
+    text: lines.join("\n"),
+    rowCount: records.length,
+    shownRows: sliced.length,
+  };
 }
 
 async function readPdf(filePath: string, _pages?: string): Promise<{ text: string; pageCount: number }> {
@@ -120,70 +165,81 @@ async function readPdf(filePath: string, _pages?: string): Promise<{ text: strin
   return { text: result.text.trim(), pageCount: info.total };
 }
 
-// ─── OCR via Gemini Flash ───────────────────────────
+function buildPreview(text: string, maxChars = SUMMARY_PREVIEW_CHARS): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "(empty content)";
+  if (normalized.length <= maxChars) return normalized;
+  return normalized.slice(0, maxChars) + "…";
+}
 
-export async function ocrWithVision(
-  proxyUrl: string,
-  proxyKey: string,
+function buildSummaryHeader(
+  ext: string,
+  text: string,
+  meta: {
+    pageCount?: number;
+    sheetNames?: string[];
+    csvRows?: number;
+  },
+): string {
+  const parts = [`format=${ext.replace(/^\./, "")}`, `chars=${text.length}`];
+  if (typeof meta.pageCount === "number" && meta.pageCount > 0) {
+    parts.push(`pages=${meta.pageCount}`);
+  }
+  if (typeof meta.csvRows === "number") {
+    parts.push(`rows=${meta.csvRows}`);
+  }
+  if (meta.sheetNames && meta.sheetNames.length > 0) {
+    parts.push(`sheets=${meta.sheetNames.join(", ")}`);
+  }
+  return `Document indexed to memory (${parts.join(", ")}): ${buildPreview(text)}`;
+}
+
+function buildIndexedDocument(
   filePath: string,
-): Promise<string> {
-  const buf = readFileSync(filePath);
-  const ext = extname(filePath).toLowerCase();
-  const mimeMap: Record<string, string> = {
-    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
-    ".tiff": "image/tiff", ".tif": "image/tiff", ".pdf": "application/pdf",
-  };
-  const mime = mimeMap[ext] || "application/octet-stream";
-  const b64 = buf.toString("base64");
+  ext: string,
+  text: string,
+  meta: {
+    pageCount?: number;
+    sheetNames?: string[];
+    csvRows?: number;
+  },
+): string {
+  const lines = [
+    `# ${basename(filePath)}`,
+    `Source path: ${filePath}`,
+    `Format: ${ext.replace(/^\./, "")}`,
+  ];
 
-  const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${proxyKey}`,
-    },
-    body: JSON.stringify({
-      model: "gemini-3-flash-preview",
-      messages: [{
-        role: "user",
-        content: [
-          { type: "text", text: "Extract all text content from this document/image. Preserve structure, tables, and formatting as much as possible. Output in markdown format. If the document contains tables, format them as markdown tables." },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
-        ],
-      }],
-      max_tokens: 8192,
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`OCR API error: HTTP ${res.status} — ${errText.slice(0, 300)}`);
+  if (typeof meta.pageCount === "number" && meta.pageCount > 0) {
+    lines.push(`PDF pages: ${meta.pageCount}`);
+  }
+  if (typeof meta.csvRows === "number") {
+    lines.push(`CSV rows: ${meta.csvRows}`);
+  }
+  if (meta.sheetNames && meta.sheetNames.length > 0) {
+    lines.push(`Sheets: ${meta.sheetNames.join(", ")}`);
   }
 
-  const data = await res.json() as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = data.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error("OCR returned empty content");
-  return text;
+  lines.push("", text);
+  return lines.join("\n");
 }
 
 // ─── Extension Factory ──────────────────────────────
 
 export function createReadDocumentExtension(
-  proxyUrl: string,
-  proxyKey: string,
   workspaceDir: string,
+  memoryRootDir: string,
+  storeConfig: MemoryStoreConfig,
 ): ExtensionFactory {
   return (pi) => {
+    const store = getMemoryStore(memoryRootDir, storeConfig);
+
     const tool: ToolDefinition<typeof ReadDocumentParams> = {
       name: "read_document",
       label: "Read Document",
       description:
         "Read and extract content from documents and images. " +
-        "Supports: docx, xlsx, csv, pdf, pptx, and images (png/jpg/etc via OCR). " +
+        "Supports: docx, xlsx, csv, pdf, pptx, and images (png/jpg/etc via native read). " +
         "Returns extracted text in markdown format.",
       parameters: ReadDocumentParams,
       execute: async (_toolCallId, params: Static<typeof ReadDocumentParams>) => {
@@ -206,13 +262,15 @@ export function createReadDocumentExtension(
 
         try {
           let text: string;
+          let pageCount: number | undefined;
+          let sheetNames: string[] | undefined;
+          let csvRows: number | undefined;
 
-          // Images → OCR directly
+          // Images → model can see them natively via read tool, no need for OCR
           if (IMAGE_EXTS.has(ext)) {
-            text = await ocrWithVision(proxyUrl, proxyKey, filePath);
             return {
-              content: [{ type: "text" as const, text: `[OCR: ${filePath}]\n\n${text}` }],
-              details: { path: filePath, method: "ocr" },
+              content: [{ type: "text" as const, text: `Image files can be viewed directly with the read tool — use read("${params.path}") instead. The model has native vision capabilities.` }],
+              details: { path: filePath, method: "redirect" },
             };
           }
 
@@ -224,28 +282,25 @@ export function createReadDocumentExtension(
 
             case ".xlsx":
             case ".xls":
-              text = await readXlsx(filePath, params.sheet, params.max_rows);
+              {
+                const xlsx = await readXlsx(filePath, params.sheet, params.max_rows);
+                text = xlsx.text;
+                sheetNames = xlsx.sheetNames;
+              }
               break;
 
             case ".csv":
-              text = await readCsv(filePath, params.max_rows);
+              {
+                const csv = await readCsv(filePath, params.max_rows);
+                text = csv.text;
+                csvRows = csv.rowCount;
+              }
               break;
 
             case ".pdf": {
               const pdf = await readPdf(filePath);
-              // Auto-detect scanned PDF: very little text relative to page count
-              const isScanned = params.ocr || (pdf.text.length < pdf.pageCount * 50);
-              if (isScanned && proxyKey) {
-                try {
-                  text = await ocrWithVision(proxyUrl, proxyKey, filePath);
-                  text = `[OCR: ${filePath}, ${pdf.pageCount} pages]\n\n${text}`;
-                } catch {
-                  // Fallback to raw text if OCR fails
-                  text = pdf.text || "(scanned PDF — OCR failed, no extractable text)";
-                }
-              } else {
-                text = pdf.text || "(no extractable text)";
-              }
+              text = pdf.text || "(no extractable text — this may be a scanned PDF)";
+              pageCount = pdf.pageCount;
               break;
             }
 
@@ -259,9 +314,72 @@ export function createReadDocumentExtension(
               text = "(unsupported format)";
           }
 
+          if (text.length > LARGE_CONTENT_THRESHOLD) {
+            const docFileName = `${basename(filePath)}.md`;
+            const docsDir = join(memoryRootDir, "documents");
+            const docPath = join(docsDir, docFileName);
+            const source = `doc/${docFileName}`;
+            const meta = { pageCount, sheetNames, csvRows };
+
+            try {
+              const indexedDocument = buildIndexedDocument(filePath, ext, text, meta);
+              mkdirSync(docsDir, { recursive: true });
+              writeFileSync(docPath, indexedDocument, "utf-8");
+
+              store.removeBySource(source);
+              const chunks = chunkMarkdown(indexedDocument, source);
+              if (chunks.length > 0) {
+                store.upsert(chunks);
+              }
+
+              const summaryHeader = buildSummaryHeader(ext, text, meta);
+              return {
+                content: [{
+                  type: "text" as const,
+                  text:
+                    `${summaryHeader}\n` +
+                    `Full content indexed to memory as ${source}. Use memory_search to find specific details.\n` +
+                    `Stored file: ${docPath}`,
+                }],
+                details: {
+                  path: filePath,
+                  format: ext,
+                  indexedToMemory: true,
+                  source,
+                  memoryPath: docPath,
+                  extractedChars: text.length,
+                },
+              };
+            } catch (indexErr) {
+              const summaryHeader = buildSummaryHeader(ext, text, meta);
+              return {
+                content: [{
+                  type: "text" as const,
+                  text:
+                    `${summaryHeader}\n` +
+                    `Warning: failed to index this document to memory: ${(indexErr as Error).message}`,
+                }],
+                details: {
+                  path: filePath,
+                  format: ext,
+                  indexedToMemory: false,
+                  extractedChars: text.length,
+                },
+              };
+            }
+          }
+
           return {
             content: [{ type: "text" as const, text }],
-            details: { path: filePath, format: ext },
+            details: {
+              path: filePath,
+              format: ext,
+              indexedToMemory: false,
+              extractedChars: text.length,
+              pageCount,
+              sheetNames,
+              csvRows,
+            },
           };
         } catch (err) {
           return {

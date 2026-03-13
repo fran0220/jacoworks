@@ -18,7 +18,7 @@ import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
 import { createImageGenExtension } from "./extensions/image-gen.js";
-import { createReadDocumentExtension, ocrWithVision } from "./extensions/read-document.js";
+import { createReadDocumentExtension } from "./extensions/read-document.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
 import { createRemoteFsExtension } from "./extensions/remote-fs.js";
 import { registerTransportResponseHandler } from "./transport/handler.js";
@@ -31,6 +31,7 @@ import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 import { createPythonExtension } from "./tools/python.js";
 import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
+import type { MemoryStoreConfig } from "./lib/memory-store.js";
 
 // ─── Session Metadata ───────────────────────────────
 
@@ -388,16 +389,21 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   }
 
   const codingTools = createCodingTools(workspace);
+  const memRoot = userMemoryRootDir(opts?.userId);
+  const memoryStoreConfig: MemoryStoreConfig = {
+    embedCacheMax: config.embedCacheMax,
+    hybridWBm25: config.hybridWBm25,
+    hybridWVec: config.hybridWVec,
+  };
 
   const extensionFactories: ExtensionFactory[] = [];
 
   if (config.memoryEnabled && !opts?.anonymous) {
-    const memRoot = userMemoryRootDir(opts?.userId);
     extensionFactories.push(
       createMemoryExtension(memRoot, {
-        embedCacheMax: config.embedCacheMax,
-        hybridWBm25: config.hybridWBm25,
-        hybridWVec: config.hybridWVec,
+        embedCacheMax: memoryStoreConfig.embedCacheMax,
+        hybridWBm25: memoryStoreConfig.hybridWBm25,
+        hybridWVec: memoryStoreConfig.hybridWVec,
       }, {
         reserveTokens: config.compactionReserveTokens,
         softThresholdTokens: config.compactionSoftThresholdTokens,
@@ -417,10 +423,10 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     );
   }
 
-  // Document reading tool (docx, xlsx, csv, pdf, pptx, images via OCR)
+  // Document reading tool (docx, xlsx, csv, pdf, pptx)
   if (config.proxyKey) {
     extensionFactories.push(
-      createReadDocumentExtension(config.proxyUrl, config.proxyKey, workspace),
+      createReadDocumentExtension(workspace, memRoot, memoryStoreConfig),
     );
   }
 
@@ -443,16 +449,15 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     extensionFactories.push(createPythonExtension());
   }
 
-  // Intercept read tool for binary documents and images.
+  // Intercept read tool for binary documents.
   // Binary docs → block with guidance to use read_document.
-  // Images → let read execute, then replace base64 result with OCR text
-  //          (Pi SDK's block:true throws Error, so we use tool_result for images).
+  // Images → let Pi SDK's native read return ImageContent (model uses VL natively).
   const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
   const IMAGE_EXTS_RE = /\.(png|jpg|jpeg|gif|webp|bmp|tiff|tif)$/i;
-  // Track image paths intercepted in tool_call so tool_result can replace them
-  const pendingImageOcr = new Map<string, string>(); // toolCallId → filePath
+  // Track recently produced files to prevent LLM from unnecessarily reading them back
+  const recentlyProducedFiles = new Set<string>();
   extensionFactories.push((pi) => {
-    // Phase 1: tool_call — block binary docs, mark images for OCR replacement
+    // Block binary docs; block reads of just-produced images (no need to re-read what we just wrote)
     pi.on("tool_call", async (event) => {
       if (event.toolName === "read" && typeof event.input?.path === "string") {
         if (BINARY_DOC_EXTS.test(event.input.path)) {
@@ -461,34 +466,101 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
             reason: `Cannot read binary file "${event.input.path}" with the read tool. Use the read_document tool instead.`,
           };
         }
-        if (IMAGE_EXTS_RE.test(event.input.path) && config.proxyKey) {
-          const filePath = resolve(workspace, event.input.path);
-          if (existsSync(filePath)) {
-            pendingImageOcr.set(event.toolCallId, filePath);
+        if (IMAGE_EXTS_RE.test(event.input.path)) {
+          const fullPath = resolve(workspace, event.input.path);
+          if (recentlyProducedFiles.has(fullPath)) {
+            recentlyProducedFiles.delete(fullPath);
+            return {
+              block: true,
+              reason: `Image "${event.input.path}" was just generated/written. No need to read it back — you already know its content.`,
+            };
           }
         }
       }
     });
 
-    // Phase 2: tool_result — replace image base64 with OCR text
+    // Track files produced by generate_image and write tools
     pi.on("tool_result", async (event) => {
-      if (event.toolName !== "read") return;
-      const filePath = pendingImageOcr.get(event.toolCallId);
-      if (!filePath) return;
-      pendingImageOcr.delete(event.toolCallId);
-
-      try {
-        const text = await ocrWithVision(config.proxyUrl, config.proxyKey, filePath);
-        return {
-          content: [{ type: "text" as const, text: `[Image analyzed via OCR: ${filePath}]\n\n${text}` }],
-          details: { path: filePath, method: "ocr" },
-        };
-      } catch (err) {
-        return {
-          content: [{ type: "text" as const, text: `[Image: ${filePath}] OCR failed: ${(err as Error).message}. Use read_document tool for manual inspection.` }],
-          details: { path: filePath, method: "ocr-failed" },
-        };
+      if (event.toolName === "generate_image" || event.toolName === "write") {
+        const path = (event as { details?: { path?: string } }).details?.path;
+        if (path) {
+          recentlyProducedFiles.add(path);
+          // Auto-expire after 60s to avoid stale entries
+          setTimeout(() => recentlyProducedFiles.delete(path), 60_000);
+        }
       }
+    });
+  });
+
+  // ─── Context compression: trim old tool results to save tokens ───
+  // Before each LLM call, compress old messages to reduce input tokens.
+  // - Keep only the last N toolResult messages intact
+  // - Older toolResult with long text → truncate to summary
+  // - Older toolResult with ImageContent → replace with text placeholder
+  const CONTEXT_KEEP_RECENT = 4;         // keep last N toolResults intact
+  const CONTEXT_MAX_TOOL_TEXT = 800;      // max chars for old toolResult text
+  const CONTEXT_INDEXED_TO_MEMORY_MARKER = "indexed to memory";
+  extensionFactories.push((pi) => {
+    pi.on("context", async (event) => {
+      const messages = event.messages;
+
+      // Find indices of all toolResult messages
+      const toolResultIndices: number[] = [];
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        if (msg && typeof msg === "object" && "role" in msg && msg.role === "toolResult") {
+          toolResultIndices.push(i);
+        }
+      }
+
+      // Only compress if there are old tool results beyond the keep window
+      if (toolResultIndices.length <= CONTEXT_KEEP_RECENT) return;
+
+      const compressUpTo = toolResultIndices[toolResultIndices.length - CONTEXT_KEEP_RECENT];
+      const compressed = messages.map((msg, idx) => {
+        if (idx >= compressUpTo) return msg; // recent: keep intact
+        if (!msg || typeof msg !== "object" || !("role" in msg) || msg.role !== "toolResult") return msg;
+
+        const tr = msg as { role: "toolResult"; toolCallId: string; toolName: string; content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details?: unknown; isError: boolean; timestamp: number };
+        const newContent: Array<{ type: "text"; text: string }> = [];
+        let hadImage = false;
+
+        for (const part of tr.content) {
+          if (part.type === "image") {
+            hadImage = true;
+          } else if (part.type === "text" && part.text) {
+            if (part.text.toLowerCase().includes(CONTEXT_INDEXED_TO_MEMORY_MARKER)) {
+              const summaryLine = part.text
+                .split("\n")
+                .map((line) => line.trim())
+                .find((line) => line.length > 0) || "[document indexed to memory]";
+              newContent.push({ type: "text", text: summaryLine });
+              continue;
+            }
+
+            if (part.text.length > CONTEXT_MAX_TOOL_TEXT) {
+              newContent.push({
+                type: "text",
+                text: part.text.slice(0, CONTEXT_MAX_TOOL_TEXT) + "\n…[truncated, use tool again if needed]",
+              });
+            } else {
+              newContent.push({ type: "text", text: part.text });
+            }
+          }
+        }
+
+        if (hadImage) {
+          newContent.unshift({ type: "text", text: `[image previously viewed by model — not resent to save tokens]` });
+        }
+
+        if (newContent.length === 0) {
+          newContent.push({ type: "text", text: "[result omitted to save tokens]" });
+        }
+
+        return { ...tr, content: newContent };
+      });
+
+      return { messages: compressed };
     });
   });
 

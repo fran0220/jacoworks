@@ -6,7 +6,8 @@
 
 ```
 src/
-  index.ts                     RPC 主循环 (stdin/stdout JSON lines, ready 等待后台服务就绪)
+  index.ts                     Sidecar 模式入口 (stdin/stdout JSON lines RPC, ready 等待后台服务就绪)
+  server.ts                    Server 模式入口 (Bun.serve WS + HTTP /health, token 鉴权, port 配置)
   config.ts                    环境变量 (网关下发, 无本地 fallback)
   agent.ts                     Session 池 + 5 Provider + per-user 隔离 + title 生成 + isolated cron session
   prompts/system.ts            系统提示词 (3 层: runtime context + agentHomeDir bootstrap files + project SOUL.md)
@@ -20,7 +21,7 @@ src/
   transport/types.ts           TransportSender 接口
   services/heartbeat.ts        心跳服务 (sidecar 模式默认关闭)
   services/cron.ts             定时任务服务 (cron/at/every 三种调度 + isolated session + JSONL 历史 + 指数退避)
-  tools/powershell.ts          PowerShell fallback (仅 Windows, 环境自修复)
+  tools/python.ts              Python 代码执行 (60s 默认 / 300s 最大超时)
   lib/logger.ts                结构化 JSON 日志 (stderr, level/msg/ts/trace_id/session_id/user_id, LOG_LEVEL 过滤)
   lib/embedding.ts             OpenAI Embedding API 客户端 (text-embedding-3-small)
   lib/memory-store.ts          SQLite + FTS5 记忆存储 (BM25 + CJK 分词 + 向量 rerank + 迁移)
@@ -44,8 +45,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), �
 | `remote_read/write/list/stat` | `extensions/remote-fs.ts` | 云端/server 模式 (transport sender 可用) | WebSocket 文件通道, 按需读写桌面端本地文件 |
 | `bash` | Pi SDK `createCodingTools()` (内置) | 始终可用 | 跨平台命令执行 (macOS/Linux 原生 `bash`; Windows 需安装 Git for Windows 提供 `bash` + `grep/sed/awk/curl`) |
 | `cron_manage` | `services/cron.ts` | 始终注册 | 定时任务管理 (sidecar→Gateway 代理, server→本地执行) |
-| (compaction safeguard) | `extensions/compaction-safeguard.ts` | `MEMORY_ENABLED=true` | token 用量日志 + 压缩前记忆刷写 |
-| `powershell` | `tools/powershell.ts` | Windows only | 环境自修复 |
+| `python` | `tools/python.ts` | python on PATH 或 bundled runtimes | Python 代码执行 (60s 超时) |
 | (拦截器) | `agent.ts` 内联 | 始终 | read 二进制文档 → 提示用 read_document |
 | (拦截器) | `agent.ts` 内联 | `TOOL_DENY_LIST` | 屏蔽 Pi 内置 Web 工具 (默认 WebSearch/WebFetch/WebBrowse) |
 
@@ -145,8 +145,7 @@ Pi SDK 在对话接近 context window 上限时自动触发压缩。通过环境
 | `SYSTEM_PROMPT_TOTAL_CHARS` | `30000` | Bootstrap 文件总字符上限 (SOUL+AGENTS+USER+TOOLS) |
 | `SYSTEM_PROMPT_FILE_CHARS` | `8000` | 单个 bootstrap 文件字符上限 |
 
-**压缩流程**: agent_end → 检查 token 用量 → 超阈值时调用 LLM 生成结构化摘要 → 旧消息替换为摘要 + 保留近期消息。
-**Compaction Safeguard** (extensions/compaction-safeguard.ts): 压缩前将对话主题刷写到 daily log 防止信息丢失；每轮记录 token 用量到日志。
+**压缩流程**: agent_end → 检查 token 用量 → 超阈值时调用 LLM 生成结构化摘要 → 旧消息替换为摘要 + 保留近期消息。压缩逻辑在 `agent.ts` 内联处理。
 
 ## 测试矩阵（持续扩展）
 

@@ -14,6 +14,7 @@ import {
 } from "../lib/daily-log.js";
 import {
   MemoryStore,
+  getMemoryStore,
   migrateFromVectorsJson,
   chunkMarkdown,
   type MemoryStoreConfig,
@@ -64,6 +65,70 @@ function extractAssistantText(messages: readonly unknown[]): string {
     }
   }
   return "";
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      "type" in block &&
+      block.type === "text" &&
+      "text" in block &&
+      typeof block.text === "string"
+    ) {
+      parts.push(block.text);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function isSystemContextMessage(text: string): boolean {
+  return text.startsWith("[SYSTEM CONTEXT - NOT USER INPUT]");
+}
+
+function findLastUserMessageIndex(messages: readonly unknown[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i] as { role?: string; content?: unknown };
+    if (msg.role !== "user") continue;
+    const text = extractMessageText(msg.content);
+    if (!text || isSystemContextMessage(text)) continue;
+    return i;
+  }
+  return -1;
+}
+
+function extractUserQuestion(messages: readonly unknown[]): string {
+  const idx = findLastUserMessageIndex(messages);
+  if (idx === -1) return "";
+  const msg = messages[idx] as { content?: unknown };
+  return extractMessageText(msg.content);
+}
+
+function extractToolNames(messages: readonly unknown[]): string[] {
+  const startIdx = findLastUserMessageIndex(messages);
+  if (startIdx === -1) return [];
+
+  const names = new Set<string>();
+  for (let i = startIdx + 1; i < messages.length; i++) {
+    const msg = messages[i] as { role?: string; toolName?: unknown };
+    if (msg.role !== "toolResult") continue;
+    if (typeof msg.toolName === "string" && msg.toolName.trim()) {
+      names.add(msg.toolName.trim());
+    }
+  }
+
+  return Array.from(names);
+}
+
+function truncateInline(text: string, max: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  return normalized.slice(0, max) + "...";
 }
 
 function nowHHMM(): string {
@@ -131,22 +196,6 @@ async function indexMemoryFiles(store: MemoryStore, memoryRootDir: string) {
   }
 
   store.pruneOlderThan(30);
-}
-
-// ─── Store Cache (shared across sessions for same user) ──
-
-const storeCache = new Map<string, MemoryStore>();
-
-function getMemoryStore(
-  memoryRootDir: string,
-  config: MemoryStoreConfig,
-): MemoryStore {
-  let store = storeCache.get(memoryRootDir);
-  if (!store) {
-    store = new MemoryStore(memoryRootDir, config);
-    storeCache.set(memoryRootDir, store);
-  }
-  return store;
 }
 
 // ─── Extension Factory ──────────────────────────────
@@ -232,10 +281,22 @@ export function createMemoryExtension(
       const text = extractAssistantText(event.messages);
       if (!text) return;
 
-      const summary = text.length > 200 ? text.slice(0, 200) + "..." : text;
+      const summary = truncateInline(text, 200);
       if (!shouldPersistAssistantSummary(summary)) return;
 
-      const entry = `## ${nowHHMM()}\n${summary}\n\n`;
+      const question = truncateInline(extractUserQuestion(event.messages), 100);
+      const toolNames = extractToolNames(event.messages);
+
+      const lines = [
+        `## ${nowHHMM()}`,
+        `Q: ${question || "(not captured)"}`,
+      ];
+      if (toolNames.length > 0) {
+        lines.push(`Tools: ${toolNames.join(", ")}`);
+      }
+      lines.push(`A: ${summary}`);
+
+      const entry = `${lines.join("\n")}\n\n`;
       await appendDailyLog(memoryRootDir, entry);
 
       const today = new Date();
@@ -299,7 +360,7 @@ export function createMemoryExtension(
       name: "memory_search",
       label: "Memory Search",
       description:
-        "Search across all memory (MEMORY.md + daily logs) using hybrid BM25 + semantic matching. Returns the most relevant chunks with relevance scores.",
+        "Search across all memory (MEMORY.md, daily logs, and indexed documents) using hybrid BM25 + semantic matching. Returns the most relevant chunks with relevance scores. Use this to recall information from previously read documents, saved memories, and conversation history.",
       parameters: SearchParams,
       execute: async (_toolCallId, params: Static<typeof SearchParams>) => {
         await initPromise;
@@ -332,7 +393,7 @@ export function createMemoryExtension(
       name: "memory_save",
       label: "Memory Save",
       description:
-        "Save important information to MEMORY.md (long-term curated memory). Content is automatically indexed for hybrid search.",
+        "Save important information to MEMORY.md (long-term curated memory). Use this proactively to preserve key decisions, task progress, file paths, and findings before they are lost to context compression. Content is automatically indexed for hybrid search.",
       parameters: SaveParams,
       execute: async (_toolCallId, params: Static<typeof SaveParams>) => {
         await appendMemoryMd(memoryRootDir, params.content, params.section);

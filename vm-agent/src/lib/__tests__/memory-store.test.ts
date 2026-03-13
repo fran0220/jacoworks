@@ -15,6 +15,7 @@ import {
   MemoryStore,
   migrateFromVectorsJson,
   chunkMarkdown,
+  jaccardSimilarity,
   type MemoryStoreConfig,
 } from "../memory-store.js";
 
@@ -36,6 +37,20 @@ afterEach(() => {
   store.close();
   rmSync(tmpDir, { recursive: true, force: true });
 });
+
+function setSourceTimestamp(
+  targetStore: MemoryStore,
+  source: string,
+  timestamp: number,
+) {
+  const db = (targetStore as unknown as {
+    db: { prepare: (sql: string) => { run: (...args: Array<string | number>) => void } };
+  }).db;
+  db.prepare("UPDATE chunks SET timestamp = ? WHERE source = ?").run(
+    timestamp,
+    source,
+  );
+}
 
 // ─── Basic CRUD ─────────────────────────────────────
 
@@ -125,6 +140,14 @@ describe("searchBm25", () => {
     const results = store.searchBm25('test* "quoted" (group) NOT');
     expect(Array.isArray(results)).toBe(true);
   });
+
+  test("includes chunk timestamp in BM25 rows", () => {
+    store.upsert([
+      { text: "Timestamp check for bm25 result rows in memory search.", source: "time.md" },
+    ]);
+    const results = store.searchBm25("timestamp check");
+    expect(typeof results[0]?.timestamp).toBe("number");
+  });
 });
 
 // ─── removeBySource ─────────────────────────────────
@@ -213,6 +236,20 @@ describe("embedding cache", () => {
 
 // ─── Hybrid Search (BM25-only fallback) ─────────────
 
+describe("jaccardSimilarity", () => {
+  test("returns 1 for identical token sets", () => {
+    expect(jaccardSimilarity("alpha beta", "beta alpha")).toBe(1);
+  });
+
+  test("returns 0 for disjoint token sets", () => {
+    expect(jaccardSimilarity("alpha beta", "gamma delta")).toBe(0);
+  });
+
+  test("returns partial overlap ratio", () => {
+    expect(jaccardSimilarity("alpha beta gamma", "beta gamma delta")).toBeCloseTo(0.5);
+  });
+});
+
 describe("hybridSearch", () => {
   test("returns results with BM25-only when embedding unavailable", async () => {
     store.upsert([
@@ -242,6 +279,69 @@ describe("hybridSearch", () => {
     ]);
     const results = await store.hybridSearch("zzzznotfound12345");
     expect(results.length).toBe(0);
+  });
+
+  test("MMR deduplicates near-identical matches", async () => {
+    store.upsert([
+      {
+        text: "Payments release checklist includes migration backup smoke-test rollback validation and post-deploy verification step alpha.",
+        source: "near-1.md",
+      },
+      {
+        text: "Payments release checklist includes migration backup smoke-test rollback validation and post-deploy verification step beta.",
+        source: "near-2.md",
+      },
+      {
+        text: "Payments release checklist includes migration backup smoke-test rollback validation and post-deploy verification step gamma.",
+        source: "near-3.md",
+      },
+      {
+        text: "Payments release checklist includes migration backup smoke-test rollback validation and post-deploy verification step delta.",
+        source: "near-4.md",
+      },
+      {
+        text: "Payments migration rollback checklist for checkout service: run smoke verification, compare telemetry trends, and validate database consistency.",
+        source: "diverse.md",
+      },
+    ]);
+
+    const relevanceOnly = await store.hybridSearch(
+      "payments migration rollback smoke checklist",
+      3,
+      { mmrLambda: 1 },
+    );
+    const results = await store.hybridSearch(
+      "payments migration rollback smoke checklist",
+      3,
+    );
+
+    expect(relevanceOnly.every((r) => r.source.startsWith("near-"))).toBe(true);
+    expect(results.length).toBe(3);
+    expect(results.some((r) => r.source === "diverse.md")).toBe(true);
+  });
+
+  test("time decay favors newer chunks for similar relevance", async () => {
+    store.upsert([
+      {
+        text: "Token budget guardrail for OCR and tool output truncation in archived implementation notes.",
+        source: "old.md",
+      },
+      {
+        text: "Token budget guardrail for OCR and tool output truncation in current implementation notes.",
+        source: "new.md",
+      },
+    ]);
+
+    setSourceTimestamp(store, "old.md", Date.now() - 90 * 86_400_000);
+
+    const results = await store.hybridSearch(
+      "token budget guardrail ocr truncation",
+      2,
+      { mmrLambda: 1 },
+    );
+
+    expect(results.length).toBe(2);
+    expect(results[0]?.source).toBe("new.md");
   });
 });
 
