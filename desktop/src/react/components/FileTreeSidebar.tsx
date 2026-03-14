@@ -82,6 +82,14 @@ function TreeNode({
         className={`ft-node${isActive ? " active" : ""}${entry.is_dir ? " is-dir" : ""}`}
         style={{ paddingLeft: entry.is_dir ? 8 + depth * 16 : 8 + depth * 16 + 14 }}
         onClick={toggle}
+        draggable={!entry.is_dir}
+        onDragStart={(e) => {
+          if (entry.is_dir) {
+            return;
+          }
+          e.dataTransfer.setData("application/x-jaco-file", entry.path);
+          e.dataTransfer.effectAllowed = "copy";
+        }}
         title={entry.is_dir ? entry.name : `${entry.name} · ${formatSize(entry.size)}`}
       >
         {entry.is_dir && (

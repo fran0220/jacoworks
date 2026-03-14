@@ -56,8 +56,7 @@ pub fn get_memory_stats(app: AppHandle) -> Result<MemoryStats, String> {
 pub fn clear_memory(app: AppHandle) -> Result<(), String> {
     let root = memory_root_dir(&app)?;
     if root.exists() {
-        std::fs::remove_dir_all(&root)
-            .map_err(|e| format!("Failed to clear memory: {}", e))?;
+        std::fs::remove_dir_all(&root).map_err(|e| format!("Failed to clear memory: {}", e))?;
     }
     Ok(())
 }
@@ -411,12 +410,12 @@ pub async fn start_agent(
             }
             (c, bin_dir)
         } else {
-            // Dev fallback: node + dist/index.js
-            let (resolved_dir, entry) = resolve_agent_paths(&agent_dir)?;
-            let mut c = Command::new("node");
-            c.arg("--enable-source-maps")
-                .arg(&entry)
-                .current_dir(&resolved_dir);
+            // Dev fallback: bun + src/index.ts (vm-agent uses bun:sqlite, node cannot run it)
+            let (resolved_dir, _entry) = resolve_agent_paths(&agent_dir)?;
+            let src_entry = resolved_dir.join("src").join("index.ts");
+            let entry = if src_entry.exists() { src_entry } else { _entry };
+            let mut c = Command::new("bun");
+            c.arg("run").arg(&entry).current_dir(&resolved_dir);
             (c, resolved_dir)
         };
 
@@ -437,7 +436,8 @@ pub async fn start_agent(
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let dev_skills = manifest_dir.join("../../vm-agent/skills");
             if let Ok(canonical) = dunce::canonicalize(&dev_skills) {
-                if canonical.exists() && !skills_paths.iter().any(|p| PathBuf::from(p) == canonical) {
+                if canonical.exists() && !skills_paths.iter().any(|p| PathBuf::from(p) == canonical)
+                {
                     skills_paths.push(canonical.to_string_lossy().to_string());
                 }
             }
@@ -461,7 +461,10 @@ pub async fn start_agent(
                             let gz = flate2::read::GzDecoder::new(file);
                             let mut tar = tar::Archive::new(gz);
                             if tar.unpack(&doc_pkg_dir).is_ok() {
-                                eprintln!("[sidecar] Extracted doc-packages to {}", doc_pkg_dir.display());
+                                eprintln!(
+                                    "[sidecar] Extracted doc-packages to {}",
+                                    doc_pkg_dir.display()
+                                );
                             }
                         }
                     }
@@ -524,7 +527,10 @@ pub async fn start_agent(
         cmd.env("MEMORY_ENABLED", "true")
             .env("HEARTBEAT_ENABLED", "false")
             .env("CRON_ENABLED", "false")
-            .env("USER_SKILLS_DIR", user_skills_dir.to_string_lossy().as_ref())
+            .env(
+                "USER_SKILLS_DIR",
+                user_skills_dir.to_string_lossy().as_ref(),
+            )
             .env(
                 "AGENT_HOME_DIR",
                 app.path()
@@ -553,8 +559,12 @@ pub async fn start_agent(
 
         // Apply caller-provided env vars, but protect enforced keys.
         const PROTECTED_KEYS: &[&str] = &[
-            "MEMORY_ROOT_DIR", "USER_SKILLS_DIR", "AGENT_HOME_DIR",
-            "MEMORY_ENABLED", "HEARTBEAT_ENABLED", "CRON_ENABLED",
+            "MEMORY_ROOT_DIR",
+            "USER_SKILLS_DIR",
+            "AGENT_HOME_DIR",
+            "MEMORY_ENABLED",
+            "HEARTBEAT_ENABLED",
+            "CRON_ENABLED",
         ];
         for (key, value) in &env_vars {
             if !PROTECTED_KEYS.contains(&key.as_str()) {
@@ -589,7 +599,8 @@ pub async fn start_agent(
                     continue;
                 }
                 // Never block ready handshake on UI log delivery.
-                if trimmed.contains("\"type\":\"ready\"") || trimmed.contains("\"type\": \"ready\"") {
+                if trimmed.contains("\"type\":\"ready\"") || trimmed.contains("\"type\": \"ready\"")
+                {
                     signal_ready(&ready_tx_stdout);
                 }
                 if emit_json_or_log(&app_stdout, trimmed, "stdout") {
@@ -597,10 +608,13 @@ pub async fn start_agent(
                 }
             }
             // Agent stdout closed (process exited or crashed) — notify all listening streams
-            let _ = app_stdout.emit("agent-rpc-event", serde_json::json!({
-                "type": "error",
-                "error": "Agent 进程已退出"
-            }));
+            let _ = app_stdout.emit(
+                "agent-rpc-event",
+                serde_json::json!({
+                    "type": "error",
+                    "error": "Agent 进程已退出"
+                }),
+            );
         });
 
         let app_stderr = app.clone();
@@ -627,7 +641,9 @@ pub async fn start_agent(
         *proc = Some(AgentProcess {
             child,
             stdin: Arc::new(Mutex::new(stdin)),
-            workspace: resolved_agent_dir.clone(),
+            workspace: env_vars.get("WORKSPACE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| resolved_agent_dir.clone()),
             stderr_buf,
         });
     }
@@ -690,7 +706,8 @@ pub fn agent_rpc_send(command: serde_json::Value) -> Result<(), String> {
     }
 
     let mut stdin = process.stdin.lock().unwrap();
-    let line = serde_json::to_string(&command).map_err(|e| format!("Invalid command JSON: {}", e))?;
+    let line =
+        serde_json::to_string(&command).map_err(|e| format!("Invalid command JSON: {}", e))?;
     stdin
         .write_all(line.as_bytes())
         .and_then(|_| stdin.write_all(b"\n"))
@@ -763,7 +780,11 @@ pub fn get_user_skills_dir(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn delete_user_skill(app: AppHandle, skill_id: String) -> Result<(), String> {
-    if skill_id.is_empty() || skill_id.contains("..") || skill_id.contains('/') || skill_id.contains('\\') {
+    if skill_id.is_empty()
+        || skill_id.contains("..")
+        || skill_id.contains('/')
+        || skill_id.contains('\\')
+    {
         return Err("Invalid skill id".to_string());
     }
     let dir = user_skills_dir(&app)?;
@@ -779,8 +800,7 @@ pub fn delete_user_skill(app: AppHandle, skill_id: String) -> Result<(), String>
     if !canonical_skill.starts_with(&canonical_root) {
         return Err("Skill path is outside user skills directory".to_string());
     }
-    std::fs::remove_dir_all(&skill_dir)
-        .map_err(|e| format!("Failed to delete skill: {}", e))?;
+    std::fs::remove_dir_all(&skill_dir).map_err(|e| format!("Failed to delete skill: {}", e))?;
     Ok(())
 }
 

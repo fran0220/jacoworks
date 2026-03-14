@@ -31,6 +31,31 @@ export async function importFilesNative(
   }
 }
 
+export async function importFilesByPaths(
+  paths: string[],
+  workspace: string,
+): Promise<{ imported: ImportedFile[]; warnings: string[] }> {
+  if (!paths.length || !workspace) {
+    return { imported: [], warnings: [] };
+  }
+
+  if (!isTauri()) {
+    return { imported: [], warnings: ["文件导入仅在桌面端可用"] };
+  }
+
+  try {
+    return await invoke<{
+      imported: { name: string; path: string; size: number }[];
+      warnings: string[];
+    }>("import_files_by_paths", {
+      paths,
+      workspace,
+    });
+  } catch (err) {
+    return { imported: [], warnings: [`文件导入失败: ${err}`] };
+  }
+}
+
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

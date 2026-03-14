@@ -1,10 +1,13 @@
-import { AlertCircle, ChevronDown, RotateCcw } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { useCallback } from "react";
 import { useChatStream } from "../hooks/use-chat-stream";
 import type { AgentTransport } from "../lib/agent-transport";
+import { MODEL_OPTIONS } from "../lib/config";
 import type { AttachedFile, ChatSession } from "../types";
 import AgentStatusBar from "./AgentStatusBar";
 import AssistantContent from "./AssistantContent";
 import Composer from "./Composer";
+import ErrorBubble from "./ErrorBubble";
 import MessageBubble from "./MessageBubble";
 import StreamingCursor from "./StreamingCursor";
 
@@ -53,6 +56,21 @@ export default function ChatView({
 
   const lastUserMessage = visibleMessages.filter(m => m.role === "user").pop();
 
+  const handleRetry = useCallback(() => {
+    if (!lastUserMessage || streaming) return;
+    const text = typeof lastUserMessage.content === "string"
+      ? lastUserMessage.content
+      : lastUserMessage.content.filter(p => p.type === "text").map(p => p.text || "").join("\n");
+    sendMessage(text, []);
+  }, [lastUserMessage, streaming, sendMessage]);
+
+  const handleSwitchModel = useCallback(() => {
+    const currentModel = sessionState.model;
+    const currentIdx = MODEL_OPTIONS.findIndex(m => m.value === currentModel);
+    const next = MODEL_OPTIONS[(currentIdx + 1) % MODEL_OPTIONS.length];
+    updateModel(next.value);
+  }, [sessionState.model, updateModel]);
+
   return (
     <div className={`chat-view${session.anonymous ? " anonymous" : ""}`}>
       <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
@@ -82,25 +100,12 @@ export default function ChatView({
             </div>
           </div>
         )}
-        {errorText && (
-          <div className="error-inline">
-            <AlertCircle size={14} />
-            <span>{errorText}</span>
-            {lastUserMessage && !streaming && (
-              <button
-                className="error-retry-btn"
-                onClick={() => {
-                  const text = typeof lastUserMessage.content === "string"
-                    ? lastUserMessage.content
-                    : lastUserMessage.content.filter(p => p.type === "text").map(p => p.text || "").join("\n");
-                  sendMessage(text, []);
-                }}
-              >
-                <RotateCcw size={12} />
-                重试
-              </button>
-            )}
-          </div>
+        {errorText && !streaming && (
+          <ErrorBubble
+            message={errorText}
+            onRetry={lastUserMessage ? handleRetry : undefined}
+            onSwitchModel={handleSwitchModel}
+          />
         )}
       </div>
 

@@ -175,18 +175,12 @@ function ToolFileCard({ filePath, fileKind, workspacePath }: { filePath: string;
     return () => { cancelled = true; };
   }, [filePath, isImage, workspacePath]);
 
-  const handlePreview = () => {
+  const handleTogglePreview = () => {
     window.dispatchEvent(new CustomEvent("preview-file", { detail: { path: filePath } }));
-  };
-  const handleOpen = () => {
-    invoke("open_file_default", { path: filePath, workspace: workspacePath || null }).catch(() => {});
-  };
-  const handleReveal = () => {
-    invoke("reveal_in_finder", { path: filePath, workspace: workspacePath || null }).catch(() => {});
   };
 
   return (
-    <div className={`tool-file-card${isImage ? " has-thumb" : ""}`} onClick={handlePreview}>
+    <div className={`tool-file-card${isImage ? " has-thumb" : ""}`} onClick={handleTogglePreview}>
       <div className={`tool-file-card-icon${isImage ? " image-icon" : ""}`}>
         {isImage && thumbSrc ? (
           <img className="tool-file-card-thumb" src={thumbSrc} alt={name} />
@@ -197,11 +191,6 @@ function ToolFileCard({ filePath, fileKind, workspacePath }: { filePath: string;
       <div className="tool-file-card-info">
         <span className="tool-file-card-name">{name}</span>
         <span className="tool-file-card-type">{fileKind === "image" ? `Image · ${ext}` : fileKind === "document" ? `Document · ${ext}` : `File · ${ext}`}</span>
-      </div>
-      <div className="tool-file-card-actions">
-        <button className="tool-file-card-btn" onClick={(e) => { e.stopPropagation(); handlePreview(); }}>预览</button>
-        <button className="tool-file-card-btn" onClick={(e) => { e.stopPropagation(); handleReveal(); }}>目录</button>
-        <button className="tool-file-card-btn accent" onClick={(e) => { e.stopPropagation(); handleOpen(); }}>打开</button>
       </div>
     </div>
   );

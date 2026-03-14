@@ -36,7 +36,9 @@ pub async fn http_fetch(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let http_method = method.parse::<reqwest::Method>().map_err(|e| e.to_string())?;
+    let http_method = method
+        .parse::<reqwest::Method>()
+        .map_err(|e| e.to_string())?;
     let mut req = client.request(http_method, &url);
 
     for (key, value) in &headers {

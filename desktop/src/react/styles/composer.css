@@ -2,6 +2,7 @@
 
 .composer-card {
   margin: var(--space-4) var(--space-10) var(--space-8);
+  position: relative;
   border: none;
   border-radius: var(--radius-2xl);
   background: var(--bg-secondary);
@@ -23,6 +24,33 @@
 
 .composer-card textarea::placeholder {
   color: var(--text-muted);
+}
+
+/* ===== Drag & Drop Overlay ===== */
+
+.composer-drop-overlay,
+.ns-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  border-radius: var(--radius-2xl);
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+  pointer-events: none;
+  animation: drop-overlay-in var(--duration-fast) var(--ease-standard);
+}
+
+@keyframes drop-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* ===== Warnings ===== */
@@ -306,4 +334,20 @@
 
 .composer-card.anonymous .btn-send {
   background: var(--accent-anonymous);
+}
+
+/* ===== Responsive ===== */
+
+@media (max-width: 1023px) {
+  .composer-card {
+    margin: var(--space-4) var(--space-6) var(--space-6);
+  }
+}
+
+@media (max-width: 767px) {
+  .composer-card {
+    margin: var(--space-3) var(--space-4) var(--space-4);
+    padding: var(--space-4) var(--space-6);
+    border-radius: var(--radius-xl);
+  }
 }

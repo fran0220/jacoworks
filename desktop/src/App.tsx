@@ -100,7 +100,7 @@ export default function App() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.path) {
-        setPreviewPath(detail.path);
+        setPreviewPath((prev) => prev === detail.path ? null : detail.path);
         setTaskPanelOpen(false);
       }
     };
@@ -235,7 +235,7 @@ export default function App() {
           onInstallUpdate={updater.doInstall}
         />
 
-        <div className={`content-row${showTaskPanel ? " oc-drawer-active" : ""}`}>
+        <div className={`content-row${showTaskPanel ? " oc-drawer-active" : ""}${previewPath ? " preview-active" : ""}`}>
           <div className="content-main">
             {sessionError && (
               <div className="session-error-banner">

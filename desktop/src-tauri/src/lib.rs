@@ -2,12 +2,12 @@ mod db;
 mod sidecar;
 mod stream;
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 use base64::Engine as _;
 use flate2::read::GzDecoder;
 use serde_json::json;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use tar::Archive as TarArchive;
 use zip::read::ZipArchive;
 
@@ -33,7 +33,8 @@ fn allowed_roots(workspace: Option<&str>) -> Vec<PathBuf> {
 }
 
 fn validate_resolved_path(path: &Path, workspace: Option<&str>) -> Result<(), String> {
-    let canonical_path = safe_canonicalize(path).map_err(|e| format!("Cannot access path: {}", e))?;
+    let canonical_path =
+        safe_canonicalize(path).map_err(|e| format!("Cannot access path: {}", e))?;
 
     let in_scope = allowed_roots(workspace)
         .into_iter()
@@ -74,10 +75,13 @@ fn resolve_read_path(path: &str, workspace: Option<&str>) -> Result<PathBuf, Str
             let name_str = name.to_string_lossy();
             let fallback = resolve_path(&name_str, workspace);
             if fallback.exists() {
-                return safe_canonicalize(&fallback).map_err(|e| format!("Cannot access path: {}", e));
+                return safe_canonicalize(&fallback)
+                    .map_err(|e| format!("Cannot access path: {}", e));
             }
         }
-        return Err(format!("Cannot access path: No such file or directory (os error 2)"));
+        return Err(format!(
+            "Cannot access path: No such file or directory (os error 2)"
+        ));
     }
 
     resolve_scoped_path(path, workspace)
@@ -280,9 +284,8 @@ fn detect_category(name: &str, ext: &str) -> &'static str {
         "mp3" | "wav" | "m4a" | "aac" | "ogg" | "flac" => "audio",
         "zip" | "tar" => "archive",
         "fig" | "sketch" | "psd" => "design",
-        "js" | "mjs" | "ts" | "tsx" | "jsx" | "py" | "go" | "rs"
-        | "json" | "yaml" | "yml" | "toml" | "html" | "css" | "sql"
-        | "sh" | "xml" | "log" => "code",
+        "js" | "mjs" | "ts" | "tsx" | "jsx" | "py" | "go" | "rs" | "json" | "yaml" | "yml"
+        | "toml" | "html" | "css" | "sql" | "sh" | "xml" | "log" => "code",
         "csv" => "csv",
         "md" => "markdown",
         "txt" => "text",
@@ -379,7 +382,13 @@ fn list_tar_entries(path: &Path, max_entries: usize) -> Result<Vec<String>, Stri
         let entry = item.map_err(|e| format!("TAR entry error: {}", e))?;
         total += 1;
         if entries.len() < max_entries {
-            entries.push(entry.path().map_err(|e| format!("TAR path error: {}", e))?.display().to_string());
+            entries.push(
+                entry
+                    .path()
+                    .map_err(|e| format!("TAR path error: {}", e))?
+                    .display()
+                    .to_string(),
+            );
         }
     }
 
@@ -404,7 +413,13 @@ fn list_targz_entries(path: &Path, max_entries: usize) -> Result<Vec<String>, St
         let entry = item.map_err(|e| format!("TAR.GZ entry error: {}", e))?;
         total += 1;
         if entries.len() < max_entries {
-            entries.push(entry.path().map_err(|e| format!("TAR.GZ path error: {}", e))?.display().to_string());
+            entries.push(
+                entry
+                    .path()
+                    .map_err(|e| format!("TAR.GZ path error: {}", e))?
+                    .display()
+                    .to_string(),
+            );
         }
     }
 
@@ -593,7 +608,9 @@ fn list_directory(path: String, workspace: Option<String>) -> Result<Vec<DirEntr
         let ext = if is_dir {
             String::new()
         } else {
-            entry.path().extension()
+            entry
+                .path()
+                .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase()
@@ -615,7 +632,9 @@ fn list_directory(path: String, workspace: Option<String>) -> Result<Vec<DirEntr
 
     // Sort: directories first, then alphabetically
     entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
     Ok(entries)
@@ -635,45 +654,75 @@ pub struct ImportResult {
     warnings: Vec<String>,
 }
 
-#[tauri::command]
-async fn import_files_native(app: tauri::AppHandle, workspace: String) -> Result<ImportResult, String> {
-    use tauri_plugin_dialog::DialogExt;
+const IMPORT_FILE_SIZE_LIMIT: u64 = 200 * 1024 * 1024;
 
-    let attachments_dir = PathBuf::from(&workspace).join("_attachments");
-    std::fs::create_dir_all(&attachments_dir)
-        .map_err(|e| format!("Failed to create _attachments directory: {}", e))?;
+fn sanitize_import_file_name(original_name: &str) -> String {
+    // Sanitize incoming names to prevent path traversal and Windows-illegal filenames.
+    let safe_name = original_name
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+        .trim_start_matches('.')
+        .trim_end_matches(['.', ' '])
+        .to_string();
+    if safe_name.is_empty() {
+        return "unnamed".to_string();
+    }
 
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("选择文件")
-        .add_filter("所有文件", &["*"])
-        .blocking_pick_files();
+    // Reject Windows reserved device names.
+    let stem_upper = Path::new(&safe_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_uppercase();
+    if matches!(
+        stem_upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        format!("_{}", safe_name)
+    } else {
+        safe_name
+    }
+}
 
-    let Some(files) = picked else {
-        return Ok(ImportResult {
-            imported: Vec::new(),
-            warnings: Vec::new(),
-        });
-    };
-
-    let mut imported = Vec::with_capacity(files.len());
+fn copy_files_to_attachments(sources: Vec<PathBuf>, workspace: &str) -> ImportResult {
+    let attachments_dir = PathBuf::from(workspace).join("_attachments");
+    let mut imported = Vec::with_capacity(sources.len());
     let mut warnings = Vec::new();
-    const IMPORT_FILE_SIZE_LIMIT: u64 = 200 * 1024 * 1024;
 
-    for file in files {
-        let source = match file.into_path() {
-            Ok(path) => path,
-            Err(_) => {
-                warnings.push("Skipped a file that cannot be resolved to a local path".to_string());
-                continue;
-            }
-        };
+    if let Err(e) = std::fs::create_dir_all(&attachments_dir) {
+        warnings.push(format!("Failed to create _attachments directory: {}", e));
+        return ImportResult { imported, warnings };
+    }
 
+    for source in sources {
         let source_meta = match std::fs::metadata(&source) {
             Ok(meta) => meta,
             Err(e) => {
-                warnings.push(format!("Skipped {}: cannot read metadata ({})", source.display(), e));
+                warnings.push(format!(
+                    "Skipped {}: cannot read metadata ({})",
+                    source.display(),
+                    e
+                ));
                 continue;
             }
         };
@@ -694,37 +743,8 @@ async fn import_files_native(app: tauri::AppHandle, workspace: String) -> Result
         let original_name = source
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("unnamed")
-            .to_string();
-
-        // Sanitize incoming names to prevent path traversal and Windows-illegal filenames.
-        let safe_name = original_name
-            .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
-            .trim_start_matches('.')
-            .trim_end_matches(['.', ' '])
-            .to_string();
-        let safe_name = if safe_name.is_empty() {
-            "unnamed".to_string()
-        } else {
-            // Reject Windows reserved device names
-            let stem_upper = Path::new(&safe_name)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_uppercase();
-            if matches!(
-                stem_upper.as_str(),
-                "CON" | "PRN" | "AUX" | "NUL"
-                    | "COM1" | "COM2" | "COM3" | "COM4" | "COM5"
-                    | "COM6" | "COM7" | "COM8" | "COM9"
-                    | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5"
-                    | "LPT6" | "LPT7" | "LPT8" | "LPT9"
-            ) {
-                format!("_{}", safe_name)
-            } else {
-                safe_name
-            }
-        };
+            .unwrap_or("unnamed");
+        let safe_name = sanitize_import_file_name(original_name);
 
         let stem = Path::new(&safe_name)
             .file_stem()
@@ -744,8 +764,10 @@ async fn import_files_native(app: tauri::AppHandle, workspace: String) -> Result
             counter += 1;
         }
 
-        std::fs::copy(&source, &dest)
-            .map_err(|e| format!("Failed to copy {}: {}", source.display(), e))?;
+        if let Err(e) = std::fs::copy(&source, &dest) {
+            warnings.push(format!("Failed to copy {}: {}", source.display(), e));
+            continue;
+        }
 
         let final_name = dest
             .file_name()
@@ -760,7 +782,55 @@ async fn import_files_native(app: tauri::AppHandle, workspace: String) -> Result
         });
     }
 
-    Ok(ImportResult { imported, warnings })
+    ImportResult { imported, warnings }
+}
+
+#[tauri::command]
+async fn import_files_native(
+    app: tauri::AppHandle,
+    workspace: String,
+) -> Result<ImportResult, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("选择文件")
+        .add_filter("所有文件", &["*"])
+        .blocking_pick_files();
+
+    let Some(files) = picked else {
+        return Ok(ImportResult {
+            imported: Vec::new(),
+            warnings: Vec::new(),
+        });
+    };
+
+    let mut sources = Vec::with_capacity(files.len());
+    let mut warnings = Vec::new();
+
+    for file in files {
+        match file.into_path() {
+            Ok(path) => sources.push(path),
+            Err(_) => {
+                warnings.push("Skipped a file that cannot be resolved to a local path".to_string());
+            }
+        }
+    }
+
+    let mut result = copy_files_to_attachments(sources, &workspace);
+    if !warnings.is_empty() {
+        warnings.extend(result.warnings);
+        result.warnings = warnings;
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn import_files_by_paths(paths: Vec<String>, workspace: String) -> Result<ImportResult, String> {
+    let sources: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    Ok(copy_files_to_attachments(sources, &workspace))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -814,6 +884,7 @@ pub fn run() {
             preview_file,
             list_directory,
             import_files_native,
+            import_files_by_paths,
             db::db_init,
             db::db_list_sessions,
             db::db_get_session,

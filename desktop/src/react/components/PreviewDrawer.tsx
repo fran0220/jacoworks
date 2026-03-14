@@ -217,7 +217,8 @@ export default function PreviewDrawer({
     const onMouseMove = (e: MouseEvent) => {
       if (!resizingRef.current) return;
       const newWidth = window.innerWidth - e.clientX;
-      setDrawerWidth(Math.max(300, Math.min(700, newWidth)));
+      const maxWidth = Math.floor(window.innerWidth * 0.6);
+      setDrawerWidth(Math.max(300, Math.min(maxWidth, newWidth)));
     };
     const onMouseUp = () => { resizingRef.current = false; document.body.style.cursor = ""; };
     window.addEventListener("mousemove", onMouseMove);

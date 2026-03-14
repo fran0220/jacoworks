@@ -548,6 +548,7 @@ export function useChatStream({
             const errorMessages = [...entry.runtime.streamBaseMessages, {
               role: "assistant" as const,
               content: `⚠️ ${msg}`,
+              parts: [{ kind: "status" as const, text: `error:${msg}` }],
             }];
             setDirty(streamCtx.id, true);
             updateSessionState(streamCtx.id, (prev) => ({

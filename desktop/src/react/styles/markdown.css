@@ -194,40 +194,6 @@ select:focus-visible {
   color: var(--text-muted);
 }
 
-.tool-file-card-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-shrink: 0;
-}
-
-.tool-file-card-btn {
-  display: inline-flex;
-  align-items: center;
-  padding: var(--space-3) var(--space-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-standard);
-  white-space: nowrap;
-}
-
-.tool-file-card-btn:hover {
-  background: var(--bg-hover);
-}
-
-.tool-file-card-btn.accent {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.tool-file-card-btn.accent:hover {
-  background: var(--accent-light);
-}
-
 @media (max-width: 900px) {
   .tool-file-card-icon.image-icon {
     width: var(--space-13);

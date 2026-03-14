@@ -32,8 +32,7 @@ pub fn db_init(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to create app data dir: {}", e))?;
 
     let db_path = data_dir.join("jacoworks.db");
-    let conn =
-        Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+    let conn = Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         .map_err(|e| format!("Failed to set pragmas: {}", e))?;
@@ -285,6 +284,9 @@ pub fn db_append_message(
 struct MessageData {
     role: String,
     content: serde_json::Value,
+    /// New format: structured parts array (tool calls, markdown, thinking, etc.)
+    parts: Option<serde_json::Value>,
+    /// Legacy format: raw blocks array
     blocks: Option<serde_json::Value>,
     files: Option<serde_json::Value>,
 }
@@ -315,7 +317,12 @@ pub fn db_set_messages(session_id: String, messages_json: String) -> Result<(), 
             serde_json::Value::String(s) => s.clone(),
             other => other.to_string(),
         };
-        let blocks_str = msg.blocks.as_ref().map(|v| v.to_string());
+        // Prefer parts (new format) over legacy blocks — matches TS appendMessage behavior
+        let blocks_str = if let Some(parts) = &msg.parts {
+            Some(serde_json::json!({ "parts": parts }).to_string())
+        } else {
+            msg.blocks.as_ref().map(|v| v.to_string())
+        };
         let files_str = msg.files.as_ref().map(|v| v.to_string());
 
         stmt.execute(params![

@@ -3,7 +3,7 @@ import { memo } from "react";
 import { formatSize } from "../lib/file-utils";
 import type { AssistantPart, ChatMessage, FileRef, MessageContent, StreamBlock } from "../types";
 import AssistantContent from "./AssistantContent";
-import Markdown from "./Markdown";
+import ErrorBubble from "./ErrorBubble";
 
 function extractText(content: string | MessageContent[]) {
   if (typeof content === "string") return content;
@@ -77,6 +77,19 @@ const MessageBubble = memo(function MessageBubble({
   const images = extractImages(message.content);
   const files = message.files || [];
   const blocks = message.blocks || [];
+
+  // Detect persisted error messages (parts with error:... status or ⚠️ prefix)
+  const errorPart = message.parts?.find((p): p is Extract<AssistantPart, { kind: "status" }> =>
+    p.kind === "status" && p.text.startsWith("error:"),
+  );
+  const isError = !isUser && (errorPart || (typeof message.content === "string" && message.content.startsWith("⚠️ ")));
+
+  if (isError) {
+    const errorMsg = errorPart
+      ? errorPart.text.slice("error:".length)
+      : text.replace(/^⚠️\s*/, "");
+    return <ErrorBubble message={errorMsg} />;
+  }
 
   return (
     <div className={`bubble-row ${isUser ? "user" : "assistant"}`}>

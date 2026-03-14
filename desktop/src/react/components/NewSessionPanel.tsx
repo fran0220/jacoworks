@@ -12,12 +12,13 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDragDrop } from "../hooks/use-drag-drop";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
-import { importFilesNative, formatSize } from "../lib/file-utils";
+import { importFilesByPaths, importFilesNative, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { createSession } from "../lib/sessions";
 import type { AttachedFile, ChatSession } from "../types";
@@ -42,6 +43,7 @@ export default function NewSessionPanel({
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [recentFolders, setRecentFolders] = useState<string[]>(getRecentFolders);
+  const cardRef = useRef<HTMLDivElement>(null);
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const folderMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -138,6 +140,15 @@ export default function NewSessionPanel({
     setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
   };
 
+  const handleDrop = useCallback(async (paths: string[]) => {
+    setReadingCount((count) => count + 1);
+    const { imported, warnings: newWarnings } = await importFilesByPaths(paths, workspacePath);
+    setReadingCount((count) => count - 1);
+
+    for (const msg of newWarnings) addWarning(msg);
+    setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
+  }, [workspacePath, addWarning]);
+
   const handleSkillInsert = (skillId: string) => {
     setTask((prev) =>
       prev.endsWith("/") ? `${prev.slice(0, -1)}/${skillId} ` : `${prev}/${skillId} `,
@@ -154,6 +165,7 @@ export default function NewSessionPanel({
   };
 
   const hasAttachments = files.length > 0 || readingCount > 0;
+  const isDragging = useDragDrop(cardRef, handleDrop, !loading);
 
   return (
     <div className="new-session">
@@ -161,7 +173,14 @@ export default function NewSessionPanel({
         <h1>开始新的任务</h1>
       </div>
 
-      <div className={`ns-input-card${anonymous ? " anonymous" : ""}`}>
+      <div ref={cardRef} className={`ns-input-card${anonymous ? " anonymous" : ""}`}>
+        {isDragging && (
+          <div className="ns-drop-overlay">
+            <Paperclip size={24} />
+            <span>拖放文件到此处</span>
+          </div>
+        )}
+
         {/* Warnings toast */}
         {warnings.length > 0 && (
           <div className="composer-warnings">

@@ -1,9 +1,6 @@
 /* ===== Preview Drawer ===== */
 
 .preview-drawer {
-  position: absolute;
-  right: 0;
-  top: 0;
   width: 0;
   min-width: 0;
   height: 100%;
@@ -12,16 +9,20 @@
   display: flex;
   flex-direction: row;
   overflow: hidden;
+  flex-shrink: 0;
   transition:
     width var(--duration-slow) var(--ease-emphasized),
     min-width var(--duration-slow) var(--ease-emphasized);
-  z-index: calc(var(--z-drawer, 10) + 10);
-  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
 }
 
 .preview-drawer.open {
   width: var(--preview-width);
   min-width: var(--preview-width);
+}
+
+/* File tree makes it wider */
+.preview-drawer.open.with-filetree {
+  min-width: calc(var(--preview-width) + 200px);
 }
 
 .preview-inner {
@@ -942,6 +943,73 @@
   font-size: var(--text-2xs);
   color: var(--danger);
   padding: var(--space-4) var(--space-5);
+}
+
+/* ===== Responsive ===== */
+
+@media (max-width: 1023px) {
+  .preview-drawer.open {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 100% !important;
+    min-width: 0 !important;
+    z-index: var(--z-drawer);
+  }
+
+  .preview-drawer.open.with-filetree {
+    min-width: 0 !important;
+  }
+
+  .preview-inner {
+    min-width: 0;
+  }
+
+  .preview-header {
+    padding: var(--space-4) var(--space-4) var(--space-2);
+    gap: var(--space-2);
+  }
+
+  .ft-sidebar {
+    width: 160px;
+    min-width: 160px;
+  }
+}
+
+@media (max-width: 767px) {
+  .preview-header {
+    flex-wrap: wrap;
+  }
+
+  .preview-nav {
+    order: 1;
+  }
+
+  .preview-title-area {
+    order: 3;
+    flex-basis: 100%;
+    padding-top: var(--space-2);
+  }
+
+  .preview-actions {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .preview-content {
+    padding: var(--space-4);
+  }
+
+  .ft-sidebar {
+    display: none;
+  }
+
+  .preview-zoom-controls {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-secondary);
+    padding: var(--space-3) 0;
+  }
 }
 
 

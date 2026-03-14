@@ -12,12 +12,13 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDragDrop } from "../hooks/use-drag-drop";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { MODEL_OPTIONS } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder, isDefaultSyncDir } from "../lib/cowork";
-import { importFilesNative, formatSize } from "../lib/file-utils";
+import { importFilesByPaths, importFilesNative, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { getSettings } from "../lib/config";
 import type { AttachedFile } from "../types";
@@ -64,6 +65,7 @@ export default function Composer({
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [recentFolders, setRecentFolders] = useState<string[]>(getRecentFolders);
+  const cardRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const plusMenuRef = useRef<HTMLDivElement | null>(null);
   const folderMenuRef = useRef<HTMLDivElement | null>(null);
@@ -120,6 +122,15 @@ export default function Composer({
     setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
   };
 
+  const handleDrop = useCallback(async (paths: string[]) => {
+    setReadingCount((count) => count + 1);
+    const { imported, warnings: newWarnings } = await importFilesByPaths(paths, workspacePath);
+    setReadingCount((count) => count - 1);
+
+    for (const msg of newWarnings) addWarning(msg);
+    setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
+  }, [workspacePath, addWarning]);
+
   const handleSkillInsert = (skillId: string) => {
     setText((prev) =>
       prev.endsWith("/") ? `${prev.slice(0, -1)}/${skillId} ` : `${prev}/${skillId} `,
@@ -136,9 +147,17 @@ export default function Composer({
   };
 
   const hasAttachments = files.length > 0 || readingCount > 0;
+  const isDragging = useDragDrop(cardRef, handleDrop, !isStreaming && !disabled);
 
   return (
-    <div className={`composer-card${isAnonymous ? " anonymous" : ""}`}>
+    <div ref={cardRef} className={`composer-card${isAnonymous ? " anonymous" : ""}`}>
+      {isDragging && (
+        <div className="composer-drop-overlay">
+          <Paperclip size={24} />
+          <span>拖放文件到此处</span>
+        </div>
+      )}
+
       {/* Warnings toast */}
       {warnings.length > 0 && (
         <div className="composer-warnings">

@@ -30,6 +30,7 @@
 .ns-input-card {
   width: 100%;
   max-width: var(--content-width);
+  position: relative;
   border: none;
   border-radius: var(--radius-2xl);
   background: var(--bg-secondary);
@@ -507,4 +508,3 @@
 .ns-input-card.anonymous .btn-go:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent-anonymous) 85%, #000);
 }
-
