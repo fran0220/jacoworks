@@ -4,10 +4,15 @@ import { getContainerStatus, provisionContainer } from "../lib/container";
 
 type GateStage = "checking" | "provisioning" | "polling" | "ready" | "error";
 
-export default function SetupGate() {
+interface SetupGateProps {
+  onReady: (token: string) => void;
+}
+
+export default function SetupGate({ onReady }: SetupGateProps) {
   const [stage, setStage] = useState<GateStage>("checking");
   const [error, setError] = useState<string | null>(null);
   const pollTimer = useRef<number | null>(null);
+  const readyFired = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) {
@@ -16,34 +21,21 @@ export default function SetupGate() {
     }
   }, []);
 
-  const finishSetup = useCallback((token?: string) => {
-    setStage("ready");
-    stopPolling();
+  const finishSetup = useCallback(
+    (token: string) => {
+      if (readyFired.current) return;
+      readyFired.current = true;
+      setStage("ready");
+      stopPolling();
+      // Small delay for UI feedback before transitioning
+      window.setTimeout(() => onReady(token), 300);
+    },
+    [stopPolling, onReady],
+  );
 
-    // Inject token directly to avoid reload loop when server-side injection fails
-    if (token) {
-      window.__OPENCLAW_TOKEN__ = token;
-    }
-
-    window.setTimeout(() => {
-      if (token) {
-        // Token available — re-render the app by dispatching a state change
-        window.dispatchEvent(new Event("openclaw-token-ready"));
-      } else {
-        // Fallback: reload once, but guard against infinite loop
-        const key = "jacoworks.setup.reloads";
-        const count = parseInt(sessionStorage.getItem(key) || "0", 10);
-        if (count < 2) {
-          sessionStorage.setItem(key, String(count + 1));
-          location.reload();
-        } else {
-          sessionStorage.removeItem(key);
-          setStage("error");
-          setError("容器已就绪但无法获取访问令牌，请刷新页面重试");
-        }
-      }
-    }, 300);
-  }, [stopPolling]);
+  /** Container is truly online when provisioned + ready + has token */
+  const isOnline = (s: { provisioned: boolean; ready?: boolean; container_token?: string }) =>
+    s.provisioned && s.ready !== false && !!s.container_token;
 
   const startPolling = useCallback(() => {
     setStage("polling");
@@ -51,8 +43,8 @@ export default function SetupGate() {
     pollTimer.current = window.setInterval(() => {
       getContainerStatus()
         .then((status) => {
-          if (status.provisioned && status.container_token) {
-            finishSetup(status.container_token);
+          if (isOnline(status)) {
+            finishSetup(status.container_token!);
           }
         })
         .catch(() => {
@@ -64,11 +56,17 @@ export default function SetupGate() {
   const runSetup = useCallback(async () => {
     setError(null);
     setStage("checking");
+    readyFired.current = false;
 
     try {
       const status = await getContainerStatus();
-      if (status.provisioned && status.container_token) {
-        finishSetup(status.container_token);
+      if (isOnline(status)) {
+        finishSetup(status.container_token!);
+        return;
+      }
+      // Container exists but not ready — go straight to polling
+      if (status.provisioned) {
+        startPolling();
         return;
       }
     } catch {
@@ -79,8 +77,16 @@ export default function SetupGate() {
       setStage("provisioning");
       const result = await provisionContainer();
       if (result.status === "ready" && result.container_token) {
-        finishSetup(result.container_token);
-        return;
+        // Provision returned ready — still verify via status API
+        try {
+          const status = await getContainerStatus();
+          if (isOnline(status)) {
+            finishSetup(status.container_token!);
+            return;
+          }
+        } catch {
+          // Fall through to polling
+        }
       }
       startPolling();
     } catch {

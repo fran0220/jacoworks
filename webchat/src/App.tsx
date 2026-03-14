@@ -4,8 +4,7 @@ import { WSClient, type WSFrame } from "./lib/ws-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "./lib/event-parser";
 import { extractText, streamBlocksToContent, toContentItems } from "./lib/message-extract";
 import { listSessions, createSession, getSession, updateSession, deleteSession, generateTitle } from "./lib/sessions";
-import { DEFAULT_OPENCLAW_SESSION_KEY, getOpenClawToken } from "./lib/config";
-import { getContainerStatus } from "./lib/container";
+import { DEFAULT_OPENCLAW_SESSION_KEY } from "./lib/config";
 import { posthog } from "./lib/posthog";
 import NavRail from "./components/NavRail";
 import Sidebar from "./components/Sidebar";
@@ -62,30 +61,15 @@ export default function App() {
   const [connState, setConnState] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
-  const [ocToken, setOcToken] = useState(() => getOpenClawToken());
 
-  // Listen for token injection from SetupGate (avoids full page reload)
-  useEffect(() => {
-    const handler = () => setOcToken(getOpenClawToken());
-    window.addEventListener("openclaw-token-ready", handler);
-    return () => window.removeEventListener("openclaw-token-ready", handler);
+  // null = not yet validated, "" = no token (show SetupGate), "xxx" = verified token
+  const [ocToken, setOcToken] = useState<string | null>(null);
+
+  // SetupGate calls this after confirming the container is truly online.
+  const handleGateReady = useCallback((token: string) => {
+    window.__OPENCLAW_TOKEN__ = token;
+    setOcToken(token);
   }, []);
-
-  // Validate token on mount: if server injected a stale token (container deleted),
-  // clear it so SetupGate shows and re-provisions.
-  useEffect(() => {
-    if (!ocToken) return;
-    getContainerStatus()
-      .then((status) => {
-        if (!status.provisioned || !status.container_token) {
-          window.__OPENCLAW_TOKEN__ = "";
-          setOcToken("");
-        }
-      })
-      .catch(() => {
-        // Network error — keep token, WS will retry
-      });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const blocksRef = useRef<StreamBlock[]>([]);
   const streamTextRef = useRef("");
@@ -376,7 +360,7 @@ export default function App() {
   );
 
   if (!ocToken) {
-    return <SetupGate />;
+    return <SetupGate onReady={handleGateReady} />;
   }
 
   return (

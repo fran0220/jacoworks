@@ -2,6 +2,8 @@ import { GATEWAY_URL, AUTH_TOKEN } from "./config";
 
 export interface ContainerStatus {
   provisioned: boolean;
+  ready?: boolean;
+  status?: string;
   container_name?: string;
   container_ip?: string;
   container_type?: string;
