@@ -2,6 +2,8 @@
 name: poster
 display-name: 海报生成
 display-description: 生成专业海报，12种类型×25种视觉风格，含 VLM 审查
+tools: [generate_image]
+triggers: [海报, poster, 宣传图]
 description: >
   Generates professional posters with 12 poster types and 25 visual styles.
   Analyzes content, recommends type×style combinations, generates publication-ready posters,

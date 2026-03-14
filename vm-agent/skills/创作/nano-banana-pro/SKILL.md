@@ -2,6 +2,8 @@
 name: nano-banana-pro
 display-name: 图片生成
 display-description: 生成或编辑高质量图片
+tools: [generate_image]
+triggers: [画图, 生成图片, 生成图, 画一, 图片编辑, draw, generate image, edit image, create image]
 description: >
   Generate or edit images using the built-in generate_image tool.
   Supports text-to-image and image-to-image editing.
@@ -50,11 +52,35 @@ generate_image(prompt="描述", filename="output.png", aspect_ratio="16:9")
 | "竖屏" / "手机" / "9:16" | `9:16` |
 | "4:3" / "标准" | `4:3` |
 
-## 默认工作流：draft → iterate → final
+## 连续编辑（重要）
 
+当用户要求修改**之前生成的图片**（如"把背景换成蓝色"、"加个帽子"、"改成卡通风格"），**必须**：
+1. 从对话历史中找到上次 `generate_image` 返回的文件路径
+2. 将该路径作为 `input_image` 传入，配合新的编辑 prompt
+3. 使用新文件名输出（保留原图）
+
+示例对话：
+```
+用户: 画一只猫
+→ generate_image(prompt="a cat", filename="2026-03-14-10-00-00-cat.png")
+→ ✅ Image saved: /workspace/2026-03-14-10-00-00-cat.png
+
+用户: 给它戴个墨镜
+→ generate_image(prompt="Add cool sunglasses to the cat. Keep everything else identical.", filename="2026-03-14-10-01-00-cat-sunglasses.png", input_image="2026-03-14-10-00-00-cat.png")
+```
+
+**判断依据**：用户说"改一下"、"加个XX"、"换成XX风格"、"去掉XX"等修改类指令，且对话中有之前生成的图片 → 用编辑模式。用户描述全新画面 → 用生成模式。
+
+## 工作流
+
+**默认**：单次生成，直接输出结果。不要自动迭代。
+
+**仅当用户明确要求迭代**（如"先出草稿"、"帮我多试几版"）时，才使用多步工作流：
 1. **草稿**: 快速验证 prompt
 2. **迭代**: 微调 prompt，每次新文件名
 3. **定稿**: prompt 确认后输出最终版
+
+⚠️ 禁止未经用户要求就连续多次调用 `generate_image`。一次请求 = 一次调用。
 
 ## 文件名规则
 

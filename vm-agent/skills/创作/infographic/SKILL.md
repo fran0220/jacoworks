@@ -2,6 +2,8 @@
 name: infographic
 display-name: 信息图生成
 display-description: 生成专业信息图，21种布局×20种视觉风格
+tools: [generate_image]
+triggers: [信息图, infographic, 可视化, visual summary]
 description: >
   Generates professional infographics with 21 layout types and 20 visual styles.
   Analyzes content, recommends layout×style combinations, and generates publication-ready infographics.

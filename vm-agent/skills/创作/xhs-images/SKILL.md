@@ -2,6 +2,8 @@
 name: xhs-images
 display-name: 小红书图文
 display-description: 生成小红书风格图文系列，10种视觉风格×8种布局
+tools: [generate_image]
+triggers: [小红书, XHS, RedNote, 种草]
 description: >
   Generates Xiaohongshu (Little Red Book) infographic series with 10 visual styles and 8 layouts.
   Breaks content into 1-10 cartoon-style images optimized for XHS engagement.

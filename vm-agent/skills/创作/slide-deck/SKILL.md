@@ -2,6 +2,8 @@
 name: slide-deck
 display-name: 演示幻灯片
 display-description: 从内容生成专业演示幻灯片，自动合并为 PPTX/PDF
+tools: [generate_image]
+triggers: [幻灯片, PPT, 演示文稿, slides, presentation, deck]
 description: >
   Generates professional slide deck images from content. Creates outlines with style instructions,
   then generates individual slide images. Supports 16 style presets and custom dimensions.

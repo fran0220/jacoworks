@@ -29,6 +29,7 @@ import { createHeartbeatService, type HeartbeatService } from "./services/heartb
 import { createCronService, type CronService, type CronResultEvent } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 import { createPythonExtension } from "./tools/python.js";
+import { createSkillAutoloadExtension, discoverAutoloadSkills } from "./extensions/skill-autoload.js";
 import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
 import type { MemoryStoreConfig } from "./lib/memory-store.js";
@@ -446,13 +447,8 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   // Intercept read tool for binary documents.
   // Binary docs → block with guidance to use read_document.
-  // Images → let Pi SDK's native read return ImageContent (model uses VL natively).
   const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
-  const IMAGE_EXTS_RE = /\.(png|jpg|jpeg|gif|webp|bmp|tiff|tif)$/i;
-  // Track recently produced files to prevent LLM from unnecessarily reading them back
-  const recentlyProducedFiles = new Set<string>();
   extensionFactories.push((pi) => {
-    // Block binary docs; block reads of just-produced images (no need to re-read what we just wrote)
     pi.on("tool_call", async (event) => {
       if (event.toolName === "read" && typeof event.input?.path === "string") {
         if (BINARY_DOC_EXTS.test(event.input.path)) {
@@ -460,28 +456,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
             block: true,
             reason: `Cannot read binary file "${event.input.path}" with the read tool. Use the read_document tool instead.`,
           };
-        }
-        if (IMAGE_EXTS_RE.test(event.input.path)) {
-          const fullPath = resolve(workspace, event.input.path);
-          if (recentlyProducedFiles.has(fullPath)) {
-            recentlyProducedFiles.delete(fullPath);
-            return {
-              block: true,
-              reason: `Image "${event.input.path}" was just generated/written. No need to read it back — you already know its content.`,
-            };
-          }
-        }
-      }
-    });
-
-    // Track files produced by generate_image and write tools
-    pi.on("tool_result", async (event) => {
-      if (event.toolName === "generate_image" || event.toolName === "write") {
-        const path = (event as { details?: { path?: string } }).details?.path;
-        if (path) {
-          recentlyProducedFiles.add(path);
-          // Auto-expire after 60s to avoid stale entries
-          setTimeout(() => recentlyProducedFiles.delete(path), 60_000);
         }
       }
     });
@@ -558,6 +532,20 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
       return { messages: compressed };
     });
   });
+
+  // ─── Skill auto-loading: inject skill content on first tool use or keyword match ───
+  const allSkillDirs = [
+    ...config.skillsPaths.filter((p) => existsSync(p)),
+    ...(existsSync(config.userSkillsDir) ? [config.userSkillsDir] : []),
+  ];
+  const autoloadEntries = discoverAutoloadSkills(allSkillDirs);
+  if (autoloadEntries.length > 0) {
+    extensionFactories.push(createSkillAutoloadExtension(autoloadEntries));
+    log.info("skill autoload registered", {
+      count: autoloadEntries.length,
+      skills: autoloadEntries.map((e) => e.name),
+    });
+  }
 
   if (config.toolDenyList.length > 0) {
     extensionFactories.push((pi) => {

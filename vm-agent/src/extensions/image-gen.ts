@@ -36,58 +36,49 @@ async function downloadToBuffer(url: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer());
 }
 
-// ─── Primary: gemini-3.1-flash-image-preview via LLM Proxy ──
+// ─── Primary: gemini-3.1-flash-image-preview via LLM Proxy (native Gemini API) ──
 
 async function generateWithProxy(
   proxyUrl: string, proxyKey: string,
   prompt: string, inputImage?: string,
 ): Promise<Buffer> {
-  let content: unknown;
+  const parts: Array<Record<string, unknown>> = [{ text: prompt }];
   if (inputImage) {
     const imgBuf = readFileSync(inputImage);
     const mime = mimeFromExt(inputImage);
-    const b64 = imgBuf.toString("base64");
-    content = [
-      { type: "text", text: prompt },
-      { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
-    ];
-  } else {
-    content = prompt;
+    parts.push({ inlineData: { mimeType: mime, data: imgBuf.toString("base64") } });
   }
 
-  const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${proxyKey}`,
+  const res = await fetch(
+    `${proxyUrl}/v1beta/models/gemini-3.1-flash-image-preview:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": proxyKey,
+      },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+      }),
+      signal: AbortSignal.timeout(120_000),
     },
-    body: JSON.stringify({
-      model: "gemini-3.1-flash-image-preview",
-      messages: [{ role: "user", content }],
-      max_tokens: 2000,
-      modalities: ["text", "image"],
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
+  );
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Proxy API error: HTTP ${res.status} — ${errText.slice(0, 300)}`);
+    throw new Error(`Gemini API error: HTTP ${res.status} — ${errText.slice(0, 300)}`);
   }
 
-  interface ImagePart { type?: string; image_url?: { url?: string } }
+  interface GeminiPart { text?: string; inlineData?: { mimeType: string; data: string } }
   const data = await res.json() as {
-    choices?: Array<{
-      message?: { content?: ImagePart[] };
-    }>;
+    candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
   };
-  const parts = data.choices?.[0]?.message?.content;
-  const imgPart = parts?.find((p: ImagePart) => p.type === "image_url" || p.image_url?.url);
-  const imageUrl = imgPart?.image_url?.url;
-  if (!imageUrl) throw new Error("Proxy API: no image in response");
+  const responseParts = data.candidates?.[0]?.content?.parts;
+  const imgPart = responseParts?.find((p) => p.inlineData?.data);
+  if (!imgPart?.inlineData) throw new Error("Gemini API: no image in response");
 
-  const b64Data = imageUrl.replace(/^data:image\/\w+;base64,/, "");
-  return Buffer.from(b64Data, "base64");
+  return Buffer.from(imgPart.inlineData.data, "base64");
 }
 
 // ─── Fallback: nano-banana-2 via fal.ai ──
@@ -199,7 +190,7 @@ export function createImageGenExtension(
         return {
           content: [{
             type: "text" as const,
-            text: `Image saved: ${outputPath} (${imgBuffer.length} bytes)`,
+            text: `✅ Image saved: ${outputPath} (${imgBuffer.length} bytes)\nPrompt: "${params.prompt}"\nThe image has been written to disk. Do NOT read it back — describe the result to the user based on the prompt.`,
           }],
           details: { path: outputPath, size: imgBuffer.length },
         };

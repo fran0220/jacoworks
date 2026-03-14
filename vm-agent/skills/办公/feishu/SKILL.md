@@ -2,6 +2,7 @@
 name: feishu
 display-name: 飞书集成
 display-description: 飞书消息、日历、审批、通讯录、多维表格
+triggers: [飞书, feishu, lark, 日程, 审批, 通讯录]
 description: >
   Feishu (Lark) platform integration. Send messages, manage calendar events,
   query contacts, create approvals, and operate bitable records.

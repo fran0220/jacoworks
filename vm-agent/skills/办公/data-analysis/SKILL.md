@@ -2,6 +2,8 @@
 name: data-analysis
 display-name: 数据分析
 display-description: 数据清洗、可视化与统计分析
+tools: [python]
+triggers: [数据分析, 统计, 图表, analyze data, chart, statistics, pivot]
 description: "Analyze local structured data files (CSV, Excel, JSON). Use when the user asks to analyze data, compute statistics, find trends, generate charts, create reports, pivot tables, or visualize data from local files."
 ---
 
