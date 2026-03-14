@@ -873,10 +873,6 @@ func (oc *OpenClawClient) WriteConfig(containerName, userID, token string, hostP
 	oc.client.Exec(containerName, "mkdir", "-p",
 		"/data/workspace/jamoss/data", "/data/workspace/jamoss/logs")
 
-	// 4. Fix ownership
-	oc.client.Exec(containerName, "chown", "-R", "1000:1000",
-		"/home/node/.openclaw", "/data/workspace")
-
 	log.Info().Str("user_id", userID).Str("container", containerName).Msg("openclaw config written to container")
 	return nil
 }
@@ -964,6 +960,7 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 
 	envVars := oc.ContainerEnvVars()
 	envVars["OPENCLAW_GATEWAY_TOKEN"] = token
+	envVars["HOME"] = "/home/node" // OpenClaw reads config from $HOME/.openclaw/
 	var env []string
 	for k, v := range envVars {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
@@ -1012,7 +1009,13 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 		return "", fmt.Errorf("write config: %w", err)
 	}
 
-	// 4. Wait for health
+	// 4. Restart so OpenClaw picks up the config (it started with defaults)
+	_ = oc.client.cli.ContainerStop(ctx, name, container.StopOptions{})
+	if err := oc.client.cli.ContainerStart(ctx, name, types.ContainerStartOptions{}); err != nil {
+		log.Warn().Err(err).Str("name", name).Msg("openclaw provision: restart after config write failed")
+	}
+
+	// 5. Wait for health
 	time.Sleep(3 * time.Second)
 	healthURL := fmt.Sprintf("http://%s:%d/healthz", oc.client.hostIP, hostPort)
 	if err := httpHealthPoll(healthURL, 60*time.Second); err != nil {
