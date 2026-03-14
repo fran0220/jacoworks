@@ -257,6 +257,16 @@ pub struct FilePreview {
     metadata: Option<serde_json::Value>,
 }
 
+#[derive(serde::Serialize)]
+pub struct DirEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+    ext: String,
+    category: String,
+}
+
 fn detect_category(name: &str, ext: &str) -> &'static str {
     let lower_name = name.to_lowercase();
     if lower_name.ends_with(".tar.gz") || lower_name.ends_with(".tgz") {
@@ -555,6 +565,62 @@ fn preview_file(path: String, workspace: Option<String>) -> Result<FilePreview, 
     })
 }
 
+#[tauri::command]
+fn list_directory(path: String, workspace: Option<String>) -> Result<Vec<DirEntry>, String> {
+    let full = resolve_read_path(&path, workspace.as_deref())?;
+    if !full.is_dir() {
+        return Err("Not a directory".to_string());
+    }
+
+    let mut entries: Vec<DirEntry> = Vec::new();
+    let read_dir = std::fs::read_dir(&full).map_err(|e| format!("Cannot read directory: {}", e))?;
+
+    for entry in read_dir {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Skip hidden files/directories
+        if name.starts_with('.') {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let is_dir = meta.is_dir();
+        let ext = if is_dir {
+            String::new()
+        } else {
+            entry.path().extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase()
+        };
+        let category = if is_dir {
+            "directory".to_string()
+        } else {
+            detect_category(&name, &ext).to_string()
+        };
+        entries.push(DirEntry {
+            path: entry.path().display().to_string(),
+            name,
+            is_dir,
+            size: if is_dir { 0 } else { meta.len() },
+            ext,
+            category,
+        });
+    }
+
+    // Sort: directories first, then alphabetically
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(entries)
+}
+
 #[derive(serde::Deserialize)]
 pub struct ImportFile {
     name: String,
@@ -697,6 +763,7 @@ pub fn run() {
             resolve_file_path,
             read_file_base64,
             preview_file,
+            list_directory,
             import_files,
             db::db_init,
             db::db_list_sessions,

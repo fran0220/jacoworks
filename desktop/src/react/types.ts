@@ -79,3 +79,12 @@ export interface FilePreview {
   entries?: string[] | null;
   metadata?: Record<string, string | number | boolean | null> | null;
 }
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  ext: string;
+  category: string;
+}
