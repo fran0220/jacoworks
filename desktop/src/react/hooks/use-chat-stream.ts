@@ -344,7 +344,10 @@ export function useChatStream({
 
             if (packet.type === "done") break;
             if (packet.type !== "session_event" || !packet.event) continue;
-            if ((packet.event as { type?: string }).type === "keepalive") continue;
+            if ((packet.event as { type?: string }).type === "keepalive") {
+              resetInactivityTimer();
+              continue;
+            }
 
             const event = packet.event as {
               type: string;
