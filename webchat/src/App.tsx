@@ -5,6 +5,7 @@ import { parseFrame, applyEvent, type ParsedEvent } from "./lib/event-parser";
 import { extractText, streamBlocksToContent, toContentItems } from "./lib/message-extract";
 import { listSessions, createSession, getSession, updateSession, deleteSession, generateTitle } from "./lib/sessions";
 import { DEFAULT_OPENCLAW_SESSION_KEY, getOpenClawToken } from "./lib/config";
+import { getContainerStatus } from "./lib/container";
 import { posthog } from "./lib/posthog";
 import NavRail from "./components/NavRail";
 import Sidebar from "./components/Sidebar";
@@ -69,6 +70,22 @@ export default function App() {
     window.addEventListener("openclaw-token-ready", handler);
     return () => window.removeEventListener("openclaw-token-ready", handler);
   }, []);
+
+  // Validate token on mount: if server injected a stale token (container deleted),
+  // clear it so SetupGate shows and re-provisions.
+  useEffect(() => {
+    if (!ocToken) return;
+    getContainerStatus()
+      .then((status) => {
+        if (!status.provisioned || !status.container_token) {
+          window.__OPENCLAW_TOKEN__ = "";
+          setOcToken("");
+        }
+      })
+      .catch(() => {
+        // Network error — keep token, WS will retry
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const blocksRef = useRef<StreamBlock[]>([]);
   const streamTextRef = useRef("");

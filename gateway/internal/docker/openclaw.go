@@ -972,6 +972,7 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 
 	containerCfg := &container.Config{
 		Image: oc.client.image,
+		User:  "root",
 		Env:   env,
 		Labels: map[string]string{
 			"jacoworks.managed": "true",
