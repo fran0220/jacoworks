@@ -7,6 +7,13 @@
  */
 import type { ChatMessage, ChatSession, StreamBlock } from "../types";
 
+export type AgentPhase = "idle" | "thinking" | "executing" | "compacting" | "retrying";
+
+export interface ContextUsage {
+  usedTokens: number;
+  maxTokens: number;
+}
+
 // ─── Types ──────────────────────────────────────────────
 
 export type StreamSessionContext = Pick<ChatSession, "id" | "anonymous" | "title">;
@@ -18,6 +25,9 @@ export interface SessionStreamSnapshot {
   streamingStartedAt: number | null;
   blocks: StreamBlock[];
   errorText: string | null;
+  agentPhase: AgentPhase;
+  turnCount: number;
+  contextUsage: ContextUsage | null;
 }
 
 /** Mutable runtime — only the stream loop and stop/send touch this. */
@@ -34,6 +44,7 @@ export interface SessionStreamRuntime {
 
   blocksRaf: number | null;
   titleRequestVersion: number;
+  agentStartedAt: number | null;
 }
 
 export interface SessionStreamEntry {
@@ -54,6 +65,9 @@ function createEntry(session: ChatSession): SessionStreamEntry {
       streamingStartedAt: null,
       blocks: [],
       errorText: null,
+      agentPhase: "idle",
+      turnCount: 0,
+      contextUsage: null,
     },
     runtime: {
       activeStream: null,
@@ -66,6 +80,7 @@ function createEntry(session: ChatSession): SessionStreamEntry {
       dirty: false,
       blocksRaf: null,
       titleRequestVersion: 0,
+      agentStartedAt: null,
     },
     listeners: new Set(),
   };
@@ -202,6 +217,9 @@ export function startStreaming(session: ChatSession, streamBaseMessages: ChatMes
     streamingStartedAt: Date.now(),
     blocks: [],
     errorText: null,
+    agentPhase: "idle",
+    turnCount: 0,
+    contextUsage: null,
   };
   emit(entry);
 
@@ -231,7 +249,10 @@ export function finishStreaming(sessionId: string) {
     streaming: false,
     streamingStartedAt: null,
     blocks: [],
+    agentPhase: "idle",
+    turnCount: 0,
   };
+  entry.runtime.agentStartedAt = null;
   emit(entry);
 
   window.dispatchEvent(

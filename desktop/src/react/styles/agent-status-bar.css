@@ -1,0 +1,141 @@
+/* ===== Agent Status Bar (below Composer) ===== */
+
+.agent-status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-10);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  animation: asb-slide-in var(--duration-normal) var(--ease-standard);
+}
+
+@keyframes asb-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Phase dot + label ── */
+
+.asb-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.asb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  animation: asb-pulse 1.6s var(--ease-emphasized) infinite;
+}
+
+.asb-phase--executing .asb-dot {
+  animation: asb-pulse 1s var(--ease-standard) infinite;
+}
+
+.asb-phase--compacting .asb-dot {
+  background: var(--accent-thinking);
+  animation: asb-pulse 2s var(--ease-standard) infinite;
+}
+
+.asb-phase--retrying .asb-dot {
+  background: var(--danger);
+  animation: asb-pulse 0.8s var(--ease-standard) infinite;
+}
+
+@keyframes asb-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+.asb-label {
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+}
+
+/* ── Meta / Turn count ── */
+
+.asb-meta {
+  color: var(--text-muted);
+}
+
+.asb-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+}
+
+/* ── Elapsed timer ── */
+
+.asb-elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* ── Context usage bar ── */
+
+.asb-context {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.asb-context-track {
+  width: 60px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.asb-context-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width 0.6s var(--ease-emphasized);
+}
+
+.asb-context-fill.asb-context-warn {
+  background: var(--danger);
+  animation: asb-bar-glow 2s var(--ease-standard) infinite;
+}
+
+@keyframes asb-bar-glow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.asb-context-pct {
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  min-width: 3ch;
+  text-align: right;
+}
+
+/* ── Reduced motion ── */
+
+@media (prefers-reduced-motion: reduce) {
+  .asb-dot,
+  .asb-context-fill.asb-context-warn {
+    animation: none !important;
+  }
+}

@@ -189,6 +189,25 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
       }
 
       sender.send({ id, type: "session_event", session_id: sessionId, event });
+
+      // Emit context_usage after turn_end so the frontend can display a context bar
+      if (event.type === "turn_end") {
+        const turnMsg = (event as { message?: { usage?: { input?: number; output?: number; totalTokens?: number } } }).message;
+        const usage = turnMsg?.usage;
+        if (usage) {
+          const maxTokens = session.state.model?.contextWindow || 200000;
+          sender.send({
+            id,
+            type: "session_event",
+            session_id: sessionId,
+            event: {
+              type: "context_usage",
+              usedTokens: usage.input || 0,
+              maxTokens,
+            },
+          });
+        }
+      }
     });
 
     const options = session.isStreaming

@@ -122,7 +122,7 @@ export function useChatStream({
     useCallback(() => getSnapshot(session), [session]),
   );
 
-  const { sessionState, streaming, streamingStartedAt, blocks, errorText } = streamSnapshot;
+  const { sessionState, streaming, streamingStartedAt, blocks, errorText, agentPhase, turnCount, contextUsage } = streamSnapshot;
 
   // ── View-only local state ──────────────────────────
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -361,8 +361,10 @@ export function useChatStream({
 
             if (event.type === "message_update") {
               const assistantEvent = event.assistantMessageEvent;
-              if (assistantEvent?.type === "thinking_delta" || assistantEvent?.type === "thinking_start" || assistantEvent?.type === "thinking_end") {
-                console.log("[thinking-ui]", assistantEvent.type, assistantEvent.delta?.slice?.(0, 50));
+              if (assistantEvent?.type === "thinking_start") {
+                patchSnapshot(streamCtx.id, { agentPhase: "thinking" });
+              } else if (assistantEvent?.type === "thinking_end") {
+                patchSnapshot(streamCtx.id, { agentPhase: "thinking" });
               }
               if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
                 const last = entry.runtime.blocksBuffer[entry.runtime.blocksBuffer.length - 1];
@@ -397,6 +399,7 @@ export function useChatStream({
             }
 
             if (event.type === "tool_execution_start") {
+              patchSnapshot(streamCtx.id, { agentPhase: "executing" });
               const execId = String(event.toolCallId || "");
               const existing = execId
                 ? entry.runtime.blocksBuffer.find((b) => b.type === "tool" && b.id === execId)
@@ -477,7 +480,12 @@ export function useChatStream({
                 type: "status",
                 text: `上下文压缩中 (${String(event.reason || "auto")})`,
               });
+              patchSnapshot(streamCtx.id, { agentPhase: "compacting" });
               scheduleBlocksPublish(streamCtx.id);
+            }
+
+            if (event.type === "auto_compaction_end") {
+              patchSnapshot(streamCtx.id, { agentPhase: "thinking" });
             }
 
             if (event.type === "auto_retry_start") {
@@ -485,7 +493,36 @@ export function useChatStream({
                 type: "status",
                 text: `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
               });
+              patchSnapshot(streamCtx.id, { agentPhase: "retrying" });
               scheduleBlocksPublish(streamCtx.id);
+            }
+
+            if (event.type === "auto_retry_end") {
+              patchSnapshot(streamCtx.id, { agentPhase: "thinking" });
+            }
+
+            // ── Agent lifecycle events ──
+            if (event.type === "agent_start") {
+              entry.runtime.agentStartedAt = Date.now();
+              patchSnapshot(streamCtx.id, { agentPhase: "thinking", turnCount: 0 });
+            }
+
+            if (event.type === "agent_end") {
+              entry.runtime.agentStartedAt = null;
+            }
+
+            if (event.type === "turn_start") {
+              const prev = getSnapshot(session);
+              patchSnapshot(streamCtx.id, { agentPhase: "thinking", turnCount: prev.turnCount + 1 });
+            }
+
+            if (event.type === "context_usage") {
+              const cu = event as { usedTokens?: number; maxTokens?: number };
+              if (cu.usedTokens != null && cu.maxTokens != null) {
+                patchSnapshot(streamCtx.id, {
+                  contextUsage: { usedTokens: cu.usedTokens, maxTokens: cu.maxTokens },
+                });
+              }
             }
           }
 
@@ -636,6 +673,9 @@ export function useChatStream({
     streamingStartedAt,
     blocks,
     errorText,
+    agentPhase,
+    turnCount,
+    contextUsage,
     messagesRef,
     isAtBottom,
     agentReady: transport?.isReady ?? false,

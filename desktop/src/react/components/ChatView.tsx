@@ -2,6 +2,7 @@ import { AlertCircle, ChevronDown, RotateCcw } from "lucide-react";
 import { useChatStream } from "../hooks/use-chat-stream";
 import type { AgentTransport } from "../lib/agent-transport";
 import type { AttachedFile, ChatSession } from "../types";
+import AgentStatusBar from "./AgentStatusBar";
 import AssistantContent from "./AssistantContent";
 import Composer from "./Composer";
 import MessageBubble from "./MessageBubble";
@@ -29,6 +30,9 @@ export default function ChatView({
     streamingStartedAt,
     blocks,
     errorText,
+    agentPhase,
+    turnCount,
+    contextUsage,
     messagesRef,
     isAtBottom,
     scrollToBottom,
@@ -117,6 +121,14 @@ export default function ChatView({
         onModelChange={updateModel}
         onSend={sendMessage}
         onStop={stopStreaming}
+      />
+
+      <AgentStatusBar
+        streaming={streaming}
+        streamingStartedAt={streamingStartedAt}
+        agentPhase={agentPhase}
+        turnCount={turnCount}
+        contextUsage={contextUsage}
       />
     </div>
   );
