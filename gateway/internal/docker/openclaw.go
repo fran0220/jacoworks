@@ -19,7 +19,6 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/go-connections/nat"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
@@ -981,21 +980,13 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 				{HostPort: fmt.Sprintf("%d", hostPort)},
 			},
 		},
-		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeBind,
-				Source: fmt.Sprintf("%s/.openclaw", userDir),
-				Target: "/home/node/.openclaw",
-			},
-			{
-				Type:   mount.TypeBind,
-				Source: fmt.Sprintf("%s/workspace", userDir),
-				Target: "/data/workspace",
-			},
+		Binds: []string{
+			fmt.Sprintf("%s/.openclaw:/home/node/.openclaw", userDir),
+			fmt.Sprintf("%s/workspace:/data/workspace", userDir),
 		},
 	}
 
-	// 1. Create container (bind mounts auto-create host directories)
+	// 1. Create container (Binds auto-create host directories)
 	resp, err := oc.client.cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("docker run %s: %w", name, err)
