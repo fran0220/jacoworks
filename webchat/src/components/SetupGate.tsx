@@ -6,9 +6,11 @@ type GateStage = "checking" | "provisioning" | "polling" | "ready" | "error";
 
 interface SetupGateProps {
   onReady: (token: string) => void;
+  /** When set, container is ready but WS is still connecting. */
+  wsState?: "disconnected" | "connecting" | "connected";
 }
 
-export default function SetupGate({ onReady }: SetupGateProps) {
+export default function SetupGate({ onReady, wsState }: SetupGateProps) {
   const [stage, setStage] = useState<GateStage>("checking");
   const [error, setError] = useState<string | null>(null);
   const pollTimer = useRef<number | null>(null);
@@ -27,8 +29,7 @@ export default function SetupGate({ onReady }: SetupGateProps) {
       readyFired.current = true;
       setStage("ready");
       stopPolling();
-      // Small delay for UI feedback before transitioning
-      window.setTimeout(() => onReady(token), 300);
+      onReady(token);
     },
     [stopPolling, onReady],
   );
@@ -77,7 +78,6 @@ export default function SetupGate({ onReady }: SetupGateProps) {
       setStage("provisioning");
       const result = await provisionContainer();
       if (result.status === "ready" && result.container_token) {
-        // Provision returned ready — still verify via status API
         try {
           const status = await getContainerStatus();
           if (isOnline(status)) {
@@ -96,21 +96,35 @@ export default function SetupGate({ onReady }: SetupGateProps) {
     }
   }, [finishSetup, startPolling, stopPolling]);
 
+  // Only run setup when we don't already have a token (wsState is undefined)
   useEffect(() => {
+    if (wsState !== undefined) return; // Token already set, just waiting for WS
     runSetup();
     return stopPolling;
-  }, [runSetup, stopPolling]);
+  }, [runSetup, stopPolling, wsState]);
 
-  const statusText =
-    stage === "checking"
-      ? "检查容器状态..."
-      : stage === "provisioning"
-        ? "正在申请 AI 容器..."
-        : stage === "polling"
-          ? "容器启动中，正在等待就绪..."
-          : stage === "ready"
-            ? "工作区已就绪，正在进入..."
-            : "初始化遇到问题";
+  // Determine status text — WS connecting phase takes priority when active
+  let statusText: string;
+  if (wsState !== undefined) {
+    // Phase 2: container ready, WS connecting
+    statusText =
+      wsState === "connecting"
+        ? "正在连接 AI 工作区..."
+        : "正在建立连接..."; // disconnected, waiting for WS effect to kick in
+  } else {
+    statusText =
+      stage === "checking"
+        ? "检查容器状态..."
+        : stage === "provisioning"
+          ? "正在申请 AI 容器..."
+          : stage === "polling"
+            ? "容器启动中，正在等待就绪..."
+            : stage === "ready"
+              ? "容器已就绪，正在连接..."
+              : "初始化遇到问题";
+  }
+
+  const showError = !wsState && stage === "error";
 
   return (
     <div className="setup-gate">
@@ -126,9 +140,9 @@ export default function SetupGate({ onReady }: SetupGateProps) {
           <span>{statusText}</span>
         </div>
 
-        {error && <div className="panel-error">{error}</div>}
+        {error && showError && <div className="panel-error">{error}</div>}
 
-        {stage === "error" && (
+        {showError && (
           <button className="setup-gate-retry" onClick={runSetup}>
             重新初始化
           </button>

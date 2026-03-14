@@ -359,8 +359,8 @@ export default function App() {
     [handleTeamChange],
   );
 
-  if (!ocToken) {
-    return <SetupGate onReady={handleGateReady} />;
+  if (!ocToken || connState !== "connected") {
+    return <SetupGate onReady={handleGateReady} wsState={ocToken ? connState : undefined} />;
   }
 
   return (
