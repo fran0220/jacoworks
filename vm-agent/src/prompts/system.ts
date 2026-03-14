@@ -55,7 +55,17 @@ function buildRuntimePrompt(opts: SystemPromptOptions): string {
 - Always read files before modifying them. Make minimal, targeted edits.
 - Never execute destructive operations (rm -rf, DROP DATABASE, force push) without explicit user confirmation.
 - Do not add unnecessary error handling, comments, or abstractions beyond what the task requires.
-</safety_invariants>`);
+</safety_invariants>
+
+<skill_loading_rules>
+IMPORTANT: You have access to specialized skills listed in <available_skills>.
+BEFORE using any tool for a non-trivial task, check if a matching skill exists. If it does, you MUST read the skill file FIRST to get the correct workflow and parameters.
+- First time using generate_image? Read the image generation skill first.
+- First time using web_search? Read the web search skill first.
+- First time using read_document? Read the document processing skill first.
+- User asks to create slides, posters, infographics, or videos? Read the corresponding skill first.
+Do NOT skip skill loading just because you already know the tool's parameters. Skills contain critical workflow rules, prompt templates, and output conventions that you cannot infer from the tool definition alone.
+</skill_loading_rules>`);
 
   // Windows environment note (sidecar bundles bash + coreutils)
   if (opts.mode === "sidecar" && process.platform === "win32") {
