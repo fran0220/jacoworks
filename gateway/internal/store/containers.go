@@ -7,6 +7,7 @@ import (
 )
 
 const (
+	// Deprecated: vm-agent is being phased out. New code should use ContainerTypeOpenClaw.
 	ContainerTypeVMAgent  = "vm-agent"
 	ContainerTypeOpenClaw = "openclaw"
 )
@@ -17,7 +18,7 @@ type ContainerInfo struct {
 	ContainerIP    string
 	ContainerToken string
 	HostPort       int
-	ContainerType  string // "vm-agent" | "openclaw"
+	ContainerType  string // active value: "openclaw"
 	Status         string // "creating" | "running" | "paused" | "stopped" | "exited"
 }
 
@@ -38,7 +39,7 @@ type Container struct {
 func (s *Store) GetContainerInfo(ctx context.Context, userID, containerType string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent'), COALESCE(status, 'creating')
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'openclaw'), COALESCE(status, 'creating')
 		 FROM containers WHERE user_id = $1 AND container_type = $2`,
 		userID, containerType,
 	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType, &info.Status)
@@ -101,7 +102,7 @@ func (s *Store) GetUserIDByContainerName(ctx context.Context, containerName stri
 func (s *Store) GetContainerInfoByName(ctx context.Context, containerName string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'vm-agent'), COALESCE(status, 'creating')
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'openclaw'), COALESCE(status, 'creating')
 		 FROM containers WHERE container_name = $1`,
 		containerName,
 	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType, &info.Status)
@@ -112,7 +113,7 @@ func (s *Store) GetContainerInfoByName(ctx context.Context, containerName string
 }
 
 // GetUserByContainerToken looks up the user who owns a container by its token.
-// Used for container-initiated API calls (e.g. game deploy from vm-agent container).
+// Used for container-initiated API calls (for example: game deploy from container runtime).
 func (s *Store) GetUserByContainerToken(ctx context.Context, token string) (*User, error) {
 	user := &User{}
 	err := s.pool.QueryRow(ctx,

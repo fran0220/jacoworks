@@ -9,10 +9,10 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
-// UpstreamDialer abstracts how to connect to different container types.
-// Implementations exist for vm-agent (VMAgentDialer) and OpenClaw (OpenClawDialer).
+// UpstreamDialer abstracts how to connect to different container backends.
+// Gateway now uses OpenClaw as the active upstream implementation.
 type UpstreamDialer interface {
-	// ContainerType returns "vm-agent" or "openclaw".
+	// ContainerType returns the backing container type (for example: "openclaw").
 	ContainerType() string
 
 	// EnsureRunning starts/unfreezes the container if needed.
@@ -26,11 +26,11 @@ type UpstreamDialer interface {
 	UpstreamURL(info *store.ContainerInfo) string
 
 	// MapUpstreamMessage maps a raw upstream message to an Event.
-	// For vm-agent: parse type field. For OpenClaw: passthrough as "message".
+	// OpenClaw dialer forwards frames as "message" events.
 	MapUpstreamMessage(msg []byte) (eventType string, data []byte, ok bool)
 
 	// FormatClientMessage formats a client request for the upstream protocol.
-	// For vm-agent: merge payload with id+type. For OpenClaw: passthrough.
+	// OpenClaw dialer forwards payload frames without rewriting.
 	FormatClientMessage(msgType string, payload json.RawMessage, requestID string) ([]byte, error)
 
 	// GetFreezer returns the Freezer for this container type (may be nil).

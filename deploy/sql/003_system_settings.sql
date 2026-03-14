@@ -25,6 +25,7 @@ INSERT INTO system_settings (key, description) VALUES
     ('embedding_base_url', 'Embedding API 地址 (OpenAI 兼容, 不含 /embeddings)'),
     ('embedding_api_key', 'Embedding API 密钥'),
     ('fal_api_key', 'fal.ai 图片生成 API 密钥'),
+    ('mineru_token', 'MinerU 文档解析 API Token (mineru.net)'),
     ('jimeng_api_url', '即梦网关地址 (Seedance 视频生成)'),
     ('jimeng_api_key', '即梦网关 API 密钥'),
     ('github_token', 'GitHub Personal Access Token (反馈同步 Issues)'),

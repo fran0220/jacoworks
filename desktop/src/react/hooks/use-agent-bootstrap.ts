@@ -73,6 +73,7 @@ export function useAgentBootstrap(authenticated: boolean) {
       if (agentConfig.embedding_base_url) envVars.EMBEDDING_BASE_URL = agentConfig.embedding_base_url;
       if (agentConfig.embedding_api_key) envVars.EMBEDDING_API_KEY = agentConfig.embedding_api_key;
       if (agentConfig.fal_api_key) envVars.FAL_API_KEY = agentConfig.fal_api_key;
+      if (agentConfig.mineru_token) envVars.MINERU_TOKEN = agentConfig.mineru_token;
       if (agentConfig.jimeng_api_url) envVars.JIMENG_API_URL = agentConfig.jimeng_api_url;
       if (agentConfig.jimeng_api_key) envVars.JIMENG_API_KEY = agentConfig.jimeng_api_key;
 

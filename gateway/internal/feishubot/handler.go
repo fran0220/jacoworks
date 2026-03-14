@@ -21,11 +21,14 @@ import (
 )
 
 const (
-	maxReplyLength     = 3000
-	responseTimeout    = 120 * time.Second
-	channelReadyWait   = 30 * time.Second
-	dedupTTL           = 30 * time.Minute
-	dedupCleanInterval = 10 * time.Minute
+	maxReplyLength        = 3000
+	responseTimeout       = 120 * time.Second
+	channelReadyWait      = 30 * time.Second
+	openClawChallengeWait = 5 * time.Second
+	openClawConnectWait   = 10 * time.Second
+	defaultSessionKey     = "agent:default:main"
+	dedupTTL              = 30 * time.Minute
+	dedupCleanInterval    = 10 * time.Minute
 )
 
 var mentionPattern = regexp.MustCompile(`@_user_\d+\s*`)
@@ -35,8 +38,8 @@ type imageAttachment struct {
 	URL string // descriptive label (e.g. image_key + extension)
 }
 
-// Handler processes Feishu webhook events and routes messages to vm-agent containers
-// via the shared ChannelPool (WebSocket protocol), enabling conversation sync with desktop.
+// Handler processes Feishu webhook events and routes messages to OpenClaw containers
+// via the shared ChannelPool (WebSocket protocol), enabling conversation sync with webchat.
 type Handler struct {
 	client      *Client
 	store       *store.Store
@@ -253,36 +256,36 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 // collects the streaming response. This uses the same WS protocol as the desktop,
 // ensuring conversation context is shared between both channels.
 func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, attachments []imageAttachment) (string, error) {
-	channel, _, err := h.channelPool.GetOrCreate(ctx, userID, store.ContainerTypeVMAgent)
+	channel, info, err := h.channelPool.GetOrCreate(ctx, userID, store.ContainerTypeOpenClaw)
 	if err != nil {
 		return "", fmt.Errorf("get channel: %w", err)
 	}
+	if info == nil || strings.TrimSpace(info.ContainerToken) == "" {
+		return "", fmt.Errorf("openclaw token unavailable")
+	}
 
-	// Subscribe to events (lastSeq=0 → no replay of old events)
-	replay, updates, unsubscribe := channel.Subscribe(0)
+	// Subscribe to events (lastSeq=0 → no replay required for request/response flow).
+	_, updates, unsubscribe := channel.Subscribe(0)
 	defer unsubscribe()
 
+	wasConnected := channel.Status().Connected
+
 	// Wait for channel to be connected if not already
-	if !channel.Status().Connected {
-		// Check replay events first for proxy.ready/ready before blocking on live events
-		replayReady := false
-		for _, event := range replay {
-			if event.Event == "proxy.ready" || event.Event == "ready" {
-				replayReady = true
-				break
-			}
-		}
-		if !replayReady {
+	if !wasConnected {
+		if !channel.Status().Connected {
 			if err := waitForReady(updates); err != nil {
 				return "", err
 			}
+		}
+		if err := completeOpenClawHandshake(channel, updates, info.ContainerToken); err != nil {
+			return "", err
 		}
 	}
 
 	// Generate unique request ID for correlation
 	requestID := generateRequestID()
 
-	// Build vm-agent prompt message
+	// Build OpenClaw chat.send payload
 	actualMessage := message
 	if len(attachments) > 0 {
 		var sb strings.Builder
@@ -293,24 +296,28 @@ func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, a
 		actualMessage = sb.String()
 	}
 
-	paramsMap := map[string]interface{}{
-		"type":       "prompt",
-		"message":    actualMessage,
-		"session_id": "feishu-" + userID,
-		"user_id":    userID,
+	chatReq := map[string]interface{}{
+		"type":   "req",
+		"id":     requestID,
+		"method": "chat.send",
+		"params": map[string]interface{}{
+			"sessionKey":     defaultSessionKey,
+			"message":        actualMessage,
+			"idempotencyKey": fmt.Sprintf("feishu-%s-%s", userID, requestID),
+		},
 	}
-	params, _ := json.Marshal(paramsMap)
+	payload, _ := json.Marshal(chatReq)
 
 	// Send the request through the shared channel
-	if err := channel.SendRequest("prompt", params, requestID); err != nil {
-		return "", fmt.Errorf("send prompt: %w", err)
+	if err := channel.SendRequest("req", payload, requestID); err != nil {
+		return "", fmt.Errorf("send chat.send: %w", err)
 	}
 
 	// Collect streaming response
-	return collectResponse(updates, requestID)
+	return collectOpenClawResponse(updates, requestID)
 }
 
-// waitForReady blocks until the channel emits proxy.ready/ready or times out.
+// waitForReady blocks until the channel emits proxy.ready or times out.
 func waitForReady(updates <-chan agent.Event) error {
 	timeout := time.After(channelReadyWait)
 	for {
@@ -319,7 +326,7 @@ func waitForReady(updates <-chan agent.Event) error {
 			if !ok {
 				return fmt.Errorf("channel closed while waiting for ready")
 			}
-			if event.Event == "proxy.ready" || event.Event == "ready" {
+			if event.Event == "proxy.ready" {
 				return nil
 			}
 			if event.Event == "proxy.error" {
@@ -331,10 +338,94 @@ func waitForReady(updates <-chan agent.Event) error {
 	}
 }
 
-// collectResponse waits for the vm-agent streaming response and collects assistant
-// content. It extracts text deltas from session_event messages and returns the
-// accumulated text when a done event is received.
-func collectResponse(updates <-chan agent.Event, requestID string) (string, error) {
+func completeOpenClawHandshake(channel *agent.UserChannel, updates <-chan agent.Event, token string) error {
+	timeout := time.After(openClawChallengeWait)
+
+	for {
+		select {
+		case event, ok := <-updates:
+			if !ok {
+				return fmt.Errorf("channel closed while waiting for openclaw challenge")
+			}
+			if event.Event == "proxy.error" {
+				return fmt.Errorf("channel error while waiting for openclaw challenge")
+			}
+
+			frame, ok := decodeOpenClawFrame(event)
+			if !ok {
+				continue
+			}
+			if frame.Type == "event" && frame.Event == "connect.challenge" {
+				return sendOpenClawConnect(channel, updates, token)
+			}
+		case <-timeout:
+			// No challenge means the shared channel was already authenticated.
+			return nil
+		}
+	}
+}
+
+func sendOpenClawConnect(channel *agent.UserChannel, updates <-chan agent.Event, token string) error {
+	connectID := generateRequestID()
+	connectReq := map[string]interface{}{
+		"type":   "req",
+		"id":     connectID,
+		"method": "connect",
+		"params": map[string]interface{}{
+			"minProtocol": 3,
+			"maxProtocol": 3,
+			"client": map[string]string{
+				"id":       "feishu-bot",
+				"version":  "1.0.0",
+				"platform": "gateway",
+				"mode":     "backend",
+			},
+			"role":   "operator",
+			"scopes": []string{"operator.admin"},
+			"caps":   []string{"tool-events"},
+			"auth": map[string]string{
+				"token": token,
+			},
+		},
+	}
+
+	payload, _ := json.Marshal(connectReq)
+	if err := channel.SendRequest("req", payload, connectID); err != nil {
+		return fmt.Errorf("send openclaw connect: %w", err)
+	}
+
+	timeout := time.After(openClawConnectWait)
+	for {
+		select {
+		case event, ok := <-updates:
+			if !ok {
+				return fmt.Errorf("channel closed during openclaw connect")
+			}
+			if event.Event == "proxy.error" {
+				return fmt.Errorf("channel error during openclaw connect")
+			}
+
+			frame, ok := decodeOpenClawFrame(event)
+			if !ok || frame.Type != "res" || frame.ID != connectID {
+				continue
+			}
+
+			if frame.OK != nil && *frame.OK {
+				return nil
+			}
+			errMsg := decodeOpenClawError(frame.Error)
+			if errMsg == "" {
+				errMsg = "unknown error"
+			}
+			return fmt.Errorf("openclaw connect rejected: %s", errMsg)
+		case <-timeout:
+			return fmt.Errorf("openclaw connect timeout (%v)", openClawConnectWait)
+		}
+	}
+}
+
+// collectOpenClawResponse waits for OpenClaw stream events and collects assistant text.
+func collectOpenClawResponse(updates <-chan agent.Event, requestID string) (string, error) {
 	var response strings.Builder
 	timeout := time.After(responseTimeout)
 
@@ -347,45 +438,97 @@ func collectResponse(updates <-chan agent.Event, requestID string) (string, erro
 				}
 				return "", fmt.Errorf("channel closed during response collection")
 			}
-
-			var envelope struct {
-				ID   string `json:"id"`
-				Type string `json:"type"`
-			}
-			json.Unmarshal(event.Data, &envelope)
-
-			// Only process events matching our requestID (if present)
-			if envelope.ID != "" && envelope.ID != requestID {
-				continue
-			}
-
-			switch envelope.Type {
-			case "session_event":
-				var se struct {
-					Event struct {
-						Type                  string `json:"type"`
-						AssistantMessageEvent struct {
-							Type  string `json:"type"`
-							Delta string `json:"delta"`
-						} `json:"assistantMessageEvent"`
-					} `json:"event"`
-				}
-				if json.Unmarshal(event.Data, &se) == nil {
-					if se.Event.Type == "message_update" && se.Event.AssistantMessageEvent.Type == "text_delta" {
-						response.WriteString(se.Event.AssistantMessageEvent.Delta)
-					}
-				}
-			case "done":
-				return strings.TrimSpace(response.String()), nil
-			case "error":
-				var errMsg struct {
-					Error string `json:"error"`
-				}
-				json.Unmarshal(event.Data, &errMsg)
+			if event.Event == "proxy.error" {
 				if response.Len() > 0 {
 					return strings.TrimSpace(response.String()), nil
 				}
-				return "", fmt.Errorf("agent error: %s", errMsg.Error)
+				return "", fmt.Errorf("channel error while collecting response")
+			}
+
+			frame, ok := decodeOpenClawFrame(event)
+			if !ok {
+				continue
+			}
+
+			switch frame.Type {
+			case "res":
+				if frame.ID != requestID {
+					continue
+				}
+				if frame.OK != nil && *frame.OK {
+					continue
+				}
+				errMsg := decodeOpenClawError(frame.Error)
+				if response.Len() > 0 {
+					return strings.TrimSpace(response.String()), nil
+				}
+				if errMsg == "" {
+					errMsg = "request failed"
+				}
+				return "", fmt.Errorf("openclaw request failed: %s", errMsg)
+
+			case "event":
+				switch frame.Event {
+				case "agent":
+					var payload struct {
+						Stream string `json:"stream"`
+						Data   struct {
+							Delta   string `json:"delta"`
+							Text    string `json:"text"`
+							Phase   string `json:"phase"`
+							Error   string `json:"error"`
+							Message string `json:"message"`
+						} `json:"data"`
+					}
+					if json.Unmarshal(frame.Payload, &payload) == nil {
+						switch payload.Stream {
+						case "text", "assistant":
+							delta := payload.Data.Delta
+							if delta == "" {
+								delta = payload.Data.Text
+							}
+							response.WriteString(delta)
+						case "lifecycle":
+							if strings.EqualFold(payload.Data.Phase, "error") && response.Len() == 0 {
+								errMsg := strings.TrimSpace(payload.Data.Error)
+								if errMsg == "" {
+									errMsg = strings.TrimSpace(payload.Data.Message)
+								}
+								if errMsg != "" {
+									return "", fmt.Errorf("openclaw stream error: %s", errMsg)
+								}
+							}
+						}
+					}
+
+				case "chat":
+					var payload struct {
+						State        string          `json:"state"`
+						ErrorMessage string          `json:"errorMessage"`
+						Message      json.RawMessage `json:"message"`
+					}
+					if json.Unmarshal(frame.Payload, &payload) != nil {
+						continue
+					}
+
+					state := strings.ToLower(strings.TrimSpace(payload.State))
+					switch state {
+					case "final", "aborted":
+						if response.Len() == 0 {
+							response.WriteString(extractOpenClawMessageText(payload.Message))
+						}
+						return strings.TrimSpace(response.String()), nil
+					case "error":
+						if response.Len() > 0 {
+							return strings.TrimSpace(response.String()), nil
+						}
+						errMsg := strings.TrimSpace(payload.ErrorMessage)
+						if errMsg == "" {
+							errMsg = "openclaw chat error"
+						}
+						return "", fmt.Errorf("%s", errMsg)
+					}
+				}
 			}
 
 		case <-timeout:
@@ -395,6 +538,76 @@ func collectResponse(updates <-chan agent.Event, requestID string) (string, erro
 			return "", fmt.Errorf("response timeout (%v)", responseTimeout)
 		}
 	}
+}
+
+type openClawFrame struct {
+	Type    string          `json:"type"`
+	ID      string          `json:"id,omitempty"`
+	Event   string          `json:"event,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	OK      *bool           `json:"ok,omitempty"`
+	Error   json.RawMessage `json:"error,omitempty"`
+}
+
+func decodeOpenClawFrame(event agent.Event) (openClawFrame, bool) {
+	if event.Event != "message" {
+		return openClawFrame{}, false
+	}
+	var frame openClawFrame
+	if err := json.Unmarshal(event.Data, &frame); err != nil || frame.Type == "" {
+		return openClawFrame{}, false
+	}
+	return frame, true
+}
+
+func decodeOpenClawError(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &payload) == nil && strings.TrimSpace(payload.Message) != "" {
+		return strings.TrimSpace(payload.Message)
+	}
+	var msg string
+	if json.Unmarshal(raw, &msg) == nil {
+		return strings.TrimSpace(msg)
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func extractOpenClawMessageText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var direct string
+	if json.Unmarshal(raw, &direct) == nil {
+		return strings.TrimSpace(direct)
+	}
+
+	var message struct {
+		Text    string `json:"text"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &message) != nil {
+		return ""
+	}
+
+	if strings.TrimSpace(message.Text) != "" {
+		return strings.TrimSpace(message.Text)
+	}
+
+	parts := make([]string, 0, len(message.Content))
+	for _, item := range message.Content {
+		if strings.EqualFold(item.Type, "text") && strings.TrimSpace(item.Text) != "" {
+			parts = append(parts, strings.TrimSpace(item.Text))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 // --- DB session sync ---
@@ -472,7 +685,7 @@ func (h *Handler) findOrCreateCoworkSession(ctx context.Context, userID string) 
 
 // --- Cron announce delivery ---
 
-// CronAnnounceRequest is the payload sent by vm-agent when a cron job completes.
+// CronAnnounceRequest is the payload sent by agent runtimes when a cron job completes.
 type CronAnnounceRequest struct {
 	JobID         string `json:"jobId"`
 	JobName       string `json:"jobName,omitempty"`

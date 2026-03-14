@@ -934,6 +934,7 @@ func (oc *OpenClawClient) ContainerEnvVars() map[string]string {
 	set("EXA_API_KEY", llm.ExaAPIKey)
 	set("TAVILY_API_KEY", llm.TavilyKey)
 	set("FAL_API_KEY", llm.FalAPIKey)
+	set("MINERU_TOKEN", llm.MineruToken)
 	set("JIMENG_API_URL", llm.JimengAPIURL)
 	set("JIMENG_API_KEY", llm.JimengAPIKey)
 	set("EMBEDDING_BASE_URL", llm.EmbeddingBaseURL)

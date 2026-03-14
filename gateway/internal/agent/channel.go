@@ -51,7 +51,7 @@ type channelKey struct {
 
 // ChannelPool manages persistent upstream channels keyed by (userID, containerType).
 type ChannelPool struct {
-	dialers    map[string]UpstreamDialer // "vm-agent" → dialer, "openclaw" → dialer
+	dialers    map[string]UpstreamDialer
 	store      *store.Store
 	idleTTL    time.Duration
 	bufferSize int
@@ -537,31 +537,4 @@ func dialWithRetry(url string, total time.Duration) (*websocket.Conn, error) {
 		time.Sleep(dialRetryDelay)
 	}
 	return nil, fmt.Errorf("dial timeout after %s: %w", total, lastErr)
-}
-
-// mapUpstreamToEvent maps vm-agent response types to event types for subscribers.
-func mapUpstreamToEvent(msg []byte) (string, bool) {
-	var envelope struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(msg, &envelope); err != nil {
-		return "", false
-	}
-
-	switch envelope.Type {
-	case "session_event":
-		return "session_event", true
-	case "response":
-		return "response", true
-	case "error":
-		return "error", true
-	case "done":
-		return "done", true
-	case "ready":
-		return "ready", true
-	case "proxy.ready", "proxy.error":
-		return envelope.Type, true
-	default:
-		return envelope.Type, true
-	}
 }

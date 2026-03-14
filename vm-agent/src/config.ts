@@ -10,6 +10,7 @@ export interface Config {
   proxyUrl: string;
   proxyKey: string;
   openaiApiKey: string;
+  mineruToken: string;
   /** Embedding API base URL (不含 /embeddings 后缀), 默认 https://api.openai.com/v1 */
   embeddingBaseUrl: string;
   /** Embedding API key, 默认复用 OPENAI_API_KEY */
@@ -168,6 +169,7 @@ export function loadConfig(): Config {
     proxyUrl,
     proxyKey,
     openaiApiKey,
+    mineruToken: process.env.MINERU_TOKEN || "",
     embeddingBaseUrl,
     embeddingApiKey,
     embedTimeoutMs: parseInt(process.env.MEMORY_EMBED_TIMEOUT_MS || "8000", 10),

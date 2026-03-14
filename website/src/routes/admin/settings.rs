@@ -60,6 +60,7 @@ fn is_secret_key(key: &str) -> bool {
             | "tavily_api_key"
             | "embedding_api_key"
             | "fal_api_key"
+            | "mineru_token"
             | "jimeng_api_key"
             | "feishu_client_secret"
             | "admin_token"
@@ -85,6 +86,7 @@ pub struct UpdateSettingsForm {
     embedding_base_url: Option<String>,
     embedding_api_key: Option<String>,
     fal_api_key: Option<String>,
+    mineru_token: Option<String>,
     jimeng_api_url: Option<String>,
     jimeng_api_key: Option<String>,
     feishu_client_id: Option<String>,
@@ -164,6 +166,7 @@ pub async fn update(
         ("tavily_api_key", form.tavily_api_key),
         ("embedding_api_key", form.embedding_api_key),
         ("fal_api_key", form.fal_api_key),
+        ("mineru_token", form.mineru_token),
         ("jimeng_api_key", form.jimeng_api_key),
         ("feishu_client_secret", form.feishu_client_secret),
         ("admin_token", form.admin_token),
@@ -221,24 +224,28 @@ async fn render_settings_page(
 
     let settings: Vec<SettingView> = raw_settings
         .into_iter()
-        .filter_map(|s| {
-            match s.key.as_str() {
-                "primary_model" => { current_model = s.value; None }
-                "primary_provider" => { current_provider = s.value; None }
-                _ => {
-                    let is_secret = is_secret_key(&s.key);
-                    Some(SettingView {
-                        masked_value: if is_secret {
-                            mask_value(&s.value)
-                        } else {
-                            s.value.clone()
-                        },
-                        key: s.key,
-                        value: if is_secret { String::new() } else { s.value },
-                        description: s.description,
-                        is_secret,
-                    })
-                }
+        .filter_map(|s| match s.key.as_str() {
+            "primary_model" => {
+                current_model = s.value;
+                None
+            }
+            "primary_provider" => {
+                current_provider = s.value;
+                None
+            }
+            _ => {
+                let is_secret = is_secret_key(&s.key);
+                Some(SettingView {
+                    masked_value: if is_secret {
+                        mask_value(&s.value)
+                    } else {
+                        s.value.clone()
+                    },
+                    key: s.key,
+                    value: if is_secret { String::new() } else { s.value },
+                    description: s.description,
+                    is_secret,
+                })
             }
         })
         .collect();

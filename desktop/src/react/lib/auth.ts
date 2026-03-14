@@ -177,6 +177,7 @@ export async function fetchAgentConfig(): Promise<{
   embedding_base_url?: string;
   embedding_api_key?: string;
   fal_api_key?: string;
+  mineru_token?: string;
   jimeng_api_url?: string;
   jimeng_api_key?: string;
 }> {

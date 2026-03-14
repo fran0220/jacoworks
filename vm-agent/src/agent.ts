@@ -238,18 +238,13 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
 // ─── Document Processing Packages ───────────────────
 
 const DOC_PACKAGES: Record<string, string> = {
-  mammoth: "^1.11.0",
-  docx: "^9.6.0",
   exceljs: "^4.4.0",
-  "pdf-lib": "^1.17.1",
-  "@pdf-lib/fontkit": "^1.1.1",
-  "pdf-parse": "^2.4.5",
   "csv-parse": "^6.1.0",
 };
 
 function ensureDocPackages(dir: string): boolean {
   const nmDir = join(dir, "node_modules");
-  if (existsSync(join(nmDir, "mammoth"))) return true;
+  if (existsSync(join(nmDir, "exceljs")) && existsSync(join(nmDir, "csv-parse"))) return true;
 
   log.info("installing document processing packages");
   try {
@@ -426,7 +421,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   // Document reading tool (docx, xlsx, csv, pdf, pptx)
   if (config.proxyKey) {
     extensionFactories.push(
-      createReadDocumentExtension(workspace, memRoot, memoryStoreConfig),
+      createReadDocumentExtension(workspace, memRoot, memoryStoreConfig, process.env.MINERU_TOKEN || ""),
     );
   }
 

@@ -1,7 +1,9 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { spawn } from "node:child_process";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve, extname, basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chunkMarkdown, getMemoryStore, type MemoryStoreConfig } from "../lib/memory-store.js";
 
 // ─── Parameter Schema ───────────────────────────────
@@ -20,8 +22,11 @@ const ReadDocumentParams = Type.Object({
 
 const DOC_EXTS = new Set([".docx", ".doc", ".xlsx", ".xls", ".csv", ".pdf", ".pptx", ".ppt"]);
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]);
+const MINERU_DOC_EXTS = new Set([".docx", ".doc", ".pdf", ".pptx", ".ppt"]);
 const LARGE_CONTENT_THRESHOLD = 2000;
 const SUMMARY_PREVIEW_CHARS = 500;
+const MINERU_TIMEOUT_MS = 300_000;
+const PYTHON_CMD = process.platform === "win32" ? "python" : "python3";
 
 function isSupported(ext: string): boolean {
   return DOC_EXTS.has(ext) || IMAGE_EXTS.has(ext);
@@ -29,10 +34,193 @@ function isSupported(ext: string): boolean {
 
 // ─── Readers ────────────────────────────────────────
 
-async function readDocx(filePath: string): Promise<string> {
-  const mammoth = await import("mammoth");
-  const result = await mammoth.default.extractRawText({ path: filePath });
-  return result.value.trim() || "(empty document)";
+interface MinerUScriptSuccess {
+  ok: true;
+  markdown_path: string;
+  images_dir?: string;
+  chars?: number;
+}
+
+interface MinerUScriptFailure {
+  ok: false;
+  error: string;
+}
+
+type MinerUScriptResult = MinerUScriptSuccess | MinerUScriptFailure;
+
+function resolveMinerUScriptPath(): string {
+  const candidates = [
+    fileURLToPath(new URL("../scripts/mineru_upload.py", import.meta.url)),
+    resolve(process.cwd(), "src/scripts/mineru_upload.py"),
+    resolve(process.cwd(), "dist/scripts/mineru_upload.py"),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+function parseMineruOutput(stdout: string): MinerUScriptResult {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error("MinerU returned empty stdout");
+  }
+
+  const parseOne = (raw: string): MinerUScriptResult | null => {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (parsed.ok === true) {
+        if (typeof parsed.markdown_path !== "string" || !parsed.markdown_path.trim()) {
+          throw new Error("MinerU missing markdown_path");
+        }
+        return {
+          ok: true,
+          markdown_path: parsed.markdown_path,
+          images_dir: typeof parsed.images_dir === "string" ? parsed.images_dir : undefined,
+          chars: typeof parsed.chars === "number" ? parsed.chars : undefined,
+        };
+      }
+
+      if (parsed.ok === false) {
+        return {
+          ok: false,
+          error: typeof parsed.error === "string" ? parsed.error : "MinerU parse failed",
+        };
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = parseOne(trimmed);
+  if (direct) return direct;
+
+  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const parsed = parseOne(lines[i]);
+    if (parsed) return parsed;
+  }
+
+  throw new Error(`Invalid MinerU output: ${trimmed.slice(0, 500)}`);
+}
+
+async function readViaMinerU(
+  filePath: string,
+  token: string,
+  outputDir: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; markdownPath: string; imagesDir?: string; chars: number }> {
+  const scriptPath = resolveMinerUScriptPath();
+  if (!existsSync(scriptPath)) {
+    throw new Error(`MinerU script not found: ${scriptPath}`);
+  }
+
+  mkdirSync(outputDir, { recursive: true });
+
+  const args = [
+    scriptPath,
+    filePath,
+    "--token",
+    token,
+    "--output-dir",
+    outputDir,
+    "--language",
+    "ch",
+    "--timeout",
+    "600",
+  ];
+
+  return new Promise((resolveResult, reject) => {
+    const child = spawn(PYTHON_CMD, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let aborted = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, MINERU_TIMEOUT_MS);
+
+    const onAbort = () => {
+      aborted = true;
+      clearTimeout(timer);
+      child.kill("SIGKILL");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf-8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf-8");
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error(`Failed to spawn MinerU script: ${err.message}`));
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+
+      if (timedOut) {
+        reject(new Error("MinerU parsing timeout after 300s"));
+        return;
+      }
+      if (aborted) {
+        reject(new Error("MinerU parsing cancelled"));
+        return;
+      }
+
+      let result: MinerUScriptResult;
+      try {
+        result = parseMineruOutput(stdout);
+      } catch (parseErr) {
+        if (code !== 0) {
+          const stderrSnippet = stderr.trim().slice(0, 500);
+          reject(new Error(`MinerU script exited with code ${code}${stderrSnippet ? `: ${stderrSnippet}` : ""}`));
+          return;
+        }
+        reject(parseErr as Error);
+        return;
+      }
+
+      if (!result.ok) {
+        reject(new Error(result.error || "MinerU parse failed"));
+        return;
+      }
+
+      if (code !== 0) {
+        const stderrSnippet = stderr.trim().slice(0, 500);
+        reject(new Error(`MinerU script exited with code ${code}${stderrSnippet ? `: ${stderrSnippet}` : ""}`));
+        return;
+      }
+
+      const markdownPath = resolve(outputDir, result.markdown_path);
+      if (!existsSync(markdownPath)) {
+        reject(new Error(`MinerU markdown not found: ${markdownPath}`));
+        return;
+      }
+
+      const text = readFileSync(markdownPath, "utf-8").trim();
+      resolveResult({
+        text: text || "(empty document)",
+        markdownPath,
+        imagesDir: result.images_dir,
+        chars: typeof result.chars === "number" ? result.chars : text.length,
+      });
+    });
+  });
 }
 
 interface XlsxReadResult {
@@ -155,16 +343,6 @@ async function readCsv(filePath: string, maxRows?: number): Promise<CsvReadResul
   };
 }
 
-async function readPdf(filePath: string, _pages?: string): Promise<{ text: string; pageCount: number }> {
-  const { PDFParse } = await import("pdf-parse");
-  const buf = readFileSync(filePath);
-  const parser = new PDFParse({ data: new Uint8Array(buf) });
-  const info = await parser.getInfo();
-  const result = await parser.getText();
-
-  return { text: result.text.trim(), pageCount: info.total };
-}
-
 function buildPreview(text: string, maxChars = SUMMARY_PREVIEW_CHARS): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) return "(empty content)";
@@ -230,6 +408,7 @@ export function createReadDocumentExtension(
   workspaceDir: string,
   memoryRootDir: string,
   storeConfig: MemoryStoreConfig,
+  mineruToken: string,
 ): ExtensionFactory {
   return (pi) => {
     const store = getMemoryStore(memoryRootDir, storeConfig);
@@ -242,9 +421,10 @@ export function createReadDocumentExtension(
         "Supports: docx, xlsx, csv, pdf, pptx, and images (png/jpg/etc via native read). " +
         "Returns extracted text in markdown format.",
       parameters: ReadDocumentParams,
-      execute: async (_toolCallId, params: Static<typeof ReadDocumentParams>) => {
+      execute: async (_toolCallId, params: Static<typeof ReadDocumentParams>, signal?: AbortSignal) => {
         const filePath = resolve(workspaceDir, params.path);
         const ext = extname(filePath).toLowerCase();
+        const docsDir = join(memoryRootDir, "documents");
 
         if (!existsSync(filePath)) {
           return {
@@ -274,11 +454,23 @@ export function createReadDocumentExtension(
             };
           }
 
+          if (MINERU_DOC_EXTS.has(ext) && !mineruToken.trim()) {
+            return {
+              content: [{ type: "text" as const, text: "请在管理后台配置 MinerU Token" }],
+              details: { path: filePath, format: ext },
+            };
+          }
+
           switch (ext) {
             case ".docx":
             case ".doc":
-              text = await readDocx(filePath);
+            case ".pdf":
+            case ".pptx":
+            case ".ppt": {
+              const mineru = await readViaMinerU(filePath, mineruToken, docsDir, signal);
+              text = mineru.text;
               break;
+            }
 
             case ".xlsx":
             case ".xls":
@@ -297,26 +489,12 @@ export function createReadDocumentExtension(
               }
               break;
 
-            case ".pdf": {
-              const pdf = await readPdf(filePath);
-              text = pdf.text || "(no extractable text — this may be a scanned PDF)";
-              pageCount = pdf.pageCount;
-              break;
-            }
-
-            case ".pptx":
-            case ".ppt":
-              // pptx: extract via zip + xml
-              text = await readPptx(filePath);
-              break;
-
             default:
               text = "(unsupported format)";
           }
 
           if (text.length > LARGE_CONTENT_THRESHOLD) {
             const docFileName = `${basename(filePath)}.md`;
-            const docsDir = join(memoryRootDir, "documents");
             const docPath = join(docsDir, docFileName);
             const source = `doc/${docFileName}`;
             const meta = { pageCount, sheetNames, csvRows };
@@ -392,40 +570,4 @@ export function createReadDocumentExtension(
 
     pi.registerTool(tool);
   };
-}
-
-// ─── PPTX reader (zip + xml extraction) ─────────────
-
-async function readPptx(filePath: string): Promise<string> {
-  // Use jszip to extract slide XML
-  const JSZip = (await import("jszip")).default;
-  const buf = readFileSync(filePath);
-  const zip = await JSZip.loadAsync(buf);
-
-  const slides: string[] = [];
-  const slideFiles = Object.keys(zip.files)
-    .filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
-    .sort((a, b) => {
-      const na = parseInt(a.match(/slide(\d+)/)?.[1] || "0", 10);
-      const nb = parseInt(b.match(/slide(\d+)/)?.[1] || "0", 10);
-      return na - nb;
-    });
-
-  for (const slideFile of slideFiles) {
-    const xml = await zip.files[slideFile].async("text");
-    // Extract text from <a:t> tags
-    const texts: string[] = [];
-    const re = /<a:t>([\s\S]*?)<\/a:t>/g;
-    let m;
-    while ((m = re.exec(xml)) !== null) {
-      const t = m[1].trim();
-      if (t) texts.push(t);
-    }
-    if (texts.length > 0) {
-      const num = slideFile.match(/slide(\d+)/)?.[1] || "?";
-      slides.push(`## Slide ${num}\n\n${texts.join("\n")}`);
-    }
-  }
-
-  return slides.length > 0 ? slides.join("\n\n") : "(empty presentation)";
 }

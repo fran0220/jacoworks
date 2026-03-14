@@ -99,6 +99,8 @@ func main() {
 				llm.EmbeddingAPIKey = setting.Value
 			case "fal_api_key":
 				llm.FalAPIKey = setting.Value
+			case "mineru_token":
+				llm.MineruToken = setting.Value
 			case "jimeng_api_url":
 				llm.JimengAPIURL = setting.Value
 			case "jimeng_api_key":
@@ -186,7 +188,6 @@ func main() {
 	authMiddleware := auth.NewMiddleware(s, cfg.Auth.AdminToken)
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
 	proxyHandler := proxy.NewHandler(s, dockerClient, nil, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
-	backendAdapter := dockerpkg.NewBackendAdapter(dockerClient)
 	execHandler := execws.NewHandler(s, dockerClient, nil)
 
 	// Inject container env vars for auto-reprovision of destroyed containers
@@ -194,12 +195,7 @@ func main() {
 	proxyHandler.SetContainerEnvVars(envVars)
 
 	// Build UpstreamDialer map for unified channel architecture
-	vmDialer := agent.NewVMAgentDialer(s, backendAdapter, cfg.Docker.AgentPort, cfg.Docker.HostIP, cfg.Docker.GatewayToken)
-	vmDialer.SetContainerEnvVars(envVars)
-
-	dialers := map[string]agent.UpstreamDialer{
-		store.ContainerTypeVMAgent: vmDialer,
-	}
+	dialers := map[string]agent.UpstreamDialer{}
 
 	if ocClient != nil {
 		ocDialer := agent.NewOpenClawDialer(s, ocClient, ocFreezer)
@@ -1293,6 +1289,7 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"embedding_base_url": llm.EmbeddingBaseURL,
 			"embedding_api_key":  llm.EmbeddingAPIKey,
 			"fal_api_key":        llm.FalAPIKey,
+			"mineru_token":       llm.MineruToken,
 			"jimeng_api_url":     llm.JimengAPIURL,
 			"jimeng_api_key":     llm.JimengAPIKey,
 			"primary_model":      llm.PrimaryModel,
@@ -1337,6 +1334,7 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"embedding_base_url":   true,
 		"embedding_api_key":    true,
 		"fal_api_key":          true,
+		"mineru_token":         true,
 		"jimeng_api_url":       true,
 		"jimeng_api_key":       true,
 		"feishu_client_id":     true,
@@ -1394,6 +1392,9 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		}
 		if v, ok := req.Settings["fal_api_key"]; ok {
 			llm.FalAPIKey = v
+		}
+		if v, ok := req.Settings["mineru_token"]; ok {
+			llm.MineruToken = v
 		}
 		if v, ok := req.Settings["jimeng_api_url"]; ok {
 			llm.JimengAPIURL = v

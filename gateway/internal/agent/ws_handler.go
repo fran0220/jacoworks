@@ -34,8 +34,7 @@ var wsClientUpgrader = websocket.Upgrader{
 // EventCallback is invoked for key WebSocket lifecycle events (connect, disconnect, etc.).
 type EventCallback func(userID, event string, properties map[string]interface{})
 
-// WSHandler exposes unified container events/commands over browser WebSocket with ticket auth.
-// Handles both vm-agent and OpenClaw containers through the ChannelPool abstraction.
+// WSHandler exposes OpenClaw events/commands over browser WebSocket with ticket auth.
 type WSHandler struct {
 	pool        *ChannelPool
 	ticketStore *TicketStore
@@ -45,8 +44,6 @@ type WSHandler struct {
 func NewWSHandler(pool *ChannelPool, ticketStore *TicketStore, onEvent EventCallback) *WSHandler {
 	return &WSHandler{pool: pool, ticketStore: ticketStore, onEvent: onEvent}
 }
-
-
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil || h.ticketStore == nil {
@@ -72,10 +69,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Container type is mandatory — desktop must pass type=vm-agent, webchat must pass type=openclaw
+	// Container type defaults to openclaw. vm-agent is no longer supported.
 	containerType := strings.TrimSpace(r.URL.Query().Get("type"))
-	if containerType != store.ContainerTypeVMAgent && containerType != store.ContainerTypeOpenClaw {
-		writeWSHTTPJSON(w, http.StatusBadRequest, map[string]string{"error": "missing or invalid 'type' query parameter (must be 'vm-agent' or 'openclaw')"})
+	if containerType == "" {
+		containerType = store.ContainerTypeOpenClaw
+	}
+	if containerType != store.ContainerTypeOpenClaw {
+		writeWSHTTPJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid 'type' query parameter (must be 'openclaw')"})
 		return
 	}
 

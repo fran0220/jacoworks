@@ -16,7 +16,7 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
-// SSEHandler exposes vm-agent channel adapter endpoints for desktop clients.
+// SSEHandler exposes channel adapter endpoints for desktop OpenClaw bridge clients.
 type SSEHandler struct {
 	pool *ChannelPool
 }
@@ -32,13 +32,19 @@ func (h *SSEHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	containerType, err := resolveSSEContainerType(r)
+	if err != nil {
+		writeSSEJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeSSEJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
 		return
 	}
 
-	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID, store.ContainerTypeVMAgent)
+	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID, containerType)
 	if err != nil {
 		writeSSEJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
@@ -91,12 +97,18 @@ func (h *SSEHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// SendCommand sends a vm-agent protocol message via the channel.
-// Accepts {"type":"prompt","message":"...",...} format.
+// SendCommand forwards a protocol message via the channel.
+// Body is passed through to OpenClaw unchanged.
 func (h *SSEHandler) SendCommand(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	if user == nil {
 		writeSSEJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	containerType, err := resolveSSEContainerType(r)
+	if err != nil {
+		writeSSEJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -123,7 +135,7 @@ func (h *SSEHandler) SendCommand(w http.ResponseWriter, r *http.Request) {
 		msgType = "prompt"
 	}
 
-	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID, store.ContainerTypeVMAgent)
+	channel, _, err := h.pool.GetOrCreate(r.Context(), user.ID, containerType)
 	if err != nil {
 		writeSSEJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
@@ -158,13 +170,19 @@ func (h *SSEHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	containerType, err := resolveSSEContainerType(r)
+	if err != nil {
+		writeSSEJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	containerName := ""
-	if info, err := h.pool.ContainerInfo(r.Context(), user.ID, store.ContainerTypeVMAgent); err == nil {
+	if info, err := h.pool.ContainerInfo(r.Context(), user.ID, containerType); err == nil {
 		containerName = info.ContainerName
 	}
 
 	status := ChannelStatus{ContainerName: containerName}
-	if ch := h.pool.Get(user.ID, store.ContainerTypeVMAgent); ch != nil {
+	if ch := h.pool.Get(user.ID, containerType); ch != nil {
 		status = ch.Status()
 		if status.ContainerName == "" {
 			status.ContainerName = containerName
@@ -176,6 +194,20 @@ func (h *SSEHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		"reconnecting":  status.Reconnecting,
 		"containerName": status.ContainerName,
 	})
+}
+
+func resolveSSEContainerType(r *http.Request) (string, error) {
+	containerType := strings.TrimSpace(r.URL.Query().Get("type"))
+	if containerType == "" {
+		containerType = strings.TrimSpace(r.URL.Query().Get("container_type"))
+	}
+	if containerType == "" {
+		return store.ContainerTypeOpenClaw, nil
+	}
+	if containerType != store.ContainerTypeOpenClaw {
+		return "", fmt.Errorf("invalid container type: must be 'openclaw'")
+	}
+	return containerType, nil
 }
 
 func parseLastEventID(r *http.Request) uint64 {

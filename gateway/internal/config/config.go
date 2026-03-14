@@ -25,11 +25,11 @@ type Config struct {
 
 type OpenClawConfig struct {
 	DockerHost string `yaml:"docker_host"`
-	Image     string `yaml:"image"`
-	Port      int    `yaml:"port"`
-	HostIP    string `yaml:"host_ip"`
-	BasePort  int    `yaml:"base_port"`
-	DataRoot  string `yaml:"data_root"`
+	Image      string `yaml:"image"`
+	Port       int    `yaml:"port"`
+	HostIP     string `yaml:"host_ip"`
+	BasePort   int    `yaml:"base_port"`
+	DataRoot   string `yaml:"data_root"`
 }
 
 type GitHubConfig struct {
@@ -56,10 +56,11 @@ type LLMConfig struct {
 	EmbeddingBaseURL string `yaml:"embedding_base_url"`
 	EmbeddingAPIKey  string `yaml:"embedding_api_key"`
 	FalAPIKey        string `yaml:"fal_api_key"`
+	MineruToken      string `yaml:"mineru_token"`
 	JimengAPIURL     string `yaml:"jimeng_api_url"`
 	JimengAPIKey     string `yaml:"jimeng_api_key"`
-	PrimaryModel    string `yaml:"primary_model"`
-	PrimaryProvider string `yaml:"primary_provider"`
+	PrimaryModel     string `yaml:"primary_model"`
+	PrimaryProvider  string `yaml:"primary_provider"`
 }
 
 type ServerConfig struct {
@@ -237,6 +238,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_LLM_FAL_API_KEY"); v != "" {
 		cfg.LLM.FalAPIKey = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_MINERU_TOKEN"); v != "" {
+		cfg.LLM.MineruToken = v
 	}
 	if v := os.Getenv("GATEWAY_LLM_JIMENG_API_URL"); v != "" {
 		cfg.LLM.JimengAPIURL = v
