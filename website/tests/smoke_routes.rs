@@ -496,9 +496,9 @@ async fn update_api_high_current_version_returns_200_or_204() {
                 "darwin update response version should not be empty"
             );
         }
-        other => panic!(
-            "expected high current version update API to return 200 or 204, got {other}"
-        ),
+        other => {
+            panic!("expected high current version update API to return 200 or 204, got {other}")
+        }
     }
 }
 

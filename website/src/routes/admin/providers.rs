@@ -82,9 +82,7 @@ pub async fn upsert_provider_handler(
 ) -> Result<Response, AppError> {
     let key = form.key.trim();
     if key.is_empty() {
-        return Ok(
-            Redirect::to("/admin/providers?error=Provider key 不能为空").into_response()
-        );
+        return Ok(Redirect::to("/admin/providers?error=Provider key 不能为空").into_response());
     }
 
     let enabled = form.enabled.is_some();

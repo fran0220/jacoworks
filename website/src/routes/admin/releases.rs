@@ -263,7 +263,11 @@ async fn load_release_views(state: &AppState) -> Result<Vec<ReleaseView>, AppErr
         let assets: Vec<AssetView> = raw_assets.iter().map(asset_view).collect();
         let notes = r.notes.clone().unwrap_or_default();
         let notes_preview = if notes.chars().count() > 80 {
-            let end = notes.char_indices().nth(80).map(|(i, _)| i).unwrap_or(notes.len());
+            let end = notes
+                .char_indices()
+                .nth(80)
+                .map(|(i, _)| i)
+                .unwrap_or(notes.len());
             format!("{}…", &notes[..end])
         } else {
             notes.clone()

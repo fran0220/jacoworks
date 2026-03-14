@@ -309,7 +309,11 @@ async fn user_login_action(
         should_set_secure_cookie(&state.config, &headers),
     );
 
-    let target = if redirect.is_empty() { "/chat" } else { &redirect };
+    let target = if redirect.is_empty() {
+        "/chat"
+    } else {
+        &redirect
+    };
     Ok(axum::response::Redirect::to(target).into_response())
 }
 
@@ -366,7 +370,11 @@ async fn user_feishu_callback(
         token,
         should_set_secure_cookie(&state.config, &headers),
     );
-    let target = if redirect.is_empty() { "/chat" } else { &redirect };
+    let target = if redirect.is_empty() {
+        "/chat"
+    } else {
+        &redirect
+    };
     Ok(axum::response::Redirect::to(target).into_response())
 }
 

@@ -1,25 +1,11 @@
-import { useState, useEffect } from "react";
 import { AlertCircle, ChevronDown, RotateCcw } from "lucide-react";
 import { useChatStream } from "../hooks/use-chat-stream";
 import type { AgentTransport } from "../lib/agent-transport";
 import type { AttachedFile, ChatSession } from "../types";
-import { toolArgsSummary } from "../lib/tool-utils";
+import AssistantContent from "./AssistantContent";
 import Composer from "./Composer";
 import MessageBubble from "./MessageBubble";
 import StreamingCursor from "./StreamingCursor";
-import StreamingMarkdown from "./StreamingMarkdown";
-import ToolStatus from "./ToolStatus";
-
-function ToolElapsed() {
-  const [startedAt] = useState(Date.now);
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
-  if (elapsed < 3) return null;
-  return <span className="process-strip-elapsed">{elapsed}s</span>;
-}
 
 export default function ChatView({
   session,
@@ -87,49 +73,7 @@ export default function ChatView({
         {streaming && blocks.length > 0 && (
           <div className="bubble-row assistant">
             <div className="bubble assistant-bubble">
-              {blocks.map((block, i) => {
-                if (block.type === "text") {
-                  return (
-                    <StreamingMarkdown key={`stream-text-${i}`} content={block.content} workspacePath={sessionState.workspacePath} />
-                  );
-                }
-                if (block.type === "thinking") {
-                  const done = blocks.slice(i + 1).some(b => b.type !== "thinking");
-                  return (
-                    <div key={`thinking-${i}`} className={`process-strip is-thinking ${done ? "is-done" : "is-active"}`}>
-                      <div className="process-strip-inner">
-                        <div className="process-strip-row">
-                          <span className="process-strip-dot" />
-                          <span className="process-strip-hint">{done ? "思考完成" : "思考中"}</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-                if (block.type === "tool") {
-                  const isRunning = block.status === "running";
-                  const summary = toolArgsSummary(block.name, block.args);
-                  return (
-                    <div key={block.id} className={`process-strip ${isRunning ? "is-active" : "is-done"}`}>
-                      <div className="process-strip-inner">
-                        <div className="process-strip-row">
-                          <ToolStatus toolName={block.name} status={block.status} />
-                          {summary && <span className="process-strip-hint">{summary}</span>}
-                          {isRunning && <ToolElapsed />}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-                if (block.type === "status") {
-                  return (
-                    <div key={`status-${i}`} className="status-hint">
-                      {block.text}
-                    </div>
-                  );
-                }
-                return null;
-              })}
+              <AssistantContent parts={[]} blocks={blocks} streaming workspacePath={sessionState.workspacePath} />
               <StreamingCursor />
             </div>
           </div>

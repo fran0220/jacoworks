@@ -31,7 +31,7 @@ async function apiFetch(
 }
 
 export async function getContainerStatus(): Promise<ContainerStatus> {
-  const res = await apiFetch("/api/cowork/container-status");
+  const res = await apiFetch("/api/cowork/container-status?container_type=openclaw");
   if (res.status !== 200) throw new Error("容器状态检查失败");
   return JSON.parse(res.body);
 }

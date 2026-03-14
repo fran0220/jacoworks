@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  abortCloudSession,
-  requestCloudTitleGeneration,
-  startCloudStream,
+  abortAgentSession,
+  requestTitleGeneration,
+  startAgentStream,
 } from "../lib/agent";
 import type { AgentRpcEvent } from "../lib/agent";
 import type { AgentTransport } from "../lib/agent-transport";
@@ -11,6 +11,7 @@ import { getSettings } from "../lib/config";
 import { sessionStore, syncDirtyToServer } from "../lib/session-store";
 import { generateTitle } from "../lib/sessions";
 import type {
+  AssistantPart,
   AttachedFile,
   ChatMessage,
   ChatSession,
@@ -72,19 +73,29 @@ function truncate(str: string | undefined, max: number): string | undefined {
   return str.length <= max ? str : `${str.slice(0, max)}\n…[截断]`;
 }
 
-function collectMetaBlocks(blocks: StreamBlock[]): StreamBlock[] {
-  const result: StreamBlock[] = [];
+function blocksToAssistantParts(blocks: StreamBlock[]): AssistantPart[] {
+  const parts: AssistantPart[] = [];
   for (const b of blocks) {
-    if (b.type === "thinking" && b.content.trim()) {
-      result.push(b);
+    if (b.type === "text" && b.content.trim()) {
+      parts.push({ kind: "markdown", text: b.content });
+    } else if (b.type === "thinking" && b.content.trim()) {
+      parts.push({ kind: "thinking", text: b.content });
     } else if (b.type === "tool") {
-      const base = b.status === "running" ? { ...b, status: "completed" as const } : { ...b };
-      base.args = truncate(base.args, 1000);
-      base.result = truncate(base.result, 2000);
-      result.push(base);
+      parts.push({
+        kind: "tool",
+        id: b.id,
+        name: b.name,
+        status: b.status === "running" ? "completed" : b.status,
+        args: truncate(b.args, 1000),
+        result: truncate(b.result, 2000),
+        filePath: b.filePath,
+        fileKind: b.fileKind,
+      });
+    } else if (b.type === "status") {
+      parts.push({ kind: "status", text: b.text });
     }
   }
-  return result;
+  return parts;
 }
 
 interface UseChatStreamOptions {
@@ -191,23 +202,24 @@ export function useChatStream({
   // ── Finalize stream ────────────────────────────────
   const finalizeStream = useCallback(
     async (entry: SessionStreamEntry, ctx: StreamSessionContext) => {
-      const assistantText = entry.runtime.blocksBuffer
-        .filter((b): b is Extract<StreamBlock, { type: "text" }> => b.type === "text")
-        .map((b) => b.content)
-        .join("\n\n");
+      const parts = blocksToAssistantParts(entry.runtime.blocksBuffer);
 
-      const metaBlocks = collectMetaBlocks(entry.runtime.blocksBuffer);
-
-      if (!assistantText.trim() && metaBlocks.length === 0) {
+      if (parts.length === 0) {
         patchSnapshot(ctx.id, { errorText: "模型未返回任何内容，请重试" });
         clearBlocks(ctx.id);
         return;
       }
 
+      // Backward compat: also compute flat text for content field
+      const assistantText = parts
+        .filter((p): p is Extract<AssistantPart, { kind: "markdown" }> => p.kind === "markdown")
+        .map((p) => p.text)
+        .join("\n\n");
+
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: assistantText,
-        ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
+        parts,
       };
       const finalMessages = [...entry.runtime.streamBaseMessages, assistantMessage];
 
@@ -233,7 +245,7 @@ export function useChatStream({
         const userMessage = typeof lastUserContent === "string" ? lastUserContent : "";
         const titleVersion = entry.runtime.titleRequestVersion;
 
-        requestCloudTitleGeneration(transport, userMessage, assistantText)
+        requestTitleGeneration(transport, userMessage, assistantText)
           .then(async (aiTitle) => {
             if (!aiTitle) return;
             if (entry.runtime.titleRequestVersion !== titleVersion) return;
@@ -521,7 +533,7 @@ export function useChatStream({
       const currentUser = getUser();
       const appSettings = getSettings();
       try {
-        const response = await startCloudStream(transport, {
+        const response = await startAgentStream(transport, {
           session_id: sessionSnap.id,
           user_id: currentUser?.id || undefined,
           model: sessionSnap.model,
@@ -553,21 +565,21 @@ export function useChatStream({
     entry.runtime.cancel = null;
 
     if (transport?.isReady) {
-      abortCloudSession(transport, ctx.id);
+      abortAgentSession(transport, ctx.id);
     }
 
-    const assistantText = entry.runtime.blocksBuffer
-      .filter((b): b is Extract<StreamBlock, { type: "text" }> => b.type === "text")
-      .map((b) => b.content)
-      .join("\n\n");
+    const parts = blocksToAssistantParts(entry.runtime.blocksBuffer);
 
-    const metaBlocks = collectMetaBlocks(entry.runtime.blocksBuffer);
+    if (parts.length > 0) {
+      const assistantText = parts
+        .filter((p): p is Extract<AssistantPart, { kind: "markdown" }> => p.kind === "markdown")
+        .map((p) => p.text)
+        .join("\n\n");
 
-    if (assistantText.trim() || metaBlocks.length > 0) {
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: assistantText,
-        ...(metaBlocks.length > 0 ? { blocks: metaBlocks } : {}),
+        parts,
       };
       const finalMessages = [...entry.runtime.streamBaseMessages, assistantMessage];
       setDirty(ctx.id, true);

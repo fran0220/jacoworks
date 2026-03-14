@@ -12,8 +12,6 @@ export interface PromptPayload {
   anonymous?: boolean;
 }
 
-export type CloudPromptPayload = PromptPayload;
-
 export interface AgentRpcEvent {
   id?: string | number;
   type: string;
@@ -73,9 +71,9 @@ function nextCommandId(prefix: string): string {
   return `${prefix}-${Date.now()}-${commandCounter}`;
 }
 
-export async function startCloudStream(
+export async function startAgentStream(
   transport: AgentTransport,
-  payload: CloudPromptPayload,
+  payload: PromptPayload,
 ): Promise<{
   requestId: string;
   stream: AsyncGenerator<AgentRpcEvent>;
@@ -124,12 +122,12 @@ export async function startCloudStream(
   return { requestId, stream, cancel };
 }
 
-export function abortCloudSession(transport: AgentTransport, sessionId: string): void {
+export function abortAgentSession(transport: AgentTransport, sessionId: string): void {
   const id = nextCommandId("abort");
   transport.send({ id, type: "abort", session_id: sessionId });
 }
 
-export async function requestCloudTitleGeneration(
+export async function requestTitleGeneration(
   transport: AgentTransport,
   userMessage: string,
   assistantMessage: string,

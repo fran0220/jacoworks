@@ -16,11 +16,18 @@ export interface FileRef {
   size: number;
 }
 
+export type AssistantPart =
+  | { kind: "markdown"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; id: string; name: string; status: "completed" | "error"; args?: string; result?: string; filePath?: string; fileKind?: string }
+  | { kind: "status"; text: string };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string | MessageContent[];
   files?: FileRef[];
   blocks?: StreamBlock[];
+  parts?: AssistantPart[];
 }
 
 export interface AttachedFile {

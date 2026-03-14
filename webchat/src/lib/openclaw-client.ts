@@ -175,7 +175,7 @@ export class OpenClawClient {
     this.handshakeInFlight = false;
 
     const wsBase = GATEWAY_URL.replace(/^http/, "ws");
-    let wsUrl = `${wsBase}/ws/oc?ticket=${encodeURIComponent(ticket)}`;
+    let wsUrl = `${wsBase}/ws/oc?ticket=${encodeURIComponent(ticket)}&type=openclaw`;
     if (this.lastSeq > 0) {
       wsUrl += `&lastSeq=${this.lastSeq}`;
     }

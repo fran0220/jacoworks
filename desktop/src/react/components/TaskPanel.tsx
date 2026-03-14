@@ -1,4 +1,4 @@
-import { ChevronUp, Cloud, Clock, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ChevronUp, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import type { CronResultItem } from "../hooks/use-cron-results";
 
@@ -138,13 +138,11 @@ function formatRelativeDate(timestamp: number): string {
 export default function TaskPanel({
   results,
   onClearResults,
-  onNewCoworkSession,
   onCreateCronTask,
   onClose,
 }: {
   results: CronResultItem[];
   onClearResults: () => void;
-  onNewCoworkSession: () => void;
   onCreateCronTask: (prompt: string) => void;
   onClose: () => void;
 }) {
@@ -167,10 +165,6 @@ export default function TaskPanel({
 
       {/* Action pills */}
       <div className="tp-actions">
-        <button type="button" className="tp-pill tp-pill--cloud" onClick={onNewCoworkSession}>
-          <Cloud size={13} />
-          新建云端对话
-        </button>
         <button type="button" className="tp-pill tp-pill--cron" onClick={() => setShowForm((v) => !v)}>
           <Plus size={13} />
           新建定时任务

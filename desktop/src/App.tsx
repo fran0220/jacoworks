@@ -275,7 +275,6 @@ export default function App() {
                 <TaskPanel
                   results={[]}
                   onClearResults={() => {}}
-                  onNewCoworkSession={createNewSession}
                   onCreateCronTask={async (prompt) => {
                     createNewSession();
                     setPendingMessage(prompt);

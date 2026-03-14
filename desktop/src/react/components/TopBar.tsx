@@ -88,7 +88,7 @@ export default function TopBar({
         )}
         <button
           type="button"
-          className={`btn-cowork${taskPanelOpen ? " active" : ""}`}
+          className={`btn-task${taskPanelOpen ? " active" : ""}`}
           title="任务面板"
           onClick={onToggleTaskPanel}
         >

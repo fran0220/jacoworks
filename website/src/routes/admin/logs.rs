@@ -46,7 +46,9 @@ pub async fn index(
     let service = query.service.as_deref().unwrap_or("agent");
     let lines = query.lines.unwrap_or(200);
 
-    let db_containers = session::list_containers(&state.db).await.unwrap_or_default();
+    let db_containers = session::list_containers(&state.db)
+        .await
+        .unwrap_or_default();
     let containers: Vec<ContainerOption> = db_containers
         .into_iter()
         .map(|c| ContainerOption {

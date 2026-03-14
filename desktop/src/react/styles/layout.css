@@ -44,6 +44,33 @@
   min-width: 360px;
 }
 
+.oc-drawer {
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition:
+    width var(--duration-slow) var(--ease-emphasized),
+    min-width var(--duration-slow) var(--ease-emphasized);
+}
+
+.oc-drawer.open {
+  width: 33.333%;
+  min-width: 320px;
+}
+
+.oc-drawer-inner {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  height: 100%;
+}
+
 /* ===== Agent loading / error ===== */
 
 .agent-loading,
@@ -89,4 +116,3 @@
 .spinning {
   animation: spin 0.9s var(--ease-linear) infinite;
 }
-

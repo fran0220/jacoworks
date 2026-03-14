@@ -67,15 +67,6 @@
     color var(--duration-fast) var(--ease-standard);
 }
 
-.tp-pill--cloud {
-  color: var(--text-on-accent);
-  background: var(--accent-thinking);
-}
-
-.tp-pill--cloud:hover {
-  background: color-mix(in srgb, var(--accent-thinking) 85%, #000);
-}
-
 .tp-pill--cron {
   color: var(--accent);
   background: var(--accent-light);

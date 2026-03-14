@@ -1,4 +1,3 @@
-mod cowork;
 mod db;
 mod sidecar;
 mod stream;
@@ -178,6 +177,19 @@ fn ensure_session_sync_dir(sync_root: String, session_id: String) -> Result<Stri
     dir.to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Invalid path encoding".to_string())
+}
+
+#[tauri::command]
+async fn select_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app
+        .dialog()
+        .file()
+        .set_title("Select Project Directory")
+        .blocking_pick_folder();
+
+    Ok(path.map(|p| p.to_string()))
 }
 
 /// Reveal file in system file manager (Finder / Explorer / Nautilus).
@@ -664,15 +676,7 @@ pub fn run() {
             stream::http_fetch,
             stream::sse_connect,
             stream::sse_close,
-            cowork::select_directory,
-            cowork::tar_directory,
-            cowork::extract_tar,
-            cowork::upload_cowork,
-            cowork::download_cowork,
-            cowork::read_file_text,
-            cowork::write_file_text,
-            cowork::list_directory,
-            cowork::file_stat,
+            select_directory,
             sidecar::start_agent,
             sidecar::agent_rpc_send,
             sidecar::stop_agent,

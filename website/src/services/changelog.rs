@@ -69,7 +69,10 @@ fn parse_heading(line: &str) -> Option<(String, String)> {
     // Extract date from parentheses
     let date = rest
         .find('(')
-        .and_then(|start| rest.find(')').map(|end| rest[start + 1..end].trim().to_string()))
+        .and_then(|start| {
+            rest.find(')')
+                .map(|end| rest[start + 1..end].trim().to_string())
+        })
         .unwrap_or_default();
 
     Some((version, date))
@@ -131,9 +134,10 @@ pub async fn sync_to_db(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
     }
 
     // If no release is marked latest, mark the newest one
-    let has_latest: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM releases WHERE is_latest = true)")
-        .fetch_one(pool)
-        .await?;
+    let has_latest: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM releases WHERE is_latest = true)")
+            .fetch_one(pool)
+            .await?;
 
     if !has_latest {
         if let Some(newest) = entries.first() {
@@ -147,7 +151,10 @@ pub async fn sync_to_db(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
     if synced > 0 {
         tracing::info!("changelog: synced {synced} release(s) to database");
     } else {
-        tracing::info!("changelog: all {} releases already up to date", entries.len());
+        tracing::info!(
+            "changelog: all {} releases already up to date",
+            entries.len()
+        );
     }
 
     Ok(synced)

@@ -105,9 +105,9 @@
   cursor: default;
 }
 
-/* ===== Cowork Pill Button ===== */
+/* ===== Task Panel Button ===== */
 
-.btn-cowork {
+.btn-task {
   position: relative;
   height: var(--size-btn);
   border-radius: var(--radius-full);
@@ -124,84 +124,20 @@
     color var(--duration-fast) var(--ease-standard);
 }
 
-.btn-cowork-label {
-  font-size: var(--text-xs);
-  font-weight: var(--font-medium);
-}
-
-.btn-cowork:hover {
+.btn-task:hover {
   color: var(--accent);
   background: var(--bg-hover);
 }
 
 /* Drawer open → subtle accent tint */
-.btn-cowork.active {
+.btn-task.active {
   background: var(--accent-light);
   color: var(--accent);
 }
 
-/* Phase-based color variants */
-.btn-cowork.phase-idle {
-  color: var(--text-muted);
-}
-
-.btn-cowork.phase-busy {
-  background: var(--bg-tertiary);
-}
-
-.btn-cowork.phase-ready {
-  background: var(--accent-light);
-  color: var(--accent);
-}
-
-.btn-cowork.phase-error {
-  color: var(--danger);
-  background: var(--bg-error);
-}
-
-.btn-cowork.phase-error:hover {
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-.btn-cowork:disabled {
+.btn-task:disabled {
   cursor: not-allowed;
   opacity: 0.7;
-}
-
-/* ─── Phase badge (dot + text) ─── */
-
-.oc-phase-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-2xs);
-  padding-left: var(--space-2);
-  border-left: 1px solid var(--border-light);
-  margin-left: var(--space-1);
-}
-
-.oc-phase-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  flex-shrink: 0;
-}
-
-.oc-phase-dot.idle {
-  background: var(--text-muted);
-}
-
-.oc-phase-dot.busy {
-  background: var(--accent-thinking);
-  animation: pulse-dot 1.4s ease-in-out infinite;
-}
-
-.oc-phase-dot.ready {
-  background: var(--accent);
-}
-
-.oc-phase-dot.error {
-  background: var(--danger);
 }
 
 @media (max-width: 1023px) {

@@ -50,10 +50,7 @@ pub async fn list_providers(pool: &sqlx::PgPool) -> Result<Vec<LLMProvider>, App
     Ok(providers)
 }
 
-pub async fn get_provider(
-    pool: &sqlx::PgPool,
-    key: &str,
-) -> Result<Option<LLMProvider>, AppError> {
+pub async fn get_provider(pool: &sqlx::PgPool, key: &str) -> Result<Option<LLMProvider>, AppError> {
     let provider = sqlx::query_as::<_, LLMProvider>(
         "SELECT id, key, display_name, api_type, base_url, api_key_ref, enabled, sort_order \
          FROM llm_providers WHERE key = $1",
