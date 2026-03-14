@@ -82,7 +82,7 @@ export async function startAgentStream(
   const requestId = nextCommandId("prompt");
   const queue = new AsyncEventQueue<AgentRpcEvent>();
 
-  transport.onMessage((packet) => {
+  const unsubscribe = transport.subscribe((packet) => {
     if (!packet.id && packet.type === "error") {
       queue.push(packet);
       queue.close();
@@ -98,13 +98,13 @@ export async function startAgentStream(
   try {
     transport.send({ id: requestId, type: "prompt", ...payload });
   } catch (err) {
-    transport.onMessage(null);
+    unsubscribe();
     throw err;
   }
 
   const cancel = () => {
     queue.close();
-    transport.onMessage(null);
+    unsubscribe();
   };
 
   const stream = (async function* () {
@@ -115,7 +115,7 @@ export async function startAgentStream(
         yield next.value;
       }
     } finally {
-      transport.onMessage(null);
+      unsubscribe();
     }
   })();
 
@@ -139,13 +139,13 @@ export async function requestTitleGeneration(
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
-      transport.onMessage(null);
+      unsubscribe();
       resolve(value);
     };
 
     const timeout = setTimeout(() => done(null), 15_000);
 
-    transport.onMessage((packet) => {
+    const unsubscribe = transport.subscribe((packet) => {
       if (String(packet.id ?? "") !== id) return;
       if (packet.type === "response") {
         if (packet.success && (packet.data as { title?: string })?.title) {

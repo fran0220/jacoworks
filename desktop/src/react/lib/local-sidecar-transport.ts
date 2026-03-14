@@ -27,7 +27,7 @@ interface SidecarSkillInfo {
 export class LocalSidecarTransport implements AgentTransport {
   private ready = false;
   private connecting = false;
-  private messageHandler: ((packet: AgentRpcEvent) => void) | null = null;
+  private messageHandlers = new Set<(packet: AgentRpcEvent) => void>();
   private readyHandler: (() => void) | null = null;
   private errorHandler: ((error: Error) => void) | null = null;
   private unlisten: UnlistenFn | null = null;
@@ -73,7 +73,7 @@ export class LocalSidecarTransport implements AgentTransport {
         this.errorHandler?.(new Error(payload.error));
       }
 
-      this.messageHandler?.(payload);
+      this.dispatch(payload);
     });
 
     try {
@@ -108,7 +108,12 @@ export class LocalSidecarTransport implements AgentTransport {
   }
 
   onMessage(handler: ((packet: AgentRpcEvent) => void) | null): void {
-    this.messageHandler = handler;
+    // Legacy compat: no-op, use subscribe() instead
+  }
+
+  subscribe(handler: (packet: AgentRpcEvent) => void): () => void {
+    this.messageHandlers.add(handler);
+    return () => { this.messageHandlers.delete(handler); };
   }
 
   onReady(handler: (() => void) | null): void {
@@ -117,6 +122,10 @@ export class LocalSidecarTransport implements AgentTransport {
 
   onError(handler: ((error: Error) => void) | null): void {
     this.errorHandler = handler;
+  }
+
+  private dispatch(payload: AgentRpcEvent) {
+    for (const handler of this.messageHandlers) handler(payload);
   }
 
   private markReady() {
