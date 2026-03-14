@@ -4,8 +4,9 @@ import { WSClient, type WSFrame } from "./lib/ws-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "./lib/event-parser";
 import { extractText, streamBlocksToContent, toContentItems } from "./lib/message-extract";
 import { listSessions, createSession, getSession, updateSession, deleteSession, generateTitle } from "./lib/sessions";
-import { DEFAULT_OPENCLAW_SESSION_KEY, OPENCLAW_TOKEN } from "./lib/config";
+import { DEFAULT_OPENCLAW_SESSION_KEY, getOpenClawToken } from "./lib/config";
 import { posthog } from "./lib/posthog";
+import NavRail from "./components/NavRail";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Composer from "./components/Composer";
@@ -58,9 +59,16 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connState, setConnState] = useState<"disconnected" | "connecting" | "connected">("disconnected");
-  const [connMsg, setConnMsg] = useState("正在连接...");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
+  const [ocToken, setOcToken] = useState(() => getOpenClawToken());
+
+  // Listen for token injection from SetupGate (avoids full page reload)
+  useEffect(() => {
+    const handler = () => setOcToken(getOpenClawToken());
+    window.addEventListener("openclaw-token-ready", handler);
+    return () => window.removeEventListener("openclaw-token-ready", handler);
+  }, []);
 
   const blocksRef = useRef<StreamBlock[]>([]);
   const streamTextRef = useRef("");
@@ -149,20 +157,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!OPENCLAW_TOKEN) return;
+    if (!ocToken) return;
 
     const ws = new WSClient({
       sessionKey: activeTeamSessionKeyRef.current,
-      onStateChange(state, msg) {
+      onStateChange(state, _msg) {
         setConnState(state);
-        setConnMsg(msg);
       },
       onFrame(frame: WSFrame) {
         let parsed = parseFrame(frame);
 
         if (parsed.kind === "proxy_ready") {
           setConnState("connected");
-          setConnMsg("已连接");
           return;
         }
 
@@ -218,7 +224,7 @@ export default function App() {
       ws.dispose();
       wsRef.current = null;
     };
-  }, [scheduleRender, finishStream]);
+  }, [ocToken, scheduleRender, finishStream]);
 
   useEffect(() => {
     listSessions()
@@ -352,34 +358,35 @@ export default function App() {
     [handleTeamChange],
   );
 
-  if (!OPENCLAW_TOKEN) {
+  if (!ocToken) {
     return <SetupGate />;
   }
 
   return (
     <div className="app-layout">
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
-      <Sidebar
-        open={sidebarOpen}
-        sessions={sessions}
-        activeId={activeSessionId}
+      <NavRail
         activeTab={activeTab}
-        onSelect={handleSelectSession}
-        onNew={handleNewSession}
-        onDelete={handleDeleteSession}
+        connState={connState}
         onTabChange={(tab) => {
           setActiveTab(tab);
           setSidebarOpen(false);
         }}
       />
+      {activeTab === "chat" && (
+        <Sidebar
+          open={sidebarOpen}
+          sessions={sessions}
+          activeId={activeSessionId}
+          onSelect={handleSelectSession}
+          onNew={handleNewSession}
+          onDelete={handleDeleteSession}
+        />
+      )}
       <div className="chat-main">
-        <div className="status-bar">
-          <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
-            ☰
-          </button>
-          <span className={`status-dot ${connState}`} />
-          <span>{connMsg}</span>
-        </div>
+        <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
+          ☰
+        </button>
         {activeTab === "chat" && (
           <>
             <ChatView messages={messages} blocks={blocks} streaming={streaming} error={error} />

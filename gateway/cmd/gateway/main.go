@@ -1102,7 +1102,11 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeVMAgent)
+		containerType := r.URL.Query().Get("container_type")
+		if containerType == "" {
+			containerType = store.ContainerTypeVMAgent
+		}
+		info, err := s.GetContainerInfo(r.Context(), user.ID, containerType)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"provisioned": false,

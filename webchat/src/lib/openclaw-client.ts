@@ -1,4 +1,4 @@
-import { AUTH_TOKEN, DEFAULT_OPENCLAW_SESSION_KEY, GATEWAY_URL, OPENCLAW_TOKEN } from "./config";
+import { AUTH_TOKEN, DEFAULT_OPENCLAW_SESSION_KEY, GATEWAY_URL, getOpenClawToken } from "./config";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected";
 
@@ -277,7 +277,8 @@ export class OpenClawClient {
   }
 
   private async sendConnect() {
-    if (!OPENCLAW_TOKEN) {
+    const token = getOpenClawToken();
+    if (!token) {
       this.opts.onFrame({ type: "error", error: "缺少 OpenClaw token" });
       this.ws?.close(4008, "missing token");
       return;
@@ -297,7 +298,7 @@ export class OpenClawClient {
         scopes: ["operator.admin"],
         caps: ["tool-events"],
         auth: {
-          token: OPENCLAW_TOKEN,
+          token,
         },
       });
 

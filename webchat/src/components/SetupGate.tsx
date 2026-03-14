@@ -16,11 +16,32 @@ export default function SetupGate() {
     }
   }, []);
 
-  const finishSetup = useCallback(() => {
+  const finishSetup = useCallback((token?: string) => {
     setStage("ready");
     stopPolling();
+
+    // Inject token directly to avoid reload loop when server-side injection fails
+    if (token) {
+      window.__OPENCLAW_TOKEN__ = token;
+    }
+
     window.setTimeout(() => {
-      location.reload();
+      if (token) {
+        // Token available — re-render the app by dispatching a state change
+        window.dispatchEvent(new Event("openclaw-token-ready"));
+      } else {
+        // Fallback: reload once, but guard against infinite loop
+        const key = "jacoworks.setup.reloads";
+        const count = parseInt(sessionStorage.getItem(key) || "0", 10);
+        if (count < 2) {
+          sessionStorage.setItem(key, String(count + 1));
+          location.reload();
+        } else {
+          sessionStorage.removeItem(key);
+          setStage("error");
+          setError("容器已就绪但无法获取访问令牌，请刷新页面重试");
+        }
+      }
     }, 300);
   }, [stopPolling]);
 
@@ -30,8 +51,8 @@ export default function SetupGate() {
     pollTimer.current = window.setInterval(() => {
       getContainerStatus()
         .then((status) => {
-          if (status.provisioned) {
-            finishSetup();
+          if (status.provisioned && status.container_token) {
+            finishSetup(status.container_token);
           }
         })
         .catch(() => {
@@ -46,8 +67,8 @@ export default function SetupGate() {
 
     try {
       const status = await getContainerStatus();
-      if (status.provisioned) {
-        finishSetup();
+      if (status.provisioned && status.container_token) {
+        finishSetup(status.container_token);
         return;
       }
     } catch {
@@ -57,8 +78,8 @@ export default function SetupGate() {
     try {
       setStage("provisioning");
       const result = await provisionContainer();
-      if (result.status === "ready") {
-        finishSetup();
+      if (result.status === "ready" && result.container_token) {
+        finishSetup(result.container_token);
         return;
       }
       startPolling();
