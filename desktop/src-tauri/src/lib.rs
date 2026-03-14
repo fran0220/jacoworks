@@ -621,32 +621,84 @@ fn list_directory(path: String, workspace: Option<String>) -> Result<Vec<DirEntr
     Ok(entries)
 }
 
-#[derive(serde::Deserialize)]
-pub struct ImportFile {
-    name: String,
-    /// Base64-encoded file content (from browser FileReader.readAsArrayBuffer)
-    data: String,
-}
-
 #[derive(serde::Serialize)]
 pub struct ImportedFile {
     name: String,
     /// Relative path from workspace, e.g. "_attachments/report.pdf"
     path: String,
+    size: u64,
+}
+
+#[derive(serde::Serialize)]
+pub struct ImportResult {
+    imported: Vec<ImportedFile>,
+    warnings: Vec<String>,
 }
 
 #[tauri::command]
-fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<ImportedFile>, String> {
+async fn import_files_native(app: tauri::AppHandle, workspace: String) -> Result<ImportResult, String> {
+    use tauri_plugin_dialog::DialogExt;
+
     let attachments_dir = PathBuf::from(&workspace).join("_attachments");
     std::fs::create_dir_all(&attachments_dir)
         .map_err(|e| format!("Failed to create _attachments directory: {}", e))?;
 
-    let mut results = Vec::with_capacity(files.len());
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("选择文件")
+        .add_filter("所有文件", &["*"])
+        .blocking_pick_files();
 
-    for file in &files {
+    let Some(files) = picked else {
+        return Ok(ImportResult {
+            imported: Vec::new(),
+            warnings: Vec::new(),
+        });
+    };
+
+    let mut imported = Vec::with_capacity(files.len());
+    let mut warnings = Vec::new();
+    const IMPORT_FILE_SIZE_LIMIT: u64 = 200 * 1024 * 1024;
+
+    for file in files {
+        let source = match file.into_path() {
+            Ok(path) => path,
+            Err(_) => {
+                warnings.push("Skipped a file that cannot be resolved to a local path".to_string());
+                continue;
+            }
+        };
+
+        let source_meta = match std::fs::metadata(&source) {
+            Ok(meta) => meta,
+            Err(e) => {
+                warnings.push(format!("Skipped {}: cannot read metadata ({})", source.display(), e));
+                continue;
+            }
+        };
+
+        if source_meta.len() > IMPORT_FILE_SIZE_LIMIT {
+            let name = source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            warnings.push(format!(
+                "Skipped {}: file size {} bytes exceeds 200MB limit",
+                name,
+                source_meta.len()
+            ));
+            continue;
+        }
+
+        let original_name = source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+
         // Sanitize incoming names to prevent path traversal and Windows-illegal filenames.
-        let safe_name = file
-            .name
+        let safe_name = original_name
             .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
             .trim_start_matches('.')
             .trim_end_matches(['.', ' '])
@@ -674,10 +726,6 @@ fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<Importe
             }
         };
 
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&file.data)
-            .map_err(|e| format!("Base64 decode failed for {}: {}", file.name, e))?;
-
         let stem = Path::new(&safe_name)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -696,8 +744,8 @@ fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<Importe
             counter += 1;
         }
 
-        std::fs::write(&dest, &bytes)
-            .map_err(|e| format!("Failed to write {}: {}", file.name, e))?;
+        std::fs::copy(&source, &dest)
+            .map_err(|e| format!("Failed to copy {}: {}", source.display(), e))?;
 
         let final_name = dest
             .file_name()
@@ -705,13 +753,14 @@ fn import_files(files: Vec<ImportFile>, workspace: String) -> Result<Vec<Importe
             .unwrap_or(&safe_name)
             .to_string();
 
-        results.push(ImportedFile {
+        imported.push(ImportedFile {
             name: final_name.clone(),
             path: format!("_attachments/{}", final_name),
+            size: source_meta.len(),
         });
     }
 
-    Ok(results)
+    Ok(ImportResult { imported, warnings })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -764,7 +813,7 @@ pub fn run() {
             read_file_base64,
             preview_file,
             list_directory,
-            import_files,
+            import_files_native,
             db::db_init,
             db::db_list_sessions,
             db::db_get_session,

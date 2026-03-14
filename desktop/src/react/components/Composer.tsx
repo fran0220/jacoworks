@@ -12,13 +12,12 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChangeEventHandler } from "react";
 import { useClickOutside } from "../hooks/use-click-outside";
 import { MODEL_OPTIONS } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder, isDefaultSyncDir } from "../lib/cowork";
-import { importFiles, formatSize, type ImportedFile } from "../lib/file-utils";
+import { importFilesNative, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { getSettings } from "../lib/config";
 import type { AttachedFile } from "../types";
@@ -66,7 +65,6 @@ export default function Composer({
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [recentFolders, setRecentFolders] = useState<string[]>(getRecentFolders);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const plusMenuRef = useRef<HTMLDivElement | null>(null);
   const folderMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -99,22 +97,6 @@ export default function Composer({
     setTimeout(() => setWarnings((prev) => prev.slice(1)), 3000);
   }, []);
 
-  const onFileChange: ChangeEventHandler<HTMLInputElement> = async (event) => {
-    const selected = event.target.files;
-    if (!selected || selected.length === 0) {
-      event.target.value = "";
-      return;
-    }
-
-    setReadingCount(selected.length);
-    const { imported, warnings: newWarnings } = await importFiles(selected, workspacePath);
-    setReadingCount(0);
-
-    for (const msg of newWarnings) addWarning(msg);
-    setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
-    event.target.value = "";
-  };
-
   const handlePickFolder = (path: string) => {
     onWorkspaceChange(path);
     addRecentFolder(path);
@@ -127,9 +109,15 @@ export default function Composer({
     if (selected) handlePickFolder(selected);
   };
 
-  const handleFileSelect = () => {
-    fileInputRef.current?.click();
+  const handleFileSelect = async () => {
     setPlusMenuOpen(false);
+
+    setReadingCount(1);
+    const { imported, warnings: newWarnings } = await importFilesNative(workspacePath);
+    setReadingCount(0);
+
+    for (const msg of newWarnings) addWarning(msg);
+    setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
   };
 
   const handleSkillInsert = (skillId: string) => {
@@ -259,14 +247,6 @@ export default function Composer({
             )}
           </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept="*/*"
-            onChange={onFileChange}
-            style={{ display: "none" }}
-          />
           <button
             className="ns-btn-icon"
             disabled={isStreaming}

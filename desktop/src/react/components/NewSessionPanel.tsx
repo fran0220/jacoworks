@@ -12,13 +12,12 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChangeEventHandler } from "react";
 import { useClickOutside } from "../hooks/use-click-outside";
-import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings, getSessionSyncDir } from "../lib/config";
+import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
-import { importFiles, formatSize } from "../lib/file-utils";
+import { importFilesNative, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
 import { createSession } from "../lib/sessions";
 import type { AttachedFile, ChatSession } from "../types";
@@ -46,7 +45,6 @@ export default function NewSessionPanel({
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const folderMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Pre-fill from initialMessage (e.g. "新建技能" or "GitHub 安装")
   useEffect(() => {
@@ -129,25 +127,15 @@ export default function NewSessionPanel({
     setTimeout(() => setWarnings((prev) => prev.slice(1)), 3000);
   }, []);
 
-  const handleFileSelect = () => {
-    fileInputRef.current?.click();
+  const handleFileSelect = async () => {
     setPlusMenuOpen(false);
-  };
 
-  const handleFileChange: ChangeEventHandler<HTMLInputElement> = async (event) => {
-    const selected = event.target.files;
-    if (!selected || selected.length === 0) {
-      event.target.value = "";
-      return;
-    }
-
-    setReadingCount(selected.length);
-    const { imported, warnings: newWarnings } = await importFiles(selected, workspacePath);
+    setReadingCount(1);
+    const { imported, warnings: newWarnings } = await importFilesNative(workspacePath);
     setReadingCount(0);
 
     for (const msg of newWarnings) addWarning(msg);
     setFiles((prev) => [...prev, ...imported.map((f) => ({ name: f.name, path: f.path, size: f.size }))]);
-    event.target.value = "";
   };
 
   const handleSkillInsert = (skillId: string) => {
@@ -284,14 +272,6 @@ export default function NewSessionPanel({
               )}
             </div>
 
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="*/*"
-              onChange={handleFileChange}
-              style={{ display: "none" }}
-            />
             <button
               className="ns-btn-icon"
               disabled={loading}
