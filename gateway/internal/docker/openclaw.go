@@ -19,7 +19,6 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 	"github.com/rs/zerolog/log"
@@ -622,9 +621,21 @@ type openclawControlUI struct {
 	DangerouslyDisableDeviceAuth bool     `json:"dangerouslyDisableDeviceAuth,omitempty"`
 }
 
+func (oc *OpenClawClient) resolveGatewayPort(hostPort int) int {
+	if hostPort > 0 {
+		return hostPort
+	}
+	if oc.client != nil && oc.client.agentPort > 0 {
+		return oc.client.agentPort
+	}
+	return 18789
+}
+
 // GenerateConfig generates openclaw.json content as JSON bytes.
 // Deprecated: Use GenerateConfigFromDB which reads providers/models from DB.
-func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]byte, error) {
+func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig, hostPort int) ([]byte, error) {
+	gatewayPort := oc.resolveGatewayPort(hostPort)
+
 	primaryModel := "proxy/gpt-5.4"
 	if llm.PrimaryModel != "" {
 		if strings.Contains(llm.PrimaryModel, "/") {
@@ -671,14 +682,14 @@ func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]
 		Commands: openclawCommands{Native: "auto", NativeSkills: "auto", Restart: true},
 		Session:  openclawSession{DMScope: "per-channel-peer", Reset: openclawResetMode{Mode: "idle"}},
 		Gateway: openclawGateway{
-			Port: 18789,
+			Port: gatewayPort,
 			Bind: "lan",
 			Auth: openclawAuth{Mode: "token", Token: token},
 			ControlUI: openclawControlUI{
 				AllowedOrigins: []string{
-					"http://localhost:18789",
-					"http://127.0.0.1:18789",
-					fmt.Sprintf("http://%s:%d", oc.client.hostIP, oc.client.agentPort),
+					fmt.Sprintf("http://localhost:%d", gatewayPort),
+					fmt.Sprintf("http://127.0.0.1:%d", gatewayPort),
+					fmt.Sprintf("http://%s:%d", oc.client.hostIP, gatewayPort),
 				},
 			},
 			TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
@@ -690,10 +701,12 @@ func (oc *OpenClawClient) GenerateConfig(token string, llm config.LLMConfig) ([]
 
 // GenerateConfigFromDB generates openclaw.json from DB-backed providers and models.
 // Falls back to the hardcoded GenerateConfig if the DB query fails or returns no providers.
-func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, userID, token string) ([]byte, error) {
+func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, userID, token string, hostPort int) ([]byte, error) {
+	gatewayPort := oc.resolveGatewayPort(hostPort)
+
 	if oc.store == nil {
 		llm := oc.getLLM()
-		return oc.GenerateConfig(token, llm)
+		return oc.GenerateConfig(token, llm, gatewayPort)
 	}
 
 	providers, err := oc.store.ListProviders(ctx)
@@ -704,7 +717,7 @@ func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, userID, toke
 			log.Warn().Msg("openclaw config: no providers in DB, using hardcoded fallback")
 		}
 		llm := oc.getLLM()
-		data, genErr := oc.GenerateConfig(token, llm)
+		data, genErr := oc.GenerateConfig(token, llm, gatewayPort)
 		if genErr != nil {
 			return nil, genErr
 		}
@@ -768,7 +781,7 @@ func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, userID, toke
 
 	if len(ocProviders) == 0 {
 		log.Warn().Msg("openclaw config: no enabled providers with models, using hardcoded fallback")
-		data, genErr := oc.GenerateConfig(token, llm)
+		data, genErr := oc.GenerateConfig(token, llm, gatewayPort)
 		if genErr != nil {
 			return nil, genErr
 		}
@@ -809,14 +822,14 @@ func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, userID, toke
 		Commands: openclawCommands{Native: "auto", NativeSkills: "auto", Restart: true},
 		Session:  openclawSession{DMScope: "per-channel-peer", Reset: openclawResetMode{Mode: "idle"}},
 		Gateway: openclawGateway{
-			Port: 18789,
+			Port: gatewayPort,
 			Bind: "lan",
 			Auth: openclawAuth{Mode: "token", Token: token},
 			ControlUI: openclawControlUI{
 				AllowedOrigins: []string{
-					"http://localhost:18789",
-					"http://127.0.0.1:18789",
-					fmt.Sprintf("http://%s:%d", oc.client.hostIP, oc.client.agentPort),
+					fmt.Sprintf("http://localhost:%d", gatewayPort),
+					fmt.Sprintf("http://127.0.0.1:%d", gatewayPort),
+					fmt.Sprintf("http://%s:%d", oc.client.hostIP, gatewayPort),
 				},
 			},
 			TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
@@ -832,10 +845,10 @@ func (oc *OpenClawClient) GenerateConfigFromDB(ctx context.Context, userID, toke
 
 // WriteConfig generates and writes openclaw.json into a running container via CopyToContainer.
 // Must be called after the container is started.
-func (oc *OpenClawClient) WriteConfig(containerName, userID, token string) error {
+func (oc *OpenClawClient) WriteConfig(containerName, userID, token string, hostPort int) error {
 	ctx := context.Background()
 
-	data, err := oc.GenerateConfigFromDB(ctx, userID, token)
+	data, err := oc.GenerateConfigFromDB(ctx, userID, token, hostPort)
 	if err != nil {
 		return fmt.Errorf("generate openclaw config: %w", err)
 	}
@@ -872,7 +885,7 @@ func (oc *OpenClawClient) WriteConfig(containerName, userID, token string) error
 // Uses content-hash comparison to skip writes when config hasn't changed.
 // Returns true if config was actually written.
 func (oc *OpenClawClient) SyncConfig(ctx context.Context, info *store.ContainerInfo) (bool, error) {
-	data, err := oc.GenerateConfigFromDB(ctx, info.UserID, info.ContainerToken)
+	data, err := oc.GenerateConfigFromDB(ctx, info.UserID, info.ContainerToken, info.HostPort)
 	if err != nil {
 		return false, fmt.Errorf("generate config: %w", err)
 	}
@@ -955,8 +968,8 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 	for k, v := range envVars {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
+	gatewayPort := oc.resolveGatewayPort(hostPort)
 
-	port := nat.Port("18789/tcp")
 	containerCfg := &container.Config{
 		Image: oc.client.image,
 		Env:   env,
@@ -966,7 +979,7 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 			"jacoworks.user_id": userID,
 		},
 		Healthcheck: &container.HealthConfig{
-			Test:     []string{"CMD-SHELL", "curl -fsS http://127.0.0.1:18789/healthz || exit 1"},
+			Test:     []string{"CMD-SHELL", fmt.Sprintf("curl -fsS http://127.0.0.1:%d/healthz || exit 1", gatewayPort)},
 			Interval: 30 * time.Second,
 			Timeout:  5 * time.Second,
 			Retries:  3,
@@ -974,12 +987,8 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 	}
 
 	hostCfg := &container.HostConfig{
+		NetworkMode:   container.NetworkMode("host"),
 		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
-		PortBindings: nat.PortMap{
-			port: []nat.PortBinding{
-				{HostPort: fmt.Sprintf("%d", hostPort)},
-			},
-		},
 		Binds: []string{
 			fmt.Sprintf("%s/.openclaw:/home/node/.openclaw", userDir),
 			fmt.Sprintf("%s/workspace:/data/workspace", userDir),
@@ -998,7 +1007,7 @@ func (oc *OpenClawClient) Provision(name, userID, token string, hostPort int) (s
 	}
 
 	// 3. Write config into running container via CopyToContainer
-	if err := oc.WriteConfig(name, userID, token); err != nil {
+	if err := oc.WriteConfig(name, userID, token, gatewayPort); err != nil {
 		return "", fmt.Errorf("write config: %w", err)
 	}
 

@@ -32,10 +32,10 @@ docker:
   gateway_token: ""
 
 openclaw:
-  docker_host: "tcp://100.97.254.31:2375"
+  docker_host: "tcp://10.10.0.2:2375"
   image: "ghcr.io/openclaw/openclaw:latest"
   port: 18789
-  host_ip: "100.97.254.31"
+  host_ip: "10.10.0.2"
   base_port: 18800
   data_root: "/srv/jacoworks/openclaw"
 
