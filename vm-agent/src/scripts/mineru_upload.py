@@ -78,6 +78,9 @@ def _http_json(
 def _http_put_file(url: str, file_path: pathlib.Path, *, timeout: int = 300) -> None:
     data = file_path.read_bytes()
     req = urllib.request.Request(url=url, data=data, method="PUT")
+    # Prevent urllib from adding default Content-Type: application/x-www-form-urlencoded
+    # OSS presigned URLs are signed without Content-Type, so we must not send one
+    req.add_unredirected_header("Content-type", "")
     try:
         with urllib.request.urlopen(req, timeout=timeout):
             return
@@ -119,19 +122,26 @@ def _must_success(response: dict, context: str) -> dict:
 
 
 def _first_presigned_url(batch_data: dict) -> str:
+    # v4 API returns file_urls: ["https://..."] (list of strings)
+    file_urls = batch_data.get("file_urls")
+    if isinstance(file_urls, list) and file_urls:
+        first = file_urls[0]
+        if isinstance(first, str) and first:
+            return first
+
+    # Fallback: files: [{presigned_url: "..."}] (list of dicts)
     files = batch_data.get("files")
-    if not isinstance(files, list) or not files:
-        raise RuntimeError(f"Batch response missing files: {batch_data}")
+    if isinstance(files, list) and files:
+        first = files[0]
+        if isinstance(first, str) and first:
+            return first
+        if isinstance(first, dict):
+            for key in ("presigned_url", "upload_url", "url"):
+                value = first.get(key)
+                if isinstance(value, str) and value:
+                    return value
 
-    first = files[0]
-    if not isinstance(first, dict):
-        raise RuntimeError(f"Batch response files[0] invalid: {batch_data}")
-
-    for key in ("presigned_url", "upload_url", "url"):
-        value = first.get(key)
-        if isinstance(value, str) and value:
-            return value
-    raise RuntimeError(f"Batch response missing presigned_url: {first}")
+    raise RuntimeError(f"Batch response missing presigned/file URL: {batch_data}")
 
 
 def create_batch(
@@ -187,21 +197,26 @@ def poll_batch(
         )
         data = _must_success(response, "poll batch")
 
+        # v4 API: state may be at top-level or inside extract_result[0].state
         state = data.get("state") or response.get("state")
+
+        # If no top-level state, derive from extract_result items
+        extract_result = data.get("extract_result") or data.get("extract_results") or response.get("extract_result") or response.get("extract_results")
+        if state is None and isinstance(extract_result, list) and extract_result:
+            item_states = [item.get("state") for item in extract_result if isinstance(item, dict)]
+            if all(s == "done" for s in item_states if s):
+                state = "done"
+            elif any(s == "failed" for s in item_states if s):
+                state = "failed"
+            elif item_states:
+                state = item_states[0]  # e.g. "processing"
+
         if isinstance(state, str) and state != last_state:
             elapsed = time.monotonic() - start
             _log(f"state={state} elapsed={elapsed:.1f}s")
             last_state = state
 
         if state == "done":
-            extract_result = data.get("extract_result")
-            if extract_result is None:
-                extract_result = data.get("extract_results")
-            if extract_result is None:
-                extract_result = response.get("extract_result")
-            if extract_result is None:
-                extract_result = response.get("extract_results")
-
             if isinstance(extract_result, dict):
                 items = [extract_result]
             elif isinstance(extract_result, list):
