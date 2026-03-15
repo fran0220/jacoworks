@@ -1,7 +1,7 @@
 import { FileText } from "lucide-react";
 import { memo } from "react";
 import { formatSize } from "../lib/file-utils";
-import type { AssistantPart, ChatMessage, FileRef, MessageContent, StreamBlock } from "../types";
+import type { AssistantPart, ChatMessage, FileRef, MessageContent } from "../types";
 import AssistantContent from "./AssistantContent";
 import ErrorBubble from "./ErrorBubble";
 
@@ -39,32 +39,6 @@ function FileBadges({ files }: { files: FileRef[] }) {
   );
 }
 
-function legacyToParts(content: string, blocks?: StreamBlock[]): AssistantPart[] {
-  const parts: AssistantPart[] = [];
-  if (blocks) {
-    for (const b of blocks) {
-      if (b.type === "thinking" && b.content.trim()) {
-        parts.push({ kind: "thinking", text: b.content });
-      } else if (b.type === "tool") {
-        parts.push({
-          kind: "tool",
-          id: b.id,
-          name: b.name,
-          status: b.status === "running" ? "completed" : b.status,
-          args: b.args,
-          result: b.result,
-          filePath: b.filePath,
-          fileKind: b.fileKind,
-        });
-      }
-    }
-  }
-  if (content.trim()) {
-    parts.push({ kind: "markdown", text: content });
-  }
-  return parts;
-}
-
 const MessageBubble = memo(function MessageBubble({
   message,
   workspacePath,
@@ -76,7 +50,6 @@ const MessageBubble = memo(function MessageBubble({
   const text = extractText(message.content);
   const images = extractImages(message.content);
   const files = message.files || [];
-  const blocks = message.blocks || [];
 
   // Detect persisted error messages (parts with error:... status or ⚠️ prefix)
   const errorPart = message.parts?.find((p): p is Extract<AssistantPart, { kind: "status" }> =>
@@ -108,7 +81,7 @@ const MessageBubble = memo(function MessageBubble({
           </>
         ) : (
           <AssistantContent
-            parts={message.parts || legacyToParts(text, blocks)}
+            parts={message.parts || []}
             workspacePath={workspacePath}
           />
         )}

@@ -1,0 +1,35 @@
+/* ── Visual Widget ── */
+
+.visual-widget {
+  margin: var(--space-3) 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-secondary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  width: 70vw;
+  max-width: 800px;
+  min-width: 100%;
+}
+
+.visual-widget-title {
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.visual-widget-frame {
+  width: 100%;
+  min-height: 200px;
+  border: none;
+  display: block;
+  background: var(--bg-secondary);
+}
+
+@media (max-width: 767px) {
+  .visual-widget {
+    width: 85vw;
+    max-width: none;
+  }
+}

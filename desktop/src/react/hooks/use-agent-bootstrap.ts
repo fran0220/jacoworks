@@ -56,6 +56,8 @@ export function useAgentBootstrap(authenticated: boolean) {
     setBootstrapDone(false);
     setBootstrapError(null);
 
+    let pendingTransport: LocalSidecarTransport | null = null;
+
     withTimeout((async () => {
       await ensureDefaultWorkspace();
 
@@ -77,10 +79,13 @@ export function useAgentBootstrap(authenticated: boolean) {
       if (agentConfig.jimeng_api_url) envVars.JIMENG_API_URL = agentConfig.jimeng_api_url;
       if (agentConfig.jimeng_api_key) envVars.JIMENG_API_KEY = agentConfig.jimeng_api_key;
 
+      if (cancelled) return;
+
       const nextTransport = new LocalSidecarTransport({
         agentDir: "vm-agent",
         envVars,
       });
+      pendingTransport = nextTransport;
       await nextTransport.connect();
 
       if (cancelled) {
@@ -88,12 +93,11 @@ export function useAgentBootstrap(authenticated: boolean) {
         return;
       }
 
+      pendingTransport = null;
       transportRef.current = nextTransport;
       setTransport(nextTransport);
 
       // Use skills from sidecar ready event — this is the actual LLM-visible skill list.
-      // The sidecar loads skills from local filesystem (SKILLS_PATHS + USER_SKILLS_DIR),
-      // which is exactly what gets injected into the system prompt.
       setSkills(nextTransport.loadedSkills);
     })(), 30_000, "本地 Agent 初始化超时，请重试")
       .then(() => {
@@ -115,6 +119,11 @@ export function useAgentBootstrap(authenticated: boolean) {
 
     return () => {
       cancelled = true;
+      // StrictMode cleanup: close any in-flight transport to prevent killing the next one
+      if (pendingTransport) {
+        pendingTransport.close();
+        pendingTransport = null;
+      }
     };
   }, [authenticated, isTauriEnv, bootstrapNonce]);
 

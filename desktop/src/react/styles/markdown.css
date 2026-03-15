@@ -132,6 +132,9 @@ select:focus-visible {
   transition:
     box-shadow var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard);
+  min-width: 280px;
+  width: fit-content;
+  max-width: 400px;
 }
 
 .tool-file-card:hover {

@@ -54,11 +54,9 @@ function rowToMessage(row: MessageRow): ChatMessage {
   if (row.blocks_json) {
     try {
       const parsed = JSON.parse(row.blocks_json);
-      // New format: { parts: AssistantPart[] }; legacy: StreamBlock[]
+      // New format: { parts: AssistantPart[] }
       if (parsed && !Array.isArray(parsed) && Array.isArray(parsed.parts)) {
         msg.parts = parsed.parts;
-      } else if (Array.isArray(parsed)) {
-        msg.blocks = parsed;
       }
     } catch { /* ignore malformed */ }
   }
@@ -73,10 +71,9 @@ function rowToMessage(row: MessageRow): ChatMessage {
 
 function messageToArgs(msg: ChatMessage) {
   const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
-  // Prefer parts (new format); fall back to legacy blocks
   const blocksJson = msg.parts
     ? JSON.stringify({ parts: msg.parts })
-    : msg.blocks ? JSON.stringify(msg.blocks) : null;
+    : null;
   const filesJson = msg.files ? JSON.stringify(msg.files) : null;
   return { content, blocksJson, filesJson };
 }

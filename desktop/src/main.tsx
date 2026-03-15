@@ -4,6 +4,7 @@ import App from "./App";
 import "./app.css";
 import "./react/styles.css";
 import "./react/styles/preview.css";
+import "./react/styles/visual.css";
 
 const container = document.getElementById("root");
 if (!container) {

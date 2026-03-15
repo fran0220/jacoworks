@@ -19,14 +19,14 @@ export interface FileRef {
 export type AssistantPart =
   | { kind: "markdown"; text: string }
   | { kind: "thinking"; text: string }
-  | { kind: "tool"; id: string; name: string; status: "completed" | "error"; args?: string; result?: string; filePath?: string; fileKind?: string }
+  | { kind: "tool"; id: string; name: string; status: "running" | "completed" | "error"; args?: string; result?: string; filePath?: string; fileKind?: string; visualData?: string }
+  | { kind: "visual"; id: string; visualType: string; title?: string; html: string }
   | { kind: "status"; text: string };
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string | MessageContent[];
   files?: FileRef[];
-  blocks?: StreamBlock[];
   parts?: AssistantPart[];
 }
 
@@ -48,12 +48,6 @@ export interface ChatSession {
   model: string;
   anonymous?: boolean;
 }
-
-export type StreamBlock =
-  | { type: "thinking"; content: string }
-  | { type: "text"; content: string }
-  | { type: "tool"; id: string; name: string; status: "running" | "completed" | "error"; args?: string; result?: string; filePath?: string; fileKind?: string }
-  | { type: "status"; text: string };
 
 export interface FilePreview {
   path: string;

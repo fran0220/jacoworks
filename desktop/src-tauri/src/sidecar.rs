@@ -367,6 +367,7 @@ pub async fn start_agent(
     agent_dir: String,
     env_vars: HashMap<String, String>,
 ) -> Result<AgentStatus, String> {
+    eprintln!("[sidecar] start_agent called: agent_dir={}", agent_dir);
     let (ready_tx, ready_rx) = mpsc::channel::<()>();
 
     {
@@ -397,6 +398,7 @@ pub async fn start_agent(
         // Dual mode: production (compiled binary) vs dev (node + dist/index.js)
         let (mut cmd, resolved_agent_dir) = if let Some(binary) = find_sidecar_binary() {
             // Production: bun-compiled sidecar binary
+            eprintln!("[sidecar] Using compiled binary: {}", binary.display());
             let bin_dir = binary.parent().unwrap_or(Path::new(".")).to_path_buf();
             let mut c = Command::new(&binary);
             c.current_dir(&bin_dir);
@@ -411,9 +413,11 @@ pub async fn start_agent(
             (c, bin_dir)
         } else {
             // Dev fallback: bun + src/index.ts (vm-agent uses bun:sqlite, node cannot run it)
+            eprintln!("[sidecar] No compiled binary found, trying bun dev mode");
             let (resolved_dir, _entry) = resolve_agent_paths(&agent_dir)?;
             let src_entry = resolved_dir.join("src").join("index.ts");
-            let entry = if src_entry.exists() { src_entry } else { _entry };
+            let entry = if src_entry.exists() { src_entry.clone() } else { _entry };
+            eprintln!("[sidecar] Dev entry: {}, dir: {}", entry.display(), resolved_dir.display());
             let mut c = Command::new("bun");
             c.arg("run").arg(&entry).current_dir(&resolved_dir);
             (c, resolved_dir)
@@ -574,7 +578,11 @@ pub async fn start_agent(
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("Failed to spawn agent: {}", e))?;
+            .map_err(|e| {
+                eprintln!("[sidecar] spawn FAILED: {}", e);
+                format!("Failed to spawn agent: {}", e)
+            })?;
+        eprintln!("[sidecar] spawned pid={}", child.id());
 
         let stdin = child
             .stdin
@@ -652,6 +660,7 @@ pub async fn start_agent(
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if ready_rx.recv_timeout(Duration::from_millis(100)).is_ok() {
+            eprintln!("[sidecar] ready handshake succeeded");
             return Ok(AgentStatus {
                 running: true,
                 transport: "rpc-stdio".to_string(),
@@ -680,10 +689,12 @@ pub async fn start_agent(
             } else {
                 format!("Agent exited during startup{}: {}", exit_info, stderr_tail)
             };
+            eprintln!("[sidecar] {}", detail);
             return Err(detail);
         }
 
         if Instant::now() >= deadline {
+            eprintln!("[sidecar] ready handshake timed out after 10s");
             if let Some(existing) = proc.as_mut() {
                 kill_process_tree(&mut existing.child);
             }

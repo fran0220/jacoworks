@@ -31,7 +31,7 @@ export default function ChatView({
     visibleMessages,
     streaming,
     streamingStartedAt,
-    blocks,
+    parts,
     errorText,
     agentPhase,
     turnCount,
@@ -84,7 +84,7 @@ export default function ChatView({
           <MessageBubble key={`${index}-${message.role}`} message={message} workspacePath={sessionState.workspacePath} />
         ))}
 
-        {streaming && blocks.length === 0 && (
+        {streaming && parts.length === 0 && (
           <div className="bubble-row assistant">
             <div className="bubble assistant-bubble">
               <StreamingCursor />
@@ -92,10 +92,10 @@ export default function ChatView({
           </div>
         )}
 
-        {streaming && blocks.length > 0 && (
+        {streaming && parts.length > 0 && (
           <div className="bubble-row assistant">
             <div className="bubble assistant-bubble">
-              <AssistantContent parts={[]} blocks={blocks} streaming workspacePath={sessionState.workspacePath} />
+              <AssistantContent parts={parts} streaming workspacePath={sessionState.workspacePath} />
               <StreamingCursor />
             </div>
           </div>

@@ -15,18 +15,18 @@ import type {
   AttachedFile,
   ChatMessage,
   ChatSession,
-  StreamBlock,
 } from "../types";
 import { formatSize } from "../lib/file-utils";
+import { assistantPartsToText, sanitizePartsForPersistence } from "../lib/assistant-parts";
 import { syncMemory } from "../lib/memory-sync";
 import {
-  clearBlocks,
+  clearParts,
   finishStreaming,
   getEntryById,
   getOrCreateEntry,
   getSnapshot,
   patchSnapshot,
-  scheduleBlocksPublish,
+  schedulePartsPublish,
   setDirty,
   startStreaming as storeStartStreaming,
   subscribe,
@@ -68,34 +68,20 @@ function isUntitledTitle(title: string): boolean {
   return title === "新对话" || title === "新会话";
 }
 
-function truncate(str: string | undefined, max: number): string | undefined {
-  if (!str) return undefined;
-  return str.length <= max ? str : `${str.slice(0, max)}\n…[截断]`;
-}
-
-function blocksToAssistantParts(blocks: StreamBlock[]): AssistantPart[] {
-  const parts: AssistantPart[] = [];
-  for (const b of blocks) {
-    if (b.type === "text" && b.content.trim()) {
-      parts.push({ kind: "markdown", text: b.content });
-    } else if (b.type === "thinking" && b.content.trim()) {
-      parts.push({ kind: "thinking", text: b.content });
-    } else if (b.type === "tool") {
-      parts.push({
-        kind: "tool",
-        id: b.id,
-        name: b.name,
-        status: b.status === "running" ? "completed" : b.status,
-        args: truncate(b.args, 1000),
-        result: truncate(b.result, 2000),
-        filePath: b.filePath,
-        fileKind: b.fileKind,
-      });
-    } else if (b.type === "status") {
-      parts.push({ kind: "status", text: b.text });
+/** Flatten Pi SDK tool result (content array or object) to plain text. */
+function extractResultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (Array.isArray(result)) {
+    return (result as Array<{ text?: string }>).map((c) => c.text || "").join("");
+  }
+  // Pi SDK returns {content: [{type,text}], details?: {...}}
+  if (result && typeof result === "object" && "content" in result) {
+    const content = (result as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      return (content as Array<{ text?: string }>).map((c) => c.text || "").join("");
     }
   }
-  return parts;
+  return JSON.stringify(result, null, 2);
 }
 
 interface UseChatStreamOptions {
@@ -122,7 +108,7 @@ export function useChatStream({
     useCallback(() => getSnapshot(session), [session]),
   );
 
-  const { sessionState, streaming, streamingStartedAt, blocks, errorText, agentPhase, turnCount, contextUsage } = streamSnapshot;
+  const { sessionState, streaming, streamingStartedAt, parts, errorText, agentPhase, turnCount, contextUsage } = streamSnapshot;
 
   // ── View-only local state ──────────────────────────
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -170,7 +156,7 @@ export function useChatStream({
 
   useEffect(() => {
     scheduleScrollToBottom();
-  }, [visibleMessages, blocks, scheduleScrollToBottom]);
+  }, [visibleMessages, parts, scheduleScrollToBottom]);
 
   useEffect(() => {
     return () => { cancelScrollFrame(); };
@@ -202,19 +188,16 @@ export function useChatStream({
   // ── Finalize stream ────────────────────────────────
   const finalizeStream = useCallback(
     async (entry: SessionStreamEntry, ctx: StreamSessionContext) => {
-      const parts = blocksToAssistantParts(entry.runtime.blocksBuffer);
+      const parts = sanitizePartsForPersistence(entry.runtime.partsBuffer);
 
       if (parts.length === 0) {
         patchSnapshot(ctx.id, { errorText: "模型未返回任何内容，请重试" });
-        clearBlocks(ctx.id);
+        clearParts(ctx.id);
         return;
       }
 
       // Backward compat: also compute flat text for content field
-      const assistantText = parts
-        .filter((p): p is Extract<AssistantPart, { kind: "markdown" }> => p.kind === "markdown")
-        .map((p) => p.text)
-        .join("\n\n");
+      const assistantText = assistantPartsToText(parts);
 
       const assistantMessage: ChatMessage = {
         role: "assistant",
@@ -228,7 +211,7 @@ export function useChatStream({
         ...prev,
         messages: finalMessages,
       }));
-      clearBlocks(ctx.id);
+      clearParts(ctx.id);
 
       const assistantCount = finalMessages.filter((m) => m.role === "assistant").length;
       const isUntitled = isUntitledTitle(ctx.title);
@@ -370,34 +353,34 @@ export function useChatStream({
                 patchSnapshot(streamCtx.id, { agentPhase: "thinking" });
               }
               if (assistantEvent?.type === "text_delta" && assistantEvent.delta) {
-                const last = entry.runtime.blocksBuffer[entry.runtime.blocksBuffer.length - 1];
-                if (last?.type === "text") {
-                  last.content += assistantEvent.delta;
+                const last = entry.runtime.partsBuffer[entry.runtime.partsBuffer.length - 1];
+                if (last?.kind === "markdown") {
+                  last.text += assistantEvent.delta;
                 } else {
-                  entry.runtime.blocksBuffer.push({ type: "text", content: assistantEvent.delta });
+                  entry.runtime.partsBuffer.push({ kind: "markdown", text: assistantEvent.delta });
                 }
-                scheduleBlocksPublish(streamCtx.id);
+                schedulePartsPublish(streamCtx.id);
               } else if (assistantEvent?.type === "thinking_delta" && assistantEvent.delta) {
-                const last = entry.runtime.blocksBuffer[entry.runtime.blocksBuffer.length - 1];
-                if (last?.type === "thinking") {
-                  last.content += assistantEvent.delta;
+                const last = entry.runtime.partsBuffer[entry.runtime.partsBuffer.length - 1];
+                if (last?.kind === "thinking") {
+                  last.text += assistantEvent.delta;
                 } else {
-                  entry.runtime.blocksBuffer.push({ type: "thinking", content: assistantEvent.delta });
+                  entry.runtime.partsBuffer.push({ kind: "thinking", text: assistantEvent.delta });
                 }
-                scheduleBlocksPublish(streamCtx.id);
+                schedulePartsPublish(streamCtx.id);
               } else if (assistantEvent?.type === "toolcall_start") {
                 const partial = (assistantEvent as { partial?: { content?: Array<{ type: string; id?: string; name?: string }> }; contentIndex?: number }).partial;
                 const idx = (assistantEvent as { contentIndex?: number }).contentIndex;
                 const toolBlock = idx != null ? partial?.content?.[idx] : undefined;
                 const toolName = toolBlock?.name || "tool";
                 const toolId = toolBlock?.id || `tool-${Date.now()}`;
-                entry.runtime.blocksBuffer.push({
-                  type: "tool",
+                entry.runtime.partsBuffer.push({
+                  kind: "tool",
                   id: toolId,
                   name: toolName,
                   status: "running",
                 });
-                scheduleBlocksPublish(streamCtx.id);
+                schedulePartsPublish(streamCtx.id);
               }
             }
 
@@ -405,35 +388,42 @@ export function useChatStream({
               patchSnapshot(streamCtx.id, { agentPhase: "executing" });
               const execId = String(event.toolCallId || "");
               const existing = execId
-                ? entry.runtime.blocksBuffer.find((b) => b.type === "tool" && b.id === execId)
+                ? entry.runtime.partsBuffer.find((b) => b.kind === "tool" && b.id === execId)
                 : undefined;
-              if (existing && existing.type === "tool") {
+              if (existing && existing.kind === "tool") {
                 existing.args = event.args ? JSON.stringify(event.args, null, 2) : undefined;
               } else {
                 const argsStr = event.args ? JSON.stringify(event.args, null, 2) : undefined;
-                entry.runtime.blocksBuffer.push({
-                  type: "tool",
+                entry.runtime.partsBuffer.push({
+                  kind: "tool",
                   id: String(event.toolCallId || `tool-${Date.now()}`),
                   name: String(event.toolName || "tool"),
                   status: "running",
                   args: argsStr,
                 });
               }
-              scheduleBlocksPublish(streamCtx.id);
+              schedulePartsPublish(streamCtx.id);
             }
 
             if (event.type === "tool_execution_end") {
               const endId = String(event.toolCallId || "");
-              for (let i = entry.runtime.blocksBuffer.length - 1; i >= 0; i -= 1) {
-                const block = entry.runtime.blocksBuffer[i];
+              for (let i = entry.runtime.partsBuffer.length - 1; i >= 0; i -= 1) {
+                const block = entry.runtime.partsBuffer[i];
                 if (
-                  block.type === "tool" &&
+                  block.kind === "tool" &&
                   (endId ? block.id === endId : block.name === String(event.toolName) && block.status === "running")
                 ) {
                   block.status = event.isError ? "error" : "completed";
                   if (event.result !== undefined) {
-                    const raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2);
+                    const raw = extractResultText(event.result);
                     block.result = raw.length > 4000 ? `${raw.slice(0, 4000)}\n…[截断]` : raw;
+                    // Stash details for render_visual (html lives in details, not in content text)
+                    if (block.name === "render_visual" && !event.isError) {
+                      const details = (event.result as { details?: { html?: string; title?: string; type?: string } })?.details;
+                      if (details?.html) {
+                        block.visualData = JSON.stringify({ type: details.type, title: details.title, html: details.html });
+                      }
+                    }
                   }
                   // Extract filePath for file card rendering
                   if (!event.isError) {
@@ -475,16 +465,16 @@ export function useChatStream({
                   break;
                 }
               }
-              scheduleBlocksPublish(streamCtx.id);
+              schedulePartsPublish(streamCtx.id);
             }
 
             if (event.type === "auto_compaction_start") {
-              entry.runtime.blocksBuffer.push({
-                type: "status",
+              entry.runtime.partsBuffer.push({
+                kind: "status",
                 text: `上下文压缩中 (${String(event.reason || "auto")})`,
               });
               patchSnapshot(streamCtx.id, { agentPhase: "compacting" });
-              scheduleBlocksPublish(streamCtx.id);
+              schedulePartsPublish(streamCtx.id);
             }
 
             if (event.type === "auto_compaction_end") {
@@ -492,12 +482,12 @@ export function useChatStream({
             }
 
             if (event.type === "auto_retry_start") {
-              entry.runtime.blocksBuffer.push({
-                type: "status",
+              entry.runtime.partsBuffer.push({
+                kind: "status",
                 text: `模型重试 ${String(event.attempt || 1)}/${String(event.maxAttempts || 1)}`,
               });
               patchSnapshot(streamCtx.id, { agentPhase: "retrying" });
-              scheduleBlocksPublish(streamCtx.id);
+              schedulePartsPublish(streamCtx.id);
             }
 
             if (event.type === "auto_retry_end") {
@@ -534,8 +524,8 @@ export function useChatStream({
           if (!entry.runtime.aborted) {
             await finalizeStream(entry, streamCtx);
           } else if (!entry.runtime.stoppedByUser) {
-            const hasPartialText = entry.runtime.blocksBuffer.some(
-              (b) => b.type === "text" && b.content.trim(),
+            const hasPartialText = entry.runtime.partsBuffer.some(
+              (b) => b.kind === "markdown" && b.text.trim(),
             );
             if (hasPartialText) {
               await finalizeStream(entry, streamCtx);
@@ -609,13 +599,10 @@ export function useChatStream({
       abortAgentSession(transport, ctx.id);
     }
 
-    const parts = blocksToAssistantParts(entry.runtime.blocksBuffer);
+    const parts = sanitizePartsForPersistence(entry.runtime.partsBuffer, { interrupted: true });
 
     if (parts.length > 0) {
-      const assistantText = parts
-        .filter((p): p is Extract<AssistantPart, { kind: "markdown" }> => p.kind === "markdown")
-        .map((p) => p.text)
-        .join("\n\n");
+      const assistantText = assistantPartsToText(parts);
 
       const assistantMessage: ChatMessage = {
         role: "assistant",
@@ -675,7 +662,7 @@ export function useChatStream({
     visibleMessages,
     streaming,
     streamingStartedAt,
-    blocks,
+    parts,
     errorText,
     agentPhase,
     turnCount,

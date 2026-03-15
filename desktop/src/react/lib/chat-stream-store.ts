@@ -1,11 +1,11 @@
 /**
  * Per-session stream state store.
  *
- * Stream state (blocks, streaming flag, error, runtime refs) is keyed by
+ * Stream state (parts, streaming flag, error, runtime refs) is keyed by
  * sessionId so that session switches don't lose or bleed live data.
  * `useChatStream` subscribes via `useSyncExternalStore`.
  */
-import type { ChatMessage, ChatSession, StreamBlock } from "../types";
+import type { AssistantPart, ChatMessage, ChatSession } from "../types";
 
 export type AgentPhase = "idle" | "thinking" | "executing" | "compacting" | "retrying";
 
@@ -23,7 +23,7 @@ export interface SessionStreamSnapshot {
   sessionState: ChatSession;
   streaming: boolean;
   streamingStartedAt: number | null;
-  blocks: StreamBlock[];
+  parts: AssistantPart[];
   errorText: string | null;
   agentPhase: AgentPhase;
   turnCount: number;
@@ -38,11 +38,11 @@ export interface SessionStreamRuntime {
   sendLock: boolean;
   cancel: (() => void) | null;
 
-  blocksBuffer: StreamBlock[];
+  partsBuffer: AssistantPart[];
   streamBaseMessages: ChatMessage[];
   dirty: boolean;
 
-  blocksRaf: number | null;
+  partsRaf: number | null;
   titleRequestVersion: number;
   agentStartedAt: number | null;
 }
@@ -63,7 +63,7 @@ function createEntry(session: ChatSession): SessionStreamEntry {
       sessionState: session,
       streaming: false,
       streamingStartedAt: null,
-      blocks: [],
+      parts: [],
       errorText: null,
       agentPhase: "idle",
       turnCount: 0,
@@ -75,10 +75,10 @@ function createEntry(session: ChatSession): SessionStreamEntry {
       stoppedByUser: false,
       sendLock: false,
       cancel: null,
-      blocksBuffer: [],
+      partsBuffer: [],
       streamBaseMessages: [],
       dirty: false,
-      blocksRaf: null,
+      partsRaf: null,
       titleRequestVersion: 0,
       agentStartedAt: null,
     },
@@ -107,8 +107,8 @@ export function getEntryById(sessionId: string): SessionStreamEntry | undefined 
 
 export function removeEntry(sessionId: string) {
   const entry = entries.get(sessionId);
-  if (entry && entry.runtime.blocksRaf !== null) {
-    window.cancelAnimationFrame(entry.runtime.blocksRaf);
+  if (entry && entry.runtime.partsRaf !== null) {
+    window.cancelAnimationFrame(entry.runtime.partsRaf);
   }
   entries.delete(sessionId);
 }
@@ -167,31 +167,31 @@ export function setDirty(sessionId: string, dirty: boolean) {
   if (entry) entry.runtime.dirty = dirty;
 }
 
-// ─── Block buffer ───────────────────────────────────────
+// ─── Parts buffer ───────────────────────────────────────
 
-function flushBlocks(entry: SessionStreamEntry) {
-  entry.snapshot = { ...entry.snapshot, blocks: [...entry.runtime.blocksBuffer] };
+function flushParts(entry: SessionStreamEntry) {
+  entry.snapshot = { ...entry.snapshot, parts: [...entry.runtime.partsBuffer] };
   emit(entry);
 }
 
-export function scheduleBlocksPublish(sessionId: string) {
+export function schedulePartsPublish(sessionId: string) {
   const entry = entries.get(sessionId);
-  if (!entry || entry.runtime.blocksRaf !== null) return;
-  entry.runtime.blocksRaf = window.requestAnimationFrame(() => {
-    entry.runtime.blocksRaf = null;
-    flushBlocks(entry);
+  if (!entry || entry.runtime.partsRaf !== null) return;
+  entry.runtime.partsRaf = window.requestAnimationFrame(() => {
+    entry.runtime.partsRaf = null;
+    flushParts(entry);
   });
 }
 
-export function clearBlocks(sessionId: string) {
+export function clearParts(sessionId: string) {
   const entry = entries.get(sessionId);
   if (!entry) return;
-  if (entry.runtime.blocksRaf !== null) {
-    window.cancelAnimationFrame(entry.runtime.blocksRaf);
-    entry.runtime.blocksRaf = null;
+  if (entry.runtime.partsRaf !== null) {
+    window.cancelAnimationFrame(entry.runtime.partsRaf);
+    entry.runtime.partsRaf = null;
   }
-  entry.runtime.blocksBuffer = [];
-  entry.snapshot = { ...entry.snapshot, blocks: [] };
+  entry.runtime.partsBuffer = [];
+  entry.snapshot = { ...entry.snapshot, parts: [] };
   emit(entry);
 }
 
@@ -208,14 +208,14 @@ export function startStreaming(session: ChatSession, streamBaseMessages: ChatMes
   entry.runtime.stoppedByUser = false;
   entry.runtime.sendLock = true;
   entry.runtime.cancel = null;
-  entry.runtime.blocksBuffer = [];
+  entry.runtime.partsBuffer = [];
   entry.runtime.streamBaseMessages = streamBaseMessages;
 
   entry.snapshot = {
     ...entry.snapshot,
     streaming: true,
     streamingStartedAt: Date.now(),
-    blocks: [],
+    parts: [],
     errorText: null,
     agentPhase: "idle",
     turnCount: 0,
@@ -234,21 +234,21 @@ export function finishStreaming(sessionId: string) {
   const entry = entries.get(sessionId);
   if (!entry) return;
 
-  if (entry.runtime.blocksRaf !== null) {
-    window.cancelAnimationFrame(entry.runtime.blocksRaf);
-    entry.runtime.blocksRaf = null;
+  if (entry.runtime.partsRaf !== null) {
+    window.cancelAnimationFrame(entry.runtime.partsRaf);
+    entry.runtime.partsRaf = null;
   }
 
   entry.runtime.cancel = null;
   entry.runtime.sendLock = false;
   entry.runtime.activeStream = null;
-  entry.runtime.blocksBuffer = [];
+  entry.runtime.partsBuffer = [];
 
   entry.snapshot = {
     ...entry.snapshot,
     streaming: false,
     streamingStartedAt: null,
-    blocks: [],
+    parts: [],
     agentPhase: "idle",
     turnCount: 0,
   };

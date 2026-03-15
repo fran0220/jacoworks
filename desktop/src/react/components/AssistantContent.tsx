@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import hljs from "../lib/hljs-setup";
 import { toolArgsSummary } from "../lib/tool-utils";
-import type { AssistantPart, StreamBlock } from "../types";
+import type { AssistantPart } from "../types";
 import Markdown from "./Markdown";
 import ToolStatus from "./ToolStatus";
 
@@ -209,126 +209,198 @@ function ToolElapsed() {
   return <span className="process-strip-elapsed">{elapsed}s</span>;
 }
 
+/* ---- Inline visual widget from render_visual tool ---- */
+
+const VISUAL_BASE_CSS = `
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    font-size: 14px; line-height: 1.6;
+    color: #1A1A1A; background: #FAF7F4;
+  }
+  h1, h2, h3, h4 { color: #1A1A1A; font-weight: 600; margin: 0 0 8px; }
+  h1 { font-size: 20px; } h2 { font-size: 17px; } h3 { font-size: 15px; }
+  p { margin: 0 0 8px; color: #5A5248; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #E0D8D0; }
+  th { font-weight: 600; color: #5A5248; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { color: #1A1A1A; }
+  tr:hover td { background: rgba(196,114,74,0.04); }
+  code { font-family: "Maple Mono", ui-monospace, monospace; font-size: 13px; background: #EDE8E3; padding: 2px 5px; border-radius: 4px; }
+  canvas { max-width: 100%; }
+</style>
+`;
+
+const VISUAL_RESIZE_SCRIPT = `
+<script>
+(function(){
+  function send(){
+    var h = document.documentElement.scrollHeight;
+    parent.postMessage({type:'visual-resize', height: h}, '*');
+  }
+  new ResizeObserver(send).observe(document.body);
+  window.addEventListener('load', function(){ setTimeout(send, 100); });
+  send();
+})();
+</script>
+`;
+
+function injectVisualBaseStyles(html: string): string {
+  if (html.includes("<head>")) {
+    return html.replace("<head>", "<head>" + VISUAL_BASE_CSS + VISUAL_RESIZE_SCRIPT);
+  }
+  if (html.includes("<html>")) {
+    return html.replace("<html>", "<html><head>" + VISUAL_BASE_CSS + VISUAL_RESIZE_SCRIPT + "</head>");
+  }
+  return VISUAL_BASE_CSS + VISUAL_RESIZE_SCRIPT + html;
+}
+
+function VisualWidget({ data }: { data: string }) {
+  let parsed: { type?: string; title?: string; html?: string };
+  try { parsed = JSON.parse(data); } catch { return null; }
+  if (!parsed.html) return null;
+
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === "visual-resize" && typeof e.data.height === "number" && iframeRef.current) {
+        iframeRef.current.style.height = `${e.data.height + 2}px`;
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  return (
+    <div className="visual-widget">
+      {parsed.title && <div className="visual-widget-title">{parsed.title}</div>}
+      <iframe
+        ref={iframeRef}
+        className="visual-widget-frame"
+        sandbox="allow-scripts"
+        srcDoc={injectVisualBaseStyles(parsed.html)}
+        title={parsed.title || "Visual"}
+      />
+    </div>
+  );
+}
+
 /* ---- Main component ---- */
 
 interface AssistantContentProps {
   parts: AssistantPart[];
-  blocks?: StreamBlock[];
   streaming?: boolean;
   workspacePath?: string;
 }
 
-export default function AssistantContent({ parts, blocks, streaming, workspacePath }: AssistantContentProps) {
-  const items = parts && parts.length > 0 ? parts : null;
-  const streamBlocks = !items && blocks && blocks.length > 0 ? blocks : null;
-
-  if (!items && !streamBlocks) return null;
-
-  if (items) {
-    return (
-      <>
-        {items.map((part, i) => {
-          if (part.kind === "thinking") {
-            return (
-              <div key={`thinking-${i}`} className="process-strip is-done is-thinking">
-                <div className="process-strip-inner">
-                  <details className="process-strip-details">
-                    <summary className="process-strip-summary">
-                      <span className="process-strip-dot" />
-                      <span className="process-strip-summary-text">思考过程</span>
-                      <span className="process-strip-summary-arrow">▸</span>
-                    </summary>
-                    <div className="process-strip-section-content">{part.text}</div>
-                  </details>
-                </div>
-              </div>
-            );
-          }
-
-          if (part.kind === "tool") {
-            const summary = toolArgsSummary(part.name, part.args);
-            const hasDetails = part.args || part.result;
-            return (
-              <div key={part.id} className="process-strip is-done">
-                <div className="process-strip-inner">
-                  {hasDetails ? (
-                    <details className="process-strip-details">
-                      <summary className="process-strip-summary">
-                        <ToolStatus toolName={part.name} status={part.status} />
-                        {summary && <span className="process-strip-hint">{summary}</span>}
-                        <span className="process-strip-summary-arrow">▸</span>
-                      </summary>
-                      <div className="process-strip-section-content">
-                        <ToolResultView toolName={part.name} args={part.args} result={part.result} />
-                      </div>
-                    </details>
-                  ) : (
-                    <div className="process-strip-row">
-                      <ToolStatus toolName={part.name} status={part.status} />
-                      {summary && <span className="process-strip-hint">{summary}</span>}
-                    </div>
-                  )}
-                </div>
-                {part.filePath && (
-                  <ToolFileCard filePath={part.filePath} fileKind={part.fileKind} workspacePath={workspacePath} />
-                )}
-              </div>
-            );
-          }
-
-          if (part.kind === "markdown") {
-            return <Markdown key={`markdown-${i}`} content={part.text} workspacePath={workspacePath} />;
-          }
-
-          if (part.kind === "status") {
-            return <div key={`status-${i}`} className="status-hint">{part.text}</div>;
-          }
-
-          return null;
-        })}
-      </>
-    );
-  }
+export default function AssistantContent({ parts, streaming, workspacePath }: AssistantContentProps) {
+  if (parts.length === 0) return null;
 
   return (
     <>
-      {streamBlocks!.map((block, i) => {
-        if (block.type === "thinking") {
-          const done = streamBlocks!.slice(i + 1).some(b => b.type !== "thinking");
-          return (
-            <div key={`thinking-${i}`} className={`process-strip is-thinking ${done ? "is-done" : "is-active"}`}>
-              <div className="process-strip-inner">
-                <div className="process-strip-row">
-                  <span className="process-strip-dot" />
-                  <span className="process-strip-hint">{done ? "思考完成" : "思考中"}</span>
+      {parts.map((part, i) => {
+        if (part.kind === "thinking") {
+          if (streaming) {
+            const done = parts.slice(i + 1).some(p => p.kind !== "thinking");
+            return (
+              <div key={`thinking-${i}`} className={`process-strip is-thinking ${done ? "is-done" : "is-active"}`}>
+                <div className="process-strip-inner">
+                  <div className="process-strip-row">
+                    <span className="process-strip-dot" />
+                    <span className="process-strip-hint">{done ? "思考完成" : "思考中"}</span>
+                  </div>
                 </div>
+              </div>
+            );
+          }
+          return (
+            <div key={`thinking-${i}`} className="process-strip is-done is-thinking">
+              <div className="process-strip-inner">
+                <details className="process-strip-details">
+                  <summary className="process-strip-summary">
+                    <span className="process-strip-dot" />
+                    <span className="process-strip-summary-text">思考过程</span>
+                    <span className="process-strip-summary-arrow">▸</span>
+                  </summary>
+                  <div className="process-strip-section-content">{part.text}</div>
+                </details>
               </div>
             </div>
           );
         }
 
-        if (block.type === "tool") {
-          const isRunning = block.status === "running";
-          const summary = toolArgsSummary(block.name, block.args);
-          return (
-            <div key={block.id} className={`process-strip ${isRunning ? "is-active" : "is-done"}`}>
-              <div className="process-strip-inner">
-                <div className="process-strip-row">
-                  <ToolStatus toolName={block.name} status={block.status} />
-                  {summary && <span className="process-strip-hint">{summary}</span>}
-                  {isRunning && <ToolElapsed />}
+        if (part.kind === "tool") {
+          // render_visual with result: render visual inline as content, skip tool strip
+          if (part.visualData && part.status !== "running") {
+            return <VisualWidget key={part.id} data={part.visualData} />;
+          }
+          if (streaming && part.status === "running") {
+            const summary = toolArgsSummary(part.name, part.args);
+            return (
+              <div key={part.id} className="process-strip is-active">
+                <div className="process-strip-inner">
+                  <div className="process-strip-row">
+                    <ToolStatus toolName={part.name} status={part.status} />
+                    {summary && <span className="process-strip-hint">{summary}</span>}
+                    <ToolElapsed />
+                  </div>
                 </div>
               </div>
+            );
+          }
+          const summary = toolArgsSummary(part.name, part.args);
+          const hasDetails = part.args || part.result;
+          return (
+            <div key={part.id} className="process-strip is-done">
+              <div className="process-strip-inner">
+                {hasDetails ? (
+                  <details className="process-strip-details">
+                    <summary className="process-strip-summary">
+                      <ToolStatus toolName={part.name} status={part.status} />
+                      {summary && <span className="process-strip-hint">{summary}</span>}
+                      <span className="process-strip-summary-arrow">▸</span>
+                    </summary>
+                    <div className="process-strip-section-content">
+                      <ToolResultView toolName={part.name} args={part.args} result={part.result} />
+                    </div>
+                  </details>
+                ) : (
+                  <div className="process-strip-row">
+                    <ToolStatus toolName={part.name} status={part.status} />
+                    {summary && <span className="process-strip-hint">{summary}</span>}
+                  </div>
+                )}
+              </div>
+              {part.filePath && (
+                <ToolFileCard filePath={part.filePath} fileKind={part.fileKind} workspacePath={workspacePath} />
+              )}
             </div>
           );
         }
 
-        if (block.type === "text") {
-          return <Markdown key={`text-${i}`} content={block.content} workspacePath={workspacePath} />;
+        if (part.kind === "markdown") {
+          return <Markdown key={`markdown-${i}`} content={part.text} workspacePath={workspacePath} />;
         }
 
-        if (block.type === "status") {
-          return <div key={`status-${i}`} className="status-hint">{block.text}</div>;
+        if (part.kind === "visual") {
+          return (
+            <div key={`visual-${i}`} className="visual-widget">
+              {part.title && <div className="visual-widget-title">{part.title}</div>}
+              <iframe
+                className="visual-widget-frame"
+                sandbox="allow-scripts"
+                srcDoc={part.html}
+                title={part.title || "Visual"}
+              />
+            </div>
+          );
+        }
+
+        if (part.kind === "status") {
+          return <div key={`status-${i}`} className="status-hint">{part.text}</div>;
         }
 
         return null;
