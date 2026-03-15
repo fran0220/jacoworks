@@ -1,0 +1,46 @@
+# JMOS 协作网关 — 配置文件模板
+# 复制此文件为 config.yaml 并修改配置
+
+# 项目名称
+project:
+  name: "JMOS"
+
+# 管理员配置
+admin:
+  password: "admin123" # 首次启动后自动替换为 MD5 加密
+
+# Agent 注册
+agent:
+  registration_token: "openclaw-register-2024" # Agent 自动注册令牌
+  allow_registration: true # Agent 自注册开关（false=关闭自注册，只能由管理员创建）
+
+# 通知渠道
+notification:
+  enabled: true
+  channels: []
+    # - "chat:oc_1f99abbba2bf0f8733377893d976ffa5"
+    # - "user:ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  events:
+    - task_completed
+    - review_rejected
+    - all_done
+    - patrol_alert
+
+# 服务配置
+server:
+  port: 6565
+  host: "0.0.0.0"
+
+# 数据库配置
+database:
+  type: sqlite
+  path: "./data/tasks.db"
+
+# 工作目录
+workspace:
+  root: "./workspace"
+
+# WebUI 配置
+webui:
+  public_feed: false
+  feed_retention_days: 7
