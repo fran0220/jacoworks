@@ -143,15 +143,10 @@ async function apiFetch<T>(
   });
 
   if (!res.ok) {
-    throw new Error(`JaMOSS 请求失败 (${res.status})`);
+    throw new Error(`请求失败 (${res.status})`);
   }
 
   return (await res.json()) as T;
-}
-
-async function fetchAgents(): Promise<unknown[]> {
-  const payload = await apiFetch<unknown>("/api/jamoss/agents");
-  return Array.isArray(payload) ? payload : [];
 }
 
 export async function fetchScoreLeaderboard(): Promise<ScoreEntry[]> {
@@ -187,18 +182,17 @@ export async function fetchSubTaskDetail(id: string): Promise<SubTaskDetail> {
 }
 
 export async function fetchDashboardStats(): Promise<DashboardStats> {
-  const [allTasks, activeTasks, inProgressTasks, agents, leaderboard] = await Promise.all([
-    fetchTasks({ page: 1, page_size: 1 }),
-    fetchTasks({ page: 1, page_size: 1, status: "active" }),
-    fetchTasks({ page: 1, page_size: 1, status: "in_progress" }),
-    fetchAgents(),
-    fetchScoreLeaderboard(),
-  ]);
+  const overview = await apiFetch<{
+    total_tasks: number;
+    active_tasks: number;
+    total_agents: number;
+    top_score: number;
+  }>("/api/jamoss/stats/overview");
 
   return {
-    totalTasks: allTasks.total,
-    activeTasks: activeTasks.total + inProgressTasks.total,
-    totalAgents: agents.length,
-    topScore: leaderboard[0]?.total_score ?? 0,
+    totalTasks: overview.total_tasks,
+    activeTasks: overview.active_tasks,
+    totalAgents: overview.total_agents,
+    topScore: overview.top_score,
   };
 }

@@ -281,8 +281,8 @@ export default function FeedPanel() {
         </div>
         <div className="panel-empty feed-empty-state">
           <Lock size={24} />
-          <span>JaMOSS 未安装或动态流未启用</span>
-          <span>{statusMessage || "请确认 JaMOSS 中间件已安装并开启 public_feed"}</span>
+          <span>动态流未启用</span>
+          <span>{statusMessage || "动态流暂未开启"}</span>
         </div>
         {error && <div className="panel-error">{error}</div>}
       </div>
@@ -316,7 +316,7 @@ export default function FeedPanel() {
           {filteredActivities.length === 0 ? (
             <div className="panel-empty feed-empty-state">
               <Inbox size={22} />
-              <span>JaMOSS 未安装或暂无活动</span>
+              <span>暂无活动记录</span>
             </div>
           ) : (
             <div className="feed-list">
