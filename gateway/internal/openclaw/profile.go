@@ -16,13 +16,22 @@ import (
 // ── Profile types ────────────────────────────────────────────
 
 // AgentProfile defines a single-agent profile (e.g., "main", "xiaohongshu").
+// The profile directory contains OpenClaw-native workspace files:
+//
+//	SOUL.md      — persona, tone, values
+//	IDENTITY.md  — agent name, vibe, emoji
+//	USER.md      — user context
+//	AGENTS.md    — operating instructions
+//	TOOLS.md     — tool guidance
+//	HEARTBEAT.md — cron checklist (optional)
+//	MEMORY.md    — curated memory (optional)
+//	skills/      — OpenClaw AgentSkill packages
 type AgentProfile struct {
 	Name        string   `json:"name"`
 	DisplayName string   `json:"displayName"`
 	Description string   `json:"description"`
 	Icon        string   `json:"icon,omitempty"`
 	Model       string   `json:"model"`
-	Prompt      string   `json:"prompt"`
 	Skills      []string `json:"skills,omitempty"`
 	Workspace   string   `json:"workspace,omitempty"`
 }
@@ -34,6 +43,16 @@ type ProfileSummary struct {
 	Description string `json:"description"`
 	Icon        string `json:"icon,omitempty"`
 	SessionKey  string `json:"sessionKey"`
+}
+
+// skipFiles are files in the profile directory that should NOT be copied to workspace.
+var profileSkipFiles = map[string]bool{
+	"profile.json": true,
+}
+
+// skipDirs are directories that need special handling (not workspace files).
+var profileSkipDirs = map[string]bool{
+	"skills": true,
 }
 
 // ── Profile resolution ───────────────────────────────────────
@@ -203,12 +222,14 @@ func (c *Client) buildProfileAgents() []openclawAgent {
 
 // ── Profile deployment ───────────────────────────────────────
 
-// DeployProfiles copies profile files (prompts + skills) into a running container.
+// DeployProfiles copies profile workspace files and skills into a running container.
+// Workspace files (SOUL.md, IDENTITY.md, USER.md, etc.) → agent's workspace directory.
+// Skills → agent's agentDir/skills/.
 // Returns the number of files copied.
 func (c *Client) DeployProfiles(containerName string) (int, error) {
 	profilesDir, err := resolveProfilesDir()
 	if err != nil {
-		return 0, nil // no profiles dir = nothing to deploy
+		return 0, nil
 	}
 
 	entries, err := os.ReadDir(profilesDir)
@@ -229,24 +250,48 @@ func (c *Client) DeployProfiles(containerName string) (int, error) {
 			continue
 		}
 
+		workspace := profile.Workspace
+		if workspace == "" {
+			workspace = "/data/workspace"
+		}
+
 		agentDir := path.Join("/home/node/.openclaw/agents", profile.Name)
+		c.rt.Exec(ctx, containerName, "mkdir", "-p", workspace)
 		c.rt.Exec(ctx, containerName, "mkdir", "-p", path.Join(agentDir, "skills"))
 
-		// Copy prompt
-		if profile.Prompt != "" {
-			relPath, err := normalizeTemplateRelativePath(profile.Prompt)
-			if err != nil {
+		// Copy workspace files (*.md except profile.json, skip skills/ dir)
+		dirEntries, err := os.ReadDir(profileDir)
+		if err != nil {
+			continue
+		}
+		for _, f := range dirEntries {
+			if f.IsDir() {
+				if profileSkipDirs[f.Name()] {
+					continue
+				}
+				// Copy non-skip subdirectories to workspace
+				n, copyErr := c.copyTemplateDir(containerName, filepath.Join(profileDir, f.Name()), path.Join(workspace, f.Name()))
+				if copyErr != nil {
+					log.Warn().Err(copyErr).Str("profile", profile.Name).Str("dir", f.Name()).Msg("copy profile dir failed")
+				} else {
+					filesCopied += n
+				}
 				continue
 			}
-			sourcePath := filepath.Join(profileDir, filepath.FromSlash(relPath))
-			if err := c.copyTemplateFile(containerName, sourcePath, path.Join(agentDir, "prompt.md")); err != nil {
-				log.Warn().Err(err).Str("profile", profile.Name).Msg("copy profile prompt failed")
+			if profileSkipFiles[f.Name()] {
+				continue
+			}
+			// Copy file to workspace (SOUL.md, IDENTITY.md, USER.md, AGENTS.md, etc.)
+			sourcePath := filepath.Join(profileDir, f.Name())
+			targetPath := path.Join(workspace, f.Name())
+			if err := c.copyTemplateFile(containerName, sourcePath, targetPath); err != nil {
+				log.Warn().Err(err).Str("profile", profile.Name).Str("file", f.Name()).Msg("copy profile workspace file failed")
 				continue
 			}
 			filesCopied++
 		}
 
-		// Copy skills
+		// Copy skills to agentDir
 		for _, skill := range profile.Skills {
 			sourceSkillDir := filepath.Join(profileDir, "skills", skill)
 			n, err := c.copyTemplateDir(containerName, sourceSkillDir, path.Join(agentDir, "skills", skill))
