@@ -165,6 +165,9 @@ func NewRouter(
 			r.Get("/distribution", statsH.Distribution)
 			r.Get("/agents", statsH.Agents)
 			r.Get("/agent-heatmap", statsH.AgentHeatmap)
+			r.Get("/velocity", statsH.Velocity)
+			r.Get("/agent-workload", statsH.AgentWorkload)
+			r.Get("/interactions", statsH.Interactions)
 		})
 
 		// Feed routes (public display, compat with Python)

@@ -385,6 +385,288 @@ func (db *DB) GetAgentHeatmap(ctx context.Context, agentID string, days int) ([]
 	return matrix, rows.Err()
 }
 
+// VelocityData holds task completion velocity over time for burn-down charts.
+type VelocityData struct {
+	Daily              []DailyVelocity `json:"daily"`
+	AvgCompletionHours float64         `json:"avg_completion_hours"`
+	AvgReviewHours     float64         `json:"avg_review_hours"`
+}
+
+type DailyVelocity struct {
+	Date              string `json:"date"`
+	Created           int    `json:"created"`
+	Completed         int    `json:"completed"`
+	Net               int    `json:"net"`
+	CumulativeBacklog int    `json:"cumulative_backlog"`
+}
+
+// GetVelocity computes daily creation/completion rates and average durations.
+func (db *DB) GetVelocity(ctx context.Context, project string, days int) (*VelocityData, error) {
+	if days <= 0 {
+		days = 14
+	}
+
+	// Daily created counts
+	createdQuery := `SELECT date(sub_task.created_at) AS d, COUNT(*) FROM sub_task`
+	createdArgs := []any{}
+	if project != "" {
+		createdQuery += ` JOIN task ON sub_task.task_id = task.id WHERE task.project = ? AND`
+		createdArgs = append(createdArgs, project)
+	} else {
+		createdQuery += ` WHERE`
+	}
+	createdQuery += fmt.Sprintf(` sub_task.created_at >= datetime('now', '-%d days') GROUP BY d ORDER BY d`, days)
+
+	createdMap := map[string]int{}
+	rows, err := db.conn.QueryContext(ctx, createdQuery, createdArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d string
+		var c int
+		if err := rows.Scan(&d, &c); err != nil {
+			return nil, err
+		}
+		createdMap[d] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Daily completed counts
+	completedQuery := `SELECT date(sub_task.completed_at) AS d, COUNT(*) FROM sub_task`
+	completedArgs := []any{}
+	if project != "" {
+		completedQuery += ` JOIN task ON sub_task.task_id = task.id WHERE task.project = ? AND`
+		completedArgs = append(completedArgs, project)
+	} else {
+		completedQuery += ` WHERE`
+	}
+	completedQuery += fmt.Sprintf(` sub_task.completed_at IS NOT NULL AND sub_task.completed_at >= datetime('now', '-%d days') GROUP BY d ORDER BY d`, days)
+
+	completedMap := map[string]int{}
+	rows2, err := db.conn.QueryContext(ctx, completedQuery, completedArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var d string
+		var c int
+		if err := rows2.Scan(&d, &c); err != nil {
+			return nil, err
+		}
+		completedMap[d] = c
+	}
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	// Initial backlog: open tasks before the window
+	backlogQuery := `SELECT COUNT(*) FROM sub_task`
+	backlogArgs := []any{}
+	if project != "" {
+		backlogQuery += ` JOIN task ON sub_task.task_id = task.id WHERE task.project = ? AND`
+		backlogArgs = append(backlogArgs, project)
+	} else {
+		backlogQuery += ` WHERE`
+	}
+	backlogQuery += fmt.Sprintf(` sub_task.created_at < datetime('now', '-%d days') AND (sub_task.completed_at IS NULL OR sub_task.completed_at >= datetime('now', '-%d days'))`, days, days)
+
+	var initialBacklog int
+	if err := db.conn.QueryRowContext(ctx, backlogQuery, backlogArgs...).Scan(&initialBacklog); err != nil {
+		return nil, err
+	}
+
+	// Build daily series
+	dateRows, err := db.conn.QueryContext(ctx,
+		fmt.Sprintf(`SELECT date('now', '-%d days', '+' || seq || ' days') FROM (
+			WITH RECURSIVE cnt(seq) AS (SELECT 0 UNION ALL SELECT seq+1 FROM cnt WHERE seq < %d)
+			SELECT seq FROM cnt
+		)`, days, days-1))
+	if err != nil {
+		return nil, err
+	}
+	defer dateRows.Close()
+
+	var daily []DailyVelocity
+	cumulative := initialBacklog
+	for dateRows.Next() {
+		var d string
+		if err := dateRows.Scan(&d); err != nil {
+			return nil, err
+		}
+		cr := createdMap[d]
+		co := completedMap[d]
+		cumulative += cr - co
+		daily = append(daily, DailyVelocity{
+			Date:              d,
+			Created:           cr,
+			Completed:         co,
+			Net:               cr - co,
+			CumulativeBacklog: cumulative,
+		})
+	}
+	if err := dateRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Avg completion hours (started_at → completed_at)
+	avgCompQuery := `SELECT COALESCE(AVG((julianday(sub_task.completed_at) - julianday(sub_task.started_at)) * 24), 0) FROM sub_task`
+	avgCompArgs := []any{}
+	if project != "" {
+		avgCompQuery += ` JOIN task ON sub_task.task_id = task.id WHERE task.project = ? AND`
+		avgCompArgs = append(avgCompArgs, project)
+	} else {
+		avgCompQuery += ` WHERE`
+	}
+	avgCompQuery += ` sub_task.completed_at IS NOT NULL AND sub_task.started_at IS NOT NULL`
+
+	var avgCompHours float64
+	db.conn.QueryRowContext(ctx, avgCompQuery, avgCompArgs...).Scan(&avgCompHours)
+
+	// Avg review hours (from review_record created_at to sub_task completed_at)
+	avgRevQuery := `SELECT COALESCE(AVG((julianday(st.completed_at) - julianday(rr.created_at)) * 24), 0)
+		FROM review_record rr JOIN sub_task st ON rr.sub_task_id = st.id`
+	avgRevArgs := []any{}
+	if project != "" {
+		avgRevQuery += ` JOIN task ON st.task_id = task.id WHERE task.project = ? AND`
+		avgRevArgs = append(avgRevArgs, project)
+	} else {
+		avgRevQuery += ` WHERE`
+	}
+	avgRevQuery += ` st.completed_at IS NOT NULL`
+
+	var avgRevHours float64
+	db.conn.QueryRowContext(ctx, avgRevQuery, avgRevArgs...).Scan(&avgRevHours)
+
+	return &VelocityData{
+		Daily:              daily,
+		AvgCompletionHours: avgCompHours,
+		AvgReviewHours:     avgRevHours,
+	}, nil
+}
+
+// AgentWorkload holds current workload data for a single agent.
+type AgentWorkload struct {
+	AgentID              string            `json:"agent_id"`
+	AgentName            string            `json:"agent_name"`
+	Role                 string            `json:"role"`
+	ActiveCount          int               `json:"active_count"`
+	PendingReviewCount   int               `json:"pending_review_count"`
+	BlockedCount         int               `json:"blocked_count"`
+	CompletedToday       int               `json:"completed_today"`
+	TotalScore           int               `json:"total_score"`
+	AvgCompletionMinutes float64           `json:"avg_completion_minutes"`
+	CurrentSubTasks      []WorkloadSubTask `json:"current_sub_tasks"`
+}
+
+// WorkloadSubTask is a lightweight sub-task entry for workload display.
+type WorkloadSubTask struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Status    string  `json:"status"`
+	Priority  string  `json:"priority"`
+	StartedAt *string `json:"started_at"`
+}
+
+// GetAgentWorkload returns workload distribution across all agents.
+func (db *DB) GetAgentWorkload(ctx context.Context, project string) ([]AgentWorkload, error) {
+	agents, err := db.ListAgents(ctx, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	projectJoin := ""
+	projectWhere := ""
+	if project != "" {
+		projectJoin = ` JOIN task ON sub_task.task_id = task.id`
+		projectWhere = ` AND task.project = ?`
+	}
+
+	var result []AgentWorkload
+	for _, a := range agents {
+		w := AgentWorkload{
+			AgentID:   a.ID,
+			AgentName: a.Name,
+			Role:      a.Role,
+			TotalScore: a.TotalScore,
+		}
+
+		baseArgs := func() []any {
+			args := []any{a.ID}
+			if project != "" {
+				args = append(args, project)
+			}
+			return args
+		}
+
+		// Active (in_progress) count
+		db.conn.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sub_task`+projectJoin+` WHERE sub_task.assigned_agent = ? AND sub_task.status = 'in_progress'`+projectWhere,
+			baseArgs()...,
+		).Scan(&w.ActiveCount)
+
+		// Pending review (submitted) count
+		db.conn.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sub_task`+projectJoin+` WHERE sub_task.assigned_agent = ? AND sub_task.status = 'submitted'`+projectWhere,
+			baseArgs()...,
+		).Scan(&w.PendingReviewCount)
+
+		// Blocked count
+		db.conn.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sub_task`+projectJoin+` WHERE sub_task.assigned_agent = ? AND sub_task.status = 'blocked'`+projectWhere,
+			baseArgs()...,
+		).Scan(&w.BlockedCount)
+
+		// Completed today
+		db.conn.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sub_task`+projectJoin+` WHERE sub_task.assigned_agent = ? AND sub_task.status = 'done' AND date(sub_task.completed_at) = date('now')`+projectWhere,
+			baseArgs()...,
+		).Scan(&w.CompletedToday)
+
+		// Avg completion minutes
+		db.conn.QueryRowContext(ctx,
+			`SELECT COALESCE(AVG(sub_task.actual_minutes), 0) FROM sub_task`+projectJoin+` WHERE sub_task.assigned_agent = ? AND sub_task.status = 'done' AND sub_task.actual_minutes > 0`+projectWhere,
+			baseArgs()...,
+		).Scan(&w.AvgCompletionMinutes)
+
+		// Current non-done sub-tasks
+		stQuery := `SELECT sub_task.id, sub_task.name, sub_task.status, sub_task.priority, sub_task.started_at FROM sub_task` + projectJoin +
+			` WHERE sub_task.assigned_agent = ? AND sub_task.status NOT IN ('done', 'cancelled')` + projectWhere +
+			` ORDER BY CASE sub_task.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`
+		stRows, err := db.conn.QueryContext(ctx, stQuery, baseArgs()...)
+		if err != nil {
+			return nil, err
+		}
+		for stRows.Next() {
+			var st WorkloadSubTask
+			if err := stRows.Scan(&st.ID, &st.Name, &st.Status, &st.Priority, &st.StartedAt); err != nil {
+				stRows.Close()
+				return nil, err
+			}
+			w.CurrentSubTasks = append(w.CurrentSubTasks, st)
+		}
+		stRows.Close()
+		if err := stRows.Err(); err != nil {
+			return nil, err
+		}
+
+		if w.CurrentSubTasks == nil {
+			w.CurrentSubTasks = []WorkloadSubTask{}
+		}
+
+		result = append(result, w)
+	}
+
+	if result == nil {
+		result = []AgentWorkload{}
+	}
+	return result, nil
+}
+
 // InteractionEdge represents an agent↔agent collaboration edge.
 type InteractionEdge struct {
 	Source     string `json:"source"`

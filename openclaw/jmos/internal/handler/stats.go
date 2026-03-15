@@ -83,3 +83,35 @@ func (h *StatsHandler) AgentHeatmap(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, matrix)
 }
+
+func (h *StatsHandler) Velocity(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	days := getQueryInt(r, "days", 14)
+	data, err := h.db.GetVelocity(r.Context(), project, days)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+func (h *StatsHandler) AgentWorkload(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	data, err := h.db.GetAgentWorkload(r.Context(), project)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+func (h *StatsHandler) Interactions(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	days := getQueryInt(r, "days", 7)
+	data, err := h.db.AggregateInteractions(r.Context(), project, days)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
