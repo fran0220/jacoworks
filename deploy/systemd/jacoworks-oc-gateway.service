@@ -1,0 +1,16 @@
+[Unit]
+Description=JAcoworks OC Gateway (OpenClaw Container Management)
+After=network.target incus.socket
+Wants=incus.socket
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/jacoworks/oc-gateway /opt/jacoworks/oc-gateway.yaml
+WorkingDirectory=/opt/jacoworks
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

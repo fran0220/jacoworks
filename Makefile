@@ -2,20 +2,23 @@
 # 用法: make <target>
 # 列出所有: make help
 
-.PHONY: help dev dev-gateway dev-website dev-webchat dev-agent dev-desktop \
-        build build-gateway build-website build-webchat build-agent build-desktop \
+.PHONY: help dev dev-gateway dev-oc-gateway dev-website dev-webchat dev-agent dev-desktop \
+        build build-gateway build-oc-gateway build-website build-webchat build-agent build-desktop \
         compile-agent prepare-win-deps \
-        deploy deploy-gateway deploy-website deploy-agent push-skills \
+        deploy deploy-gateway deploy-oc-gateway deploy-website deploy-agent push-skills \
         check check-gateway check-website check-webchat check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
         db-reset db-migrate clean \
         docker-build-agent docker-run-agent \
-        release release-build release-upload release-bump
+        release release-build release-upload release-bump \
+        setup-incus build-openclaw-image rebuild-openclaw-image
 
 # ─── 配置 ───
 JINGAO_HOST   ?= jingao
 ORACLE_HOST   ?= oracle
+LOCAL_HOST    ?= root@100.97.254.31
 GATEWAY_PORT  ?= 8847
+OC_GATEWAY_PORT ?= 18700
 WEBSITE_PORT  ?= 9527
 REPO_DIR      ?= /opt/jacoworks/repo
 
@@ -31,17 +34,22 @@ help: ## 显示所有可用命令
 dev: ## 并行启动所有开发服务 (gateway + website + desktop)
 	@echo "🚀 启动所有开发服务..."
 	@echo "  Gateway  → http://localhost:$(GATEWAY_PORT)"
+	@echo "  OC Gateway → http://localhost:$(OC_GATEWAY_PORT)"
 	@echo "  Website  → http://localhost:$(WEBSITE_PORT)"
 	@echo "  Desktop  → Tauri dev window"
 	@echo ""
 	@echo "请在各自终端分别运行:"
 	@echo "  make dev-gateway"
+	@echo "  make dev-oc-gateway"
 	@echo "  make dev-website"
 	@echo "  make dev-agent    (仅调试 agent 时)"
 	@echo "  make dev-desktop  (启动桌面端, 会自动启 sidecar)"
 
 dev-gateway: ## 启动 Gateway 开发服务
 	cd gateway && go run ./cmd/gateway -config gateway.yaml
+
+dev-oc-gateway: ## 启动 OC Gateway 开发服务
+	cd gateway && go run ./cmd/oc-gateway oc-gateway.yaml
 
 dev-website: ## 启动 Website 开发服务
 	cd website && cargo run
@@ -64,6 +72,11 @@ build: build-gateway build-website build-agent ## 构建所有服务端组件
 build-gateway: ## 构建 Gateway (本地)
 	cd gateway && go build -ldflags="-s -w" -o bin/gateway ./cmd/gateway
 	@echo "✅ gateway/bin/gateway"
+
+build-oc-gateway: ## 构建 OC Gateway (本地)
+	mkdir -p dist
+	cd gateway && CGO_ENABLED=0 go build -ldflags='-s -w' -o ../dist/oc-gateway ./cmd/oc-gateway
+	@echo "✅ dist/oc-gateway"
 
 build-website: ## 构建 Website (release)
 	cd website && cargo build --release
@@ -119,6 +132,13 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		sleep 2 && \
 		curl -sf http://localhost:8847/health"
 	@echo "✅ Gateway 已部署"
+
+deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64)
+	@echo "📦 部署 OC Gateway → $(LOCAL_HOST)..."
+	cd gateway && CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags='-s -w' -o /tmp/oc-gateway ./cmd/oc-gateway
+	scp /tmp/oc-gateway $(LOCAL_HOST):/opt/jacoworks/oc-gateway
+	ssh $(LOCAL_HOST) "chmod +x /opt/jacoworks/oc-gateway && systemctl restart jacoworks-oc-gateway && sleep 2 && curl -sf http://localhost:18700/health"
+	@echo "✅ OC Gateway 已部署"
 
 deploy-website: deploy-sync ## 部署 Website 到 jingao (远程编译)
 	@echo "📦 部署 Website → $(JINGAO_HOST) (远程编译)..."
@@ -236,3 +256,22 @@ redeploy-agent: docker-build-agent ## 强制重建所有 vm-agent 容器 (有停
 		docker ps -q --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker stop && \
 		docker ps -aq --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker rm && \
 		echo "✅ 旧容器已清理，新容器将由网关按需创建"'
+
+# ═══════════════════════════════════════════
+#  Incus (OpenClaw 系统容器 → local)
+# ═══════════════════════════════════════════
+
+setup-incus: ## 初始化 local 服务器 Incus 环境
+	scp deploy/incus/setup-incus.sh $(LOCAL_HOST):/tmp/
+	ssh $(LOCAL_HOST) "chmod +x /tmp/setup-incus.sh && /tmp/setup-incus.sh"
+	@echo "✅ Incus 环境已初始化"
+
+build-openclaw-image: ## 构建 OpenClaw Incus 金色镜像
+	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
+	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh"
+	@echo "✅ OpenClaw 镜像已构建"
+
+rebuild-openclaw-image: ## 重建 OpenClaw Incus 金色镜像
+	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
+	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh --force"
+	@echo "✅ OpenClaw 镜像已重建"

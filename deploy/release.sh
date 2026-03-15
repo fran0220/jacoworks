@@ -278,7 +278,7 @@ do_upload() {
 BEGIN;
 UPDATE releases SET is_latest = false WHERE is_latest = true;
 INSERT INTO releases (id, version, notes, pub_date, is_latest)
-  VALUES (gen_random_uuid()::text, 'v${VERSION}', 'See changelog for details.', now(), true)
+  VALUES (gen_random_uuid()::text, '${VERSION}', 'See changelog for details.', now(), true)
   ON CONFLICT (version) DO UPDATE SET is_latest = true, notes = EXCLUDED.notes;
 SQL
 
@@ -300,13 +300,20 @@ SQL
       local SIG=""
       [[ -f "${file}.sig" ]] && SIG=$(cat "${file}.sig")
 
+      # .app.tar.gz → updater asset (e.g. darwin-aarch64-updater)
+      # .dmg / .exe  → download asset (e.g. darwin-aarch64)
+      local DB_PLATFORM="${PLATFORM}"
+      case "$FILENAME" in
+        *.app.tar.gz) DB_PLATFORM="${PLATFORM}-updater" ;;
+      esac
+
       cat >> "$SQL_FILE" <<SQL
 INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
-  SELECT gen_random_uuid()::text, r.id, '${PLATFORM}', '${DOWNLOAD_URL}', '${SIG}', ${FILESIZE}
-  FROM releases r WHERE r.version = 'v${VERSION}'
-  ON CONFLICT DO NOTHING;
+  SELECT gen_random_uuid()::text, r.id, '${DB_PLATFORM}', '${DOWNLOAD_URL}', '${SIG}', ${FILESIZE}
+  FROM releases r WHERE r.version = '${VERSION}'
+  ON CONFLICT (release_id, platform) DO UPDATE SET download_url = EXCLUDED.download_url, signature = EXCLUDED.signature, file_size = EXCLUDED.file_size;
 SQL
-      echo "  📦 ${PLATFORM} → ${FILENAME}"
+      echo "  📦 ${DB_PLATFORM} → ${FILENAME}"
     done
   done
 
