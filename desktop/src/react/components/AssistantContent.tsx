@@ -2,7 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import hljs from "../lib/hljs-setup";
 import { toolArgsSummary } from "../lib/tool-utils";
-import type { AssistantPart } from "../types";
+import type { AssistantPart, AttachedFile } from "../types";
+import ImageResultCard from "./ImageResultCard";
 import Markdown from "./Markdown";
 import ToolStatus from "./ToolStatus";
 
@@ -214,6 +215,7 @@ function ToolElapsed() {
 const VISUAL_BASE_CSS = `
 <style>
   *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: auto; overflow: visible; }
   body {
     margin: 0; padding: 16px 20px;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
@@ -233,28 +235,23 @@ const VISUAL_BASE_CSS = `
 </style>
 `;
 
-const VISUAL_RESIZE_SCRIPT = `
-<script>
-(function(){
-  function send(){
-    var h = document.documentElement.scrollHeight;
-    parent.postMessage({type:'visual-resize', height: h}, '*');
-  }
-  new ResizeObserver(send).observe(document.body);
-  window.addEventListener('load', function(){ setTimeout(send, 100); });
-  send();
-})();
-</script>
-`;
-
 function injectVisualBaseStyles(html: string): string {
   if (html.includes("<head>")) {
-    return html.replace("<head>", "<head>" + VISUAL_BASE_CSS + VISUAL_RESIZE_SCRIPT);
+    return html.replace("<head>", "<head>" + VISUAL_BASE_CSS);
   }
   if (html.includes("<html>")) {
-    return html.replace("<html>", "<html><head>" + VISUAL_BASE_CSS + VISUAL_RESIZE_SCRIPT + "</head>");
+    return html.replace("<html>", "<html><head>" + VISUAL_BASE_CSS + "</head>");
   }
-  return VISUAL_BASE_CSS + VISUAL_RESIZE_SCRIPT + html;
+  return VISUAL_BASE_CSS + html;
+}
+
+function resizeIframe(iframe: HTMLIFrameElement) {
+  try {
+    const doc = iframe.contentDocument;
+    if (!doc) return;
+    const h = doc.documentElement.scrollHeight;
+    if (h > 0) iframe.style.height = `${h}px`;
+  } catch { /* cross-origin fallback: keep min-height */ }
 }
 
 function VisualWidget({ data }: { data: string }) {
@@ -264,15 +261,21 @@ function VisualWidget({ data }: { data: string }) {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  useEffect(() => {
-    const handler = (e: MessageEvent) => {
-      if (e.data?.type === "visual-resize" && typeof e.data.height === "number" && iframeRef.current) {
-        iframeRef.current.style.height = `${e.data.height + 2}px`;
+  const handleLoad = () => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    // Resize immediately + after CDN scripts load
+    resizeIframe(iframe);
+    setTimeout(() => resizeIframe(iframe), 300);
+    setTimeout(() => resizeIframe(iframe), 1000);
+    // Observe ongoing changes (animations, lazy content)
+    try {
+      const doc = iframe.contentDocument;
+      if (doc) {
+        new ResizeObserver(() => resizeIframe(iframe)).observe(doc.documentElement);
       }
-    };
-    window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
-  }, []);
+    } catch { /* ignore */ }
+  };
 
   return (
     <div className="visual-widget">
@@ -280,9 +283,10 @@ function VisualWidget({ data }: { data: string }) {
       <iframe
         ref={iframeRef}
         className="visual-widget-frame"
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-same-origin"
         srcDoc={injectVisualBaseStyles(parsed.html)}
         title={parsed.title || "Visual"}
+        onLoad={handleLoad}
       />
     </div>
   );
@@ -294,9 +298,10 @@ interface AssistantContentProps {
   parts: AssistantPart[];
   streaming?: boolean;
   workspacePath?: string;
+  onSendAnnotation?: (text: string, files: AttachedFile[]) => void;
 }
 
-export default function AssistantContent({ parts, streaming, workspacePath }: AssistantContentProps) {
+export default function AssistantContent({ parts, streaming, workspacePath, onSendAnnotation }: AssistantContentProps) {
   if (parts.length === 0) return null;
 
   return (
@@ -375,7 +380,9 @@ export default function AssistantContent({ parts, streaming, workspacePath }: As
                 )}
               </div>
               {part.filePath && (
-                <ToolFileCard filePath={part.filePath} fileKind={part.fileKind} workspacePath={workspacePath} />
+                part.fileKind === "image"
+                  ? <ImageResultCard filePath={part.filePath} workspacePath={workspacePath} onSendAnnotation={onSendAnnotation} />
+                  : <ToolFileCard filePath={part.filePath} fileKind={part.fileKind} workspacePath={workspacePath} />
               )}
             </div>
           );

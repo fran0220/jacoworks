@@ -237,7 +237,8 @@ do_upload() {
 
       local FILESIZE
       FILESIZE=$(stat -f%z "$file" 2>/dev/null || echo 0)
-      local COS_PATH="cos://${COS_BUCKET}/releases/v${VERSION}/${FILENAME}"
+      # Upload under platform subdir to avoid filename collisions (e.g. JAcoworks.app.tar.gz)
+      local COS_PATH="cos://${COS_BUCKET}/releases/v${VERSION}/${PLATFORM}/${FILENAME}"
 
       echo "  ⬆️  ${FILENAME} ($(numfmt --to=iec "$FILESIZE" 2>/dev/null || echo "${FILESIZE}B"))"
       if coscli cp -c "$COS_CFG" "$file" "$COS_PATH"; then
@@ -295,7 +296,7 @@ SQL
 
       local FILESIZE
       FILESIZE=$(stat -f%z "$file" 2>/dev/null || echo 0)
-      local DOWNLOAD_URL="${COS_BASE_URL}/${FILENAME}"
+      local DOWNLOAD_URL="${COS_BASE_URL}/${PLATFORM}/${FILENAME}"
 
       local SIG=""
       [[ -f "${file}.sig" ]] && SIG=$(cat "${file}.sig")

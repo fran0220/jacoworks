@@ -1,7 +1,7 @@
 import { FileText } from "lucide-react";
 import { memo } from "react";
 import { formatSize } from "../lib/file-utils";
-import type { AssistantPart, ChatMessage, FileRef, MessageContent } from "../types";
+import type { AssistantPart, AttachedFile, ChatMessage, FileRef, MessageContent } from "../types";
 import AssistantContent from "./AssistantContent";
 import ErrorBubble from "./ErrorBubble";
 
@@ -42,9 +42,11 @@ function FileBadges({ files }: { files: FileRef[] }) {
 const MessageBubble = memo(function MessageBubble({
   message,
   workspacePath,
+  onSendAnnotation,
 }: {
   message: ChatMessage;
   workspacePath?: string;
+  onSendAnnotation?: (text: string, files: AttachedFile[]) => void;
 }) {
   const isUser = message.role === "user";
   const text = extractText(message.content);
@@ -83,6 +85,7 @@ const MessageBubble = memo(function MessageBubble({
           <AssistantContent
             parts={message.parts || []}
             workspacePath={workspacePath}
+            onSendAnnotation={onSendAnnotation}
           />
         )}
       </div>

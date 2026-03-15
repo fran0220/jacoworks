@@ -64,6 +64,10 @@ export default function ChatView({
     sendMessage(text, []);
   }, [lastUserMessage, streaming, sendMessage]);
 
+  const handleSendAnnotation = useCallback((text: string, files: AttachedFile[]) => {
+    sendMessage(text, files);
+  }, [sendMessage]);
+
   const handleSwitchModel = useCallback(() => {
     const currentModel = sessionState.model;
     const currentIdx = MODEL_OPTIONS.findIndex(m => m.value === currentModel);
@@ -81,7 +85,7 @@ export default function ChatView({
         )}
 
         {visibleMessages.map((message, index) => (
-          <MessageBubble key={`${index}-${message.role}`} message={message} workspacePath={sessionState.workspacePath} />
+          <MessageBubble key={`${index}-${message.role}`} message={message} workspacePath={sessionState.workspacePath} onSendAnnotation={handleSendAnnotation} />
         ))}
 
         {streaming && parts.length === 0 && (
@@ -95,7 +99,7 @@ export default function ChatView({
         {streaming && parts.length > 0 && (
           <div className="bubble-row assistant">
             <div className="bubble assistant-bubble">
-              <AssistantContent parts={parts} streaming workspacePath={sessionState.workspacePath} />
+              <AssistantContent parts={parts} streaming workspacePath={sessionState.workspacePath} onSendAnnotation={handleSendAnnotation} />
               <StreamingCursor />
             </div>
           </div>

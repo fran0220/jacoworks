@@ -248,6 +248,45 @@ fn read_file_base64(
     Ok(format!("data:{};base64,{}", mime, b64))
 }
 
+#[tauri::command]
+fn write_file_base64(
+    path: String,
+    data: String,
+    workspace: Option<String>,
+) -> Result<String, String> {
+    // data comes as "data:image/png;base64,xxxx" or raw base64
+    let b64_data = if let Some(pos) = data.find(",") {
+        &data[pos + 1..]
+    } else {
+        &data
+    };
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64_data)
+        .map_err(|e| format!("Invalid base64: {}", e))?;
+
+    // Resolve path relative to workspace
+    let full = if Path::new(&path).is_absolute() {
+        PathBuf::from(&path)
+    } else {
+        let ws = workspace.as_deref().unwrap_or(".");
+        PathBuf::from(ws).join(&path)
+    };
+
+    // Ensure parent directory exists
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Cannot create directory: {}", e))?;
+    }
+
+    std::fs::write(&full, &bytes)
+        .map_err(|e| format!("Write error: {}", e))?;
+
+    // Return the absolute path
+    let abs = safe_canonicalize(&full).unwrap_or(full);
+    Ok(abs.to_string_lossy().to_string())
+}
+
 #[derive(serde::Serialize)]
 pub struct FilePreview {
     path: String,
@@ -881,6 +920,7 @@ pub fn run() {
             open_file_default,
             resolve_file_path,
             read_file_base64,
+            write_file_base64,
             preview_file,
             list_directory,
             import_files_native,

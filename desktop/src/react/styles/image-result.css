@@ -1,0 +1,276 @@
+/* ===== Image Result Card ===== */
+
+.image-result-card {
+  position: relative;
+  margin: var(--space-3) 0;
+  max-width: 600px;
+}
+
+.image-result-card:hover .image-result-hover-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.image-result-img {
+  display: block;
+  max-width: 100%;
+  max-height: 500px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  object-fit: contain;
+}
+
+.image-result-filename {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding-left: var(--space-2);
+}
+
+/* ---- Hover toolbar ---- */
+
+.image-result-hover-toolbar {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  display: flex;
+  gap: var(--space-2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-normal) ease;
+}
+
+.image-result-hover-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-btn);
+  height: var(--size-btn);
+  border: none;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.image-result-hover-toolbar button:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+/* ---- Canvas wrap ---- */
+
+.image-result-canvas-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.annotation-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  cursor: crosshair;
+  border-radius: var(--radius-lg);
+  touch-action: none;
+}
+
+/* ---- Annotation toolbar (flat, compact) ---- */
+
+.image-annotation-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.image-annotation-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+}
+
+.image-annotation-toolbar button:hover {
+  background: var(--bg-hover);
+}
+
+.image-annotation-toolbar button.active {
+  color: var(--accent);
+  background: var(--accent-light);
+  border-color: var(--accent);
+}
+
+.image-annotation-toolbar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.image-annotation-toolbar .divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Color dots */
+
+.image-annotation-toolbar .color-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--border);
+  padding: 0;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+
+.image-annotation-toolbar .color-dot:hover {
+  border-color: var(--text-muted);
+}
+
+.image-annotation-toolbar .color-dot.active {
+  border-color: currentColor;
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.image-annotation-toolbar .color-custom {
+  position: relative;
+  cursor: pointer;
+  background-image:
+    conic-gradient(
+      #D94040, #D9A040, #40D940, #4040D9, #D940D9, #D94040
+    );
+}
+
+.image-annotation-toolbar .color-custom input[type="color"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+/* Action buttons */
+
+.image-annotation-toolbar .btn-cancel {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: 0 var(--space-4);
+  width: auto;
+}
+
+.image-annotation-toolbar .btn-cancel:hover {
+  color: var(--text-secondary);
+}
+
+.image-annotation-toolbar .btn-send {
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-5);
+  width: auto;
+  height: 26px;
+}
+
+.image-annotation-toolbar .btn-send:hover {
+  background: var(--accent-hover);
+}
+
+/* ---- Annotation list (below canvas) ---- */
+
+.annotation-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.annotation-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.annotation-badge {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  color: #fff;
+  font-size: 11px;
+  font-weight: var(--font-semibold);
+  line-height: 1;
+}
+
+.annotation-input {
+  flex: 1;
+  height: 28px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  transition: border-color var(--duration-fast) ease;
+}
+
+.annotation-input:focus {
+  border-color: var(--accent);
+}
+
+.annotation-input::placeholder {
+  color: var(--text-muted);
+}
+
+.annotation-remove {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+}
+
+.annotation-remove:hover {
+  background: var(--bg-error);
+  color: var(--danger);
+}
+
+/* ---- Loading / Error ---- */
+
+.image-result-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+}
