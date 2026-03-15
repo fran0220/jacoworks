@@ -1119,7 +1119,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 		// A container record can exist while async provisioning is still in-flight
 		// (status=creating, empty endpoint). Report readiness separately so desktop
 		// doesn't start WS handshake too early and end up in reconnect/error loops.
-		ready := info.ContainerName != "" && info.Status != "creating" && (info.HostPort > 0 || info.ContainerIP != "")
+		ready := info.ContainerName != "" && info.Status == "running" && (info.HostPort > 0 || info.ContainerIP != "")
 		resp := map[string]interface{}{
 			"provisioned":    true,
 			"ready":          ready,
@@ -1169,7 +1169,17 @@ func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, ocClie
 
 		// Check if already provisioned
 		info, err := s.GetContainerInfo(r.Context(), user.ID, containerType)
-		if err == nil && info.ContainerIP != "" {
+		if err == nil && info.ContainerName != "" {
+			// Container record exists. If stopped/paused, try to start it.
+			if info.Status != "running" && info.Status != "creating" {
+				if containerType == "openclaw" && ocClient != nil {
+					if startErr := ocClient.EnsureRunning(r.Context(), info); startErr != nil {
+						log.Warn().Err(startErr).Str("container", info.ContainerName).Msg("self-provision: ensure running failed")
+					} else {
+						_ = s.UpdateContainerStatusByName(r.Context(), info.ContainerName, "running")
+					}
+				}
+			}
 			resp := map[string]interface{}{
 				"status":         "ready",
 				"container_name": info.ContainerName,

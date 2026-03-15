@@ -65,15 +65,11 @@ export default function SetupGate({ onReady, wsState }: SetupGateProps) {
         finishSetup(status.container_token!);
         return;
       }
-      // Container exists but not ready — go straight to polling
-      if (status.provisioned) {
-        startPolling();
-        return;
-      }
     } catch {
       // Continue to provisioning even if status check fails.
     }
 
+    // Not ready (or no container) — provision will create or wake the container
     try {
       setStage("provisioning");
       const result = await provisionContainer();
