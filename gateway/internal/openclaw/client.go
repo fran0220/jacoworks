@@ -184,10 +184,17 @@ func (c *Client) WriteConfig(containerName, userID, token string, hostPort int) 
 		log.Warn().Err(err).Msg("openclaw: load team-builder skill failed")
 	}
 
-	// 3. Fix ownership of bind-mounted directories so OpenClaw (node user, uid 1000) can write.
+	// 3. Deploy profile files (prompts + skills for each agent profile)
+	if n, err := c.DeployProfiles(containerName); err != nil {
+		log.Warn().Err(err).Str("container", containerName).Msg("openclaw: deploy profiles failed")
+	} else if n > 0 {
+		log.Info().Int("files", n).Str("container", containerName).Msg("openclaw: profiles deployed")
+	}
+
+	// 4. Fix ownership of bind-mounted directories so OpenClaw (node user, uid 1000) can write.
 	c.rt.Exec(ctx, containerName, "chown", "-R", "1000:1000", "/home/node/.openclaw", "/data/workspace")
 
-	// 4. Create workspace directories
+	// 5. Create workspace directories
 	c.rt.Exec(ctx, containerName, "mkdir", "-p",
 		"/data/workspace/jamoss/data", "/data/workspace/jamoss/logs")
 

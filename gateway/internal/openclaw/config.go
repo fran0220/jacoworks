@@ -214,7 +214,7 @@ func (c *Client) GenerateConfigFromDB(ctx context.Context, userID, token string,
 		if genErr != nil {
 			return nil, genErr
 		}
-		return c.injectTemplateAgents(ctx, userID, data)
+		return c.injectAgents(ctx, userID, data)
 	}
 
 	llm := c.getLLM()
@@ -278,7 +278,7 @@ func (c *Client) GenerateConfigFromDB(ctx context.Context, userID, token string,
 		if genErr != nil {
 			return nil, genErr
 		}
-		return c.injectTemplateAgents(ctx, userID, data)
+		return c.injectAgents(ctx, userID, data)
 	}
 
 	// Determine primary model
@@ -336,34 +336,44 @@ func (c *Client) GenerateConfigFromDB(ctx context.Context, userID, token string,
 	if err != nil {
 		return nil, err
 	}
-	return c.injectTemplateAgents(ctx, userID, data)
+	return c.injectAgents(ctx, userID, data)
 }
 
-// injectTemplateAgents merges template agents into a generated config if a template is installed.
-func (c *Client) injectTemplateAgents(ctx context.Context, userID string, data []byte) ([]byte, error) {
-	if userID == "" || c.store == nil {
-		return data, nil
+// injectAgents merges profile agents and template agents into the generated config.
+// Profiles are always injected; template agents are added when a template is installed.
+func (c *Client) injectAgents(ctx context.Context, userID string, data []byte) ([]byte, error) {
+	// 1. Collect profile agents (always available)
+	profileAgents := c.buildProfileAgents()
+
+	// 2. Collect template agents (if template installed for this user)
+	var templateAgents []openclawAgent
+	if userID != "" && c.store != nil {
+		templateName, err := c.store.GetContainerTemplate(ctx, userID, "openclaw")
+		if err != nil {
+			log.Warn().Err(err).Str("user_id", userID).Msg("openclaw config: failed to read container template")
+		} else if templateName != "" {
+			manifest, _, err := c.loadTemplate(templateName)
+			if err != nil {
+				log.Warn().Err(err).Str("template", templateName).Str("user_id", userID).Msg("openclaw config: template load failed")
+			} else {
+				templateAgents = buildTemplateAgents(manifest)
+			}
+		}
 	}
 
-	templateName, err := c.store.GetContainerTemplate(ctx, userID, "openclaw")
-	if err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Msg("openclaw config: failed to read container template")
-		return data, nil
-	}
-	if templateName == "" {
-		return data, nil
-	}
+	// 3. Merge: profiles first, then templates
+	allAgents := make([]openclawAgent, 0, len(profileAgents)+len(templateAgents))
+	allAgents = append(allAgents, profileAgents...)
+	allAgents = append(allAgents, templateAgents...)
 
-	manifest, _, err := c.loadTemplate(templateName)
-	if err != nil {
-		log.Warn().Err(err).Str("template", templateName).Str("user_id", userID).Msg("openclaw config: template load failed")
+	if len(allAgents) == 0 {
 		return data, nil
 	}
 
 	var cfg openclawConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("decode generated config for template injection: %w", err)
+		return nil, fmt.Errorf("decode generated config for agent injection: %w", err)
 	}
-	cfg.Agents.List = buildTemplateAgents(manifest)
+	cfg.Agents.List = allAgents
 	return json.MarshalIndent(cfg, "", "  ")
 }

@@ -399,6 +399,7 @@ func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
 		Installed        string                    `json:"installed"`
 		ActiveSessionKey string                    `json:"activeSessionKey"`
 		Available        []ocpkg.TemplateSummary   `json:"available"`
+		Profiles         []ocpkg.ProfileSummary    `json:"profiles"`
 	}
 
 	leaderSessionKey := func(tmpl *ocpkg.TemplateSummary) string {
@@ -441,10 +442,16 @@ func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
 			}
 		}
 
+		profiles := ocClient.ListProfiles()
+		if profiles == nil {
+			profiles = []ocpkg.ProfileSummary{}
+		}
+
 		writeJSON(w, http.StatusOK, response{
 			Installed:        installed,
 			ActiveSessionKey: activeSessionKey,
 			Available:        available,
+			Profiles:         profiles,
 		})
 	}
 }

@@ -15,10 +15,19 @@ export interface TeamTemplate {
   agents: TeamAgent[];
 }
 
+export interface AgentProfile {
+  name: string;
+  displayName: string;
+  description: string;
+  icon: string;
+  sessionKey: string;
+}
+
 export interface TeamsResponse {
   installed: string;
   activeSessionKey: string;
   available: TeamTemplate[];
+  profiles: AgentProfile[];
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -60,14 +69,30 @@ function normalizeTemplate(payload: unknown): TeamTemplate | null {
   };
 }
 
+function normalizeProfile(payload: unknown): AgentProfile | null {
+  const rec = asRecord(payload);
+  const name = asText(rec.name);
+  if (!name) return null;
+
+  return {
+    name,
+    displayName: asText(rec.displayName) || name,
+    description: asText(rec.description),
+    icon: asText(rec.icon) || "bot",
+    sessionKey: asText(rec.sessionKey) || `agent:${name}:main`,
+  };
+}
+
 function parseTeamsResponse(payload: unknown): TeamsResponse {
   const rec = asRecord(payload);
   const availableRaw = Array.isArray(rec.available) ? rec.available : [];
+  const profilesRaw = Array.isArray(rec.profiles) ? rec.profiles : [];
 
   return {
     installed: asText(rec.installed),
     activeSessionKey: asText(rec.activeSessionKey) || DEFAULT_OPENCLAW_SESSION_KEY,
     available: availableRaw.map(normalizeTemplate).filter((item): item is TeamTemplate => Boolean(item)),
+    profiles: profilesRaw.map(normalizeProfile).filter((item): item is AgentProfile => Boolean(item)),
   };
 }
 
