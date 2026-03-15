@@ -2,7 +2,6 @@
 name: content-extract
 display-name: 内容提取
 display-description: URL 内容提取与转换
-triggers: [提取内容, 网页内容, extract content, fetch url, 抓取]
 description: >
   Robust URL-to-Markdown extraction. Use when the user wants to
   "read a webpage", "extract content from URL", "fetch this link",

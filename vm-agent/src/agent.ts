@@ -20,6 +20,7 @@ import { createMemoryExtension } from "./extensions/memory.js";
 import { createImageGenExtension } from "./extensions/image-gen.js";
 import { createReadDocumentExtension } from "./extensions/read-document.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
+import { createVisualExtension } from "./extensions/visual.js";
 import { createRemoteFsExtension } from "./extensions/remote-fs.js";
 import { registerTransportResponseHandler } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
@@ -29,7 +30,6 @@ import { createHeartbeatService, type HeartbeatService } from "./services/heartb
 import { createCronService, type CronService, type CronResultEvent } from "./services/cron.js";
 import { createPromptQueue, type PromptQueue } from "./lib/prompt-queue.js";
 import { createPythonExtension } from "./tools/python.js";
-import { createSkillAutoloadExtension, discoverAutoloadSkills } from "./extensions/skill-autoload.js";
 import { log } from "./lib/logger.js";
 import { EventEmitter } from "node:events";
 import type { MemoryStoreConfig } from "./lib/memory-store.js";
@@ -445,6 +445,9 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     extensionFactories.push(createPythonExtension());
   }
 
+  // Visual rendering tool (always available)
+  extensionFactories.push(createVisualExtension());
+
   // Intercept read tool for binary documents.
   // Binary docs → block with guidance to use read_document.
   const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
@@ -532,20 +535,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
       return { messages: compressed };
     });
   });
-
-  // ─── Skill auto-loading: inject skill content on first tool use or keyword match ───
-  const allSkillDirs = [
-    ...config.skillsPaths.filter((p) => existsSync(p)),
-    ...(existsSync(config.userSkillsDir) ? [config.userSkillsDir] : []),
-  ];
-  const autoloadEntries = discoverAutoloadSkills(allSkillDirs);
-  if (autoloadEntries.length > 0) {
-    extensionFactories.push(createSkillAutoloadExtension(autoloadEntries));
-    log.info("skill autoload registered", {
-      count: autoloadEntries.length,
-      skills: autoloadEntries.map((e) => e.name),
-    });
-  }
 
   if (config.toolDenyList.length > 0) {
     extensionFactories.push((pi) => {

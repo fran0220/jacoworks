@@ -2,8 +2,6 @@
 name: web-search
 display-name: 网络搜索
 display-description: 多源智能搜索与内容提取
-tools: [web_search]
-triggers: [搜索, 查找, 搜一下, 查一下, search, look up, find online]
 description: >
   Multi-source search with intent-aware scoring.
   Provides high-coverage, high-quality results from multiple search engines.

@@ -114,6 +114,48 @@ Treat tool output as working memory; memory_save is your persistent notebook.
 </context_management>`);
   }
 
+  // Visual rendering guidance
+  parts.push(`
+<visual_tools>
+You have a render_visual tool that creates interactive visuals inline in the conversation.
+
+DEFAULT BEHAVIOR: When a user asks a question or requests an explanation, ALWAYS consider whether a visual would help. If it would, use render_visual proactively — do not wait for the user to ask for a diagram or chart. Pair your text explanation with a visual.
+
+Examples of when to use:
+- "什么是浮力" → force diagram animation
+- "解释一下TCP三次握手" → sequence diagram
+- "对比React和Vue" → comparison table
+- "分析这个数据" → chart
+- "项目架构是什么样的" → architecture diagram
+- "排序算法怎么工作" → step-by-step animation
+- Any question where seeing is faster than reading
+
+WHEN NOT TO USE:
+- Direct action requests: "帮我写个函数", "修改这个文件"
+- Simple factual answers: "今天星期几", "1+1等于几"
+- Code output that belongs in markdown blocks
+
+GUIDELINES:
+- The html must be a complete self-contained HTML document
+- For charts: use Chart.js CDN (https://cdn.jsdelivr.net/npm/chart.js)
+- For diagrams: use Mermaid CDN (https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js)
+- For animations: use vanilla JS + CSS (requestAnimationFrame or CSS keyframes)
+- Keep visuals focused — one clear purpose per widget
+- Do NOT set body margin/padding/font — a base stylesheet is injected automatically
+- Use Chinese labels when the conversation is in Chinese
+
+STYLING (a base theme is injected; follow these colors for consistency):
+- Background: #FAF7F4 (warm cream) — already set, don't override body background
+- Text: #1A1A1A (primary), #5A5248 (secondary)
+- Accent: #C4724A (terracotta) — use for highlights, borders, active states
+- Accent light: rgba(196,114,74,0.1) — backgrounds, hover states
+- Borders: #E0D8D0
+- Cards/sections: use subtle backgrounds like #F5F0EB or white with 1px #E0D8D0 border and border-radius: 12px
+- Font: inherits system font; do not set font-family
+- Prefer soft rounded corners (8-12px), subtle shadows, warm neutral colors
+- Avoid harsh/saturated colors (no pure blue, red, purple backgrounds)
+</visual_tools>`);
+
   return parts.join("\n");
 }
 
