@@ -263,3 +263,17 @@
 4. 升级捆绑 Bun 版本 1.2.5 → 1.3.10（包含大量 Windows 修复）
 
 **规则**: 在 Windows 上，非 ASCII 文本（中日韩等）绝对不能通过 bash shell 管道传递。所有包含非 ASCII 的文件必须通过 `write` 工具（UTF-8 `writeFile`）创建，然后用纯 ASCII bash 命令执行。
+
+## 2026-03-15: OpenClaw WS 代理 — scope 不足导致 chat.send 被拒
+
+**触发**: oc-gateway HandshakeConn 完成 OpenClaw 握手后，chat.send 返回 `missing scope: operator.write`。
+
+**根因**: OpenClaw 的 scope 系统不存在层级继承。`operator.admin` 不自动包含 `operator.write`、`operator.read`、`operator.pairing` 等。每个 scope 必须显式请求。
+
+**发现过程**: OpenClaw 容器日志 (`journalctl -u openclaw` 和 `/tmp/openclaw/*.log`) 明确显示所有 chat.send 被拒绝原因是 `missing scope: operator.write`。先前误以为 `operator.admin` 是超集 scope。
+
+**修复**: `HandshakeConn()` 和 `GatewayClient.handshake()` 中的 Scopes 改为显式列出所有需要的 scope：`["operator.admin", "operator.read", "operator.write", "operator.pairing", "operator.approvals", "operator.talk.secrets"]`。
+
+**规则**: OpenClaw 连接时必须显式请求所有需要的 scope。已知 scope 列表：`operator.admin`, `operator.read`, `operator.write`, `operator.pairing`, `operator.approvals`, `operator.talk.secrets`。`DangerouslyDisableDeviceAuth: true` 跳过设备配对，但不授予额外 scope。
+
+**附带修复**: OpenClaw 容器内 `/home/node/.openclaw/agents` 目录被 root 所有，需 `chown -R node:node` 才能让 OpenClaw 进程写入。
