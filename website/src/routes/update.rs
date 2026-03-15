@@ -30,7 +30,10 @@ pub async fn check(
     };
 
     // If client is already on the latest version, return 204
-    if latest.version == current_version {
+    // DB may store "v1.8.1" or "1.8.1"; Tauri sends without prefix.
+    let latest_ver = latest.version.strip_prefix('v').unwrap_or(&latest.version);
+    let client_ver = current_version.strip_prefix('v').unwrap_or(&current_version);
+    if latest_ver == client_ver {
         return Ok(axum::http::StatusCode::NO_CONTENT.into_response());
     }
 
@@ -66,7 +69,7 @@ pub async fn check(
     }
 
     Ok(Json(UpdateResponse {
-        version: latest.version,
+        version: latest_ver.to_string(),
         notes: latest.notes,
         pub_date: latest.pub_date.to_rfc3339(),
         url: asset.download_url,

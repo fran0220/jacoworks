@@ -4,6 +4,13 @@ export const USER_NAME = window.__USER_NAME__ || "";
 export function getOpenClawToken(): string {
   return window.__OPENCLAW_TOKEN__ || window.__OPENCLAW_GATEWAY_TOKEN__ || "";
 }
+export function getOpenClawWsPort(): number {
+  return window.__OPENCLAW_WS_PORT__ || 0;
+}
+
+export function getOpenClawVncUrl(): string {
+  return window.__OPENCLAW_VNC_URL__ || "";
+}
 
 export const OPENCLAW_TOKEN = getOpenClawToken();
 

@@ -1,4 +1,4 @@
-import { AUTH_TOKEN, DEFAULT_OPENCLAW_SESSION_KEY, GATEWAY_URL, getOpenClawToken } from "./config";
+import { AUTH_TOKEN, DEFAULT_OPENCLAW_SESSION_KEY, GATEWAY_URL, getOpenClawToken, getOpenClawWsPort } from "./config";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected";
 
@@ -23,13 +23,6 @@ export interface OpenClawResponseFrame {
 
 export type OpenClawFrame = OpenClawEventFrame | OpenClawResponseFrame | Record<string, unknown>;
 
-/** Gateway envelope frame wrapping upstream messages */
-interface GatewayEnvelopeFrame {
-  seq: number;
-  event: string;
-  data: Record<string, unknown>;
-}
-
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
@@ -53,6 +46,15 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+/**
+ * Direct browser → OpenClaw WS client.
+ *
+ * Connects via OpenResty `/ws/oc-direct/{port}` which proxies to the
+ * user's OpenClaw container. Performs native OC challenge-response
+ * handshake with the container_token injected by the Website.
+ *
+ * No gateway envelope framing — speaks raw OpenClaw protocol.
+ */
 export class OpenClawClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, PendingRequest>();
@@ -63,7 +65,6 @@ export class OpenClawClient {
   private reconnectAttempt = 0;
   private handshakeInFlight = false;
   private handshakeDone = false;
-  private lastSeq = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private opts: OpenClawClientOptions;
 
@@ -73,7 +74,7 @@ export class OpenClawClient {
 
   connect() {
     if (this.disposed) return;
-    this.fetchTicketAndConnect();
+    this.doConnect();
   }
 
   dispose() {
@@ -124,7 +125,11 @@ export class OpenClawClient {
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("gateway not connected"));
+      return Promise.reject(new Error("openclaw not connected"));
+    }
+    // Allow "connect" method during handshake; all others require connected state
+    if (method !== "connect" && !this.connected) {
+      return Promise.reject(new Error("openclaw not connected"));
     }
 
     const id = makeID("req");
@@ -138,6 +143,31 @@ export class OpenClawClient {
     });
     this.ws.send(payload);
     return promise;
+  }
+
+  /** Build the direct WS URL via OpenResty proxy */
+  private buildWsUrl(): string | null {
+    const port = getOpenClawWsPort();
+    if (!port) return null;
+    // GATEWAY_URL is "https://jacoapi.jingao.club" → ws base = "wss://jacoapi.jingao.club"
+    const wsBase = GATEWAY_URL.replace(/^http/, "ws");
+    return `${wsBase}/ws/oc-direct/${port}`;
+  }
+
+  /** Fallback: fetch ticket and connect via oc-gateway proxy (legacy path) */
+  private buildLegacyWsUrl(ticket: string): string {
+    const wsBase = GATEWAY_URL.replace(/^http/, "ws");
+    return `${wsBase}/ws/oc?ticket=${encodeURIComponent(ticket)}&type=openclaw`;
+  }
+
+  private doConnect() {
+    const directUrl = this.buildWsUrl();
+    if (directUrl) {
+      this.connectWebSocket(directUrl);
+    } else {
+      // No port injected (container not yet provisioned) — fall back to ticket flow
+      this.fetchTicketAndConnect();
+    }
   }
 
   private fetchTicketAndConnect() {
@@ -160,7 +190,7 @@ export class OpenClawClient {
       })
       .then((data: { ticket?: string }) => {
         if (!data.ticket) throw new Error("无效的 ticket");
-        this.connectWebSocket(data.ticket);
+        this.connectWebSocket(this.buildLegacyWsUrl(data.ticket));
       })
       .catch((err: Error) => {
         if (err.message === "expired") return;
@@ -169,17 +199,12 @@ export class OpenClawClient {
       });
   }
 
-  private connectWebSocket(ticket: string) {
+  private connectWebSocket(url: string) {
     this.opts.onStateChange("connecting", "正在建立连接...");
     this.handshakeDone = false;
     this.handshakeInFlight = false;
 
-    const wsBase = GATEWAY_URL.replace(/^http/, "ws");
-    let wsUrl = `${wsBase}/ws/oc?ticket=${encodeURIComponent(ticket)}&type=openclaw`;
-    if (this.lastSeq > 0) {
-      wsUrl += `&lastSeq=${this.lastSeq}`;
-    }
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.onopen = () => {
@@ -190,73 +215,78 @@ export class OpenClawClient {
     ws.onmessage = (evt) => {
       try {
         const parsed = JSON.parse(evt.data) as Record<string, unknown>;
-        this.handleIncomingMessage(parsed);
+        this.handleFrame(parsed as OpenClawFrame);
       } catch {
         // ignore malformed frames
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       this.connected = false;
       this.handshakeDone = false;
       this.handshakeInFlight = false;
       this.ws = null;
       this.stopHeartbeat();
-      this.rejectPending(new Error("gateway closed"));
+      this.rejectPending(new Error("connection closed"));
+
+      if (ev.code === 1006 && !this.handshakeDone && this.reconnectAttempt >= 3) {
+        this.opts.onStateChange("disconnected", "容器未就绪，正在刷新页面...");
+        setTimeout(() => location.reload(), 1500);
+        return;
+      }
+
       this.opts.onStateChange("disconnected", "连接断开");
       if (!this.disposed) this.scheduleReconnect();
     };
 
     ws.onerror = () => {
-      // close callback handles reconnect/error state
+      // close callback handles everything
     };
   }
 
-  /** Handle incoming messages — unwrap gateway envelope if present */
-  private handleIncomingMessage(raw: Record<string, unknown>) {
-    // Check if this is a gateway envelope frame: {seq, event, data}
-    if (typeof raw.seq === "number" && typeof raw.event === "string" && raw.data !== undefined) {
-      const envelope = raw as unknown as GatewayEnvelopeFrame;
-      if (envelope.seq > 0) {
-        this.lastSeq = envelope.seq;
-      }
-
-      // Handle proxy-level events from the envelope
-      if (envelope.event === "proxy.ready") {
-        // Channel connected — the OC challenge will follow as a "message" event
-        return;
-      }
-      if (envelope.event === "proxy.error") {
-        const errMsg = typeof envelope.data?.error === "string" ? envelope.data.error : "代理错误";
-        this.opts.onStateChange("disconnected", errMsg);
-        return;
-      }
-
-      // Unwrap: pass the inner data to OC frame handler
-      this.handleFrame(envelope.data as OpenClawFrame);
-      return;
-    }
-
-    // Not an envelope — handle as direct OC frame (pong, legacy, etc.)
-    const frameType = typeof raw.type === "string" ? raw.type : "";
-    if (frameType === "pong") return; // Heartbeat pong, ignore
-
-    this.handleFrame(raw as OpenClawFrame);
-  }
-
+  /** Handle raw OpenClaw protocol frames */
   private handleFrame(frame: OpenClawFrame) {
     const record = asRecord(frame);
     const frameType = typeof record.type === "string" ? record.type : "";
 
+    // --- Legacy gateway envelope: {seq, event, data} ---
+    // If we ended up on the legacy proxy path, unwrap envelope frames.
+    if (typeof record.seq === "number" && typeof record.event === "string" && record.data !== undefined) {
+      if (record.event === "proxy.ready") {
+        if (!this.handshakeDone && !this.handshakeInFlight) {
+          this.connected = true;
+          this.handshakeDone = true;
+          this.reconnectAttempt = 0;
+          this.opts.onStateChange("connected", "已连接");
+          this.opts.onFrame({ type: "proxy.ready" });
+        }
+        return;
+      }
+      if (record.event === "proxy.error") {
+        const data = asRecord(record.data);
+        const errMsg = typeof data.error === "string" ? data.error : "代理错误";
+        this.opts.onStateChange("disconnected", errMsg);
+        return;
+      }
+      // Unwrap inner data for legacy path
+      this.handleFrame(asRecord(record.data) as OpenClawFrame);
+      return;
+    }
+
+    // --- Direct OC protocol ---
+
+    if (frameType === "pong") return; // heartbeat pong, ignore
+
+    // connect.challenge → authenticate with container token
     if (frameType === "event" && record.event === "connect.challenge") {
       if (!this.handshakeDone && !this.handshakeInFlight) {
         this.handshakeInFlight = true;
         void this.sendConnect();
       }
-      this.opts.onFrame(frame);
       return;
     }
 
+    // Response frames → resolve pending requests
     if (frameType === "res") {
       const id = typeof record.id === "string" ? record.id : "";
       const pending = this.pending.get(id);
@@ -273,6 +303,7 @@ export class OpenClawClient {
       return;
     }
 
+    // All other events → pass to UI
     this.opts.onFrame(frame);
   }
 
@@ -289,17 +320,15 @@ export class OpenClawClient {
         minProtocol: 3,
         maxProtocol: 3,
         client: {
-          id: "gateway-client",
+          id: "openclaw-control-ui",
           version: "webchat-1.0.0",
           platform: navigator.platform || "web",
-          mode: "backend",
+          mode: "ui",
         },
         role: "operator",
-        scopes: ["operator.admin"],
+        scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing", "operator.approvals", "operator.talk.secrets"],
         caps: ["tool-events"],
-        auth: {
-          token,
-        },
+        auth: { token },
       });
 
       this.connected = true;
@@ -317,16 +346,10 @@ export class OpenClawClient {
   }
 
   private startHeartbeat() {
+    // In direct mode, OpenClaw manages its own connection timeout.
+    // Only send heartbeats if connected via legacy gateway proxy.
+    // The native OC protocol doesn't accept {type:"ping"} frames.
     this.stopHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        try {
-          this.ws.send(JSON.stringify({ type: "ping" }));
-        } catch {
-          // connection error will be caught by onclose
-        }
-      }
-    }, APP_PING_INTERVAL_MS);
   }
 
   private stopHeartbeat() {
@@ -351,7 +374,7 @@ export class OpenClawClient {
     this.opts.onStateChange("connecting", `${Math.ceil(total / 1000)}秒后重连...`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.fetchTicketAndConnect();
+      this.doConnect();
     }, total);
   }
 }

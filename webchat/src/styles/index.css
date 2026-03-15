@@ -890,6 +890,94 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   color: var(--text-muted);
 }
 
+/* ===== Desktop Panel ===== */
+.desktop-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.desktop-panel-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg-primary);
+}
+
+.desktop-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.desktop-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.desktop-panel-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.desktop-panel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.desktop-panel-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.desktop-panel-frame {
+  flex: 1;
+  border: none;
+  width: 100%;
+  background: #000;
+}
+
+.desktop-panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2rem;
+}
+.desktop-panel-empty h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.desktop-panel-empty p {
+  margin: 0;
+  font-size: 0.8125rem;
+  max-width: 320px;
+}
+
 /* ===== Feed Panel ===== */
 .feed-panel {
   padding: 0;

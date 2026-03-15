@@ -13,6 +13,7 @@ struct ChatTemplate {
     user_name: String,
     auth_token: String,
     openclaw_token: String,
+    openclaw_ws_port: i32,
     posthog_key: String,
     posthog_host: String,
 }
@@ -32,15 +33,16 @@ pub async fn page(
         .unwrap_or(&state.config.gateway.url)
         .to_string();
 
-    // Look up OpenClaw container token for this user (empty if vm-agent or no container)
-    let openclaw_token: String = sqlx::query_scalar(
-        "SELECT container_token FROM containers WHERE user_id = $1 AND container_type = 'openclaw'",
+    // Look up OpenClaw container token + WS port for this user (empty/0 if vm-agent or no container)
+    let (openclaw_token, openclaw_ws_port) = sqlx::query_as::<_, (String, Option<i32>)>(
+        "SELECT COALESCE(container_token, ''), host_port FROM containers WHERE user_id = $1 AND container_type = 'openclaw'",
     )
     .bind(&auth.user.id)
     .fetch_optional(&state.db)
     .await
     .ok()
     .flatten()
+    .map(|(t, p)| (t, p.unwrap_or(0)))
     .unwrap_or_default();
 
     render_template(&ChatTemplate {
@@ -48,6 +50,7 @@ pub async fn page(
         user_name: auth.user.name.clone(),
         auth_token: auth.token,
         openclaw_token,
+        openclaw_ws_port,
         posthog_key: state.config.posthog.api_key.clone(),
         posthog_host: state.config.posthog.host.clone(),
     })

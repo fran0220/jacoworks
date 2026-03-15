@@ -11,6 +11,8 @@ declare global {
     __USER_NAME__?: string;
     __OPENCLAW_TOKEN__?: string;
     __OPENCLAW_GATEWAY_TOKEN__?: string;
+    __OPENCLAW_WS_PORT__?: number;
+    __OPENCLAW_VNC_URL__?: string;
     __OPENCLAW_SESSION_KEY__?: string;
     __POSTHOG_KEY__?: string;
     __POSTHOG_HOST__?: string;

@@ -1,9 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
-  base: "/static/chat/",
+  base: command === "serve" ? "/" : "/static/chat/",
   build: {
     outDir: "../website/static/chat",
     emptyOutDir: true,
@@ -18,4 +18,4 @@ export default defineConfig({
   server: {
     port: 5180,
   },
-});
+}));
