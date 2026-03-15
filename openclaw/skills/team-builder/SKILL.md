@@ -12,7 +12,7 @@ description: 创建和管理多 Agent 协作团队 — 在容器内自助创建�
 1. **创建团队** — 根据用户需求设计角色、生成 prompts/skills、写入配置
 2. **安装预置模板** — 安装 JaMOSS 等预定义团队模板
 3. **管理团队** — 查看、修改、删除已创建的团队
-4. **安装中间件** — 可选安装 JaMOSS 任务调度中间件 (FastAPI, port 6565)
+4. **JaMOSS 中间件** — 已内置于容器 (Go 二进制, systemd 服务, port 6565)
 
 ## 创建团队的完整流程
 
@@ -169,22 +169,21 @@ for a in cfg.get('agents', {}).get('list', []):
 
 `sessionTarget: "isolated"` — cron 唤醒使用独立会话，不干扰用户对话。
 
-## 安装 JaMOSS 中间件（可选）
+## JaMOSS 中间件（已内置）
 
-如果团队需要任务调度系统（任务拆分→分配→执行→审查→评分），可以安装 JaMOSS：
+JMOS 是 Go 单体二进制，已预装在 Golden Image 中，所有容器开箱即用。路径：`/usr/local/bin/jmos`，以 systemd 服务 `jmos.service` 运行，监听端口 6565。
 
 ```bash
-# 检查 JaMOSS 是否已安装
-curl -s http://127.0.0.1:6565/api/health 2>/dev/null && echo "已安装" || echo "未安装"
+# 检查 JMOS 服务状态
+systemctl status jmos.service
 
-# 如果 /opt/jamoss 存在但服务未运行，启动它
-if [ -f /opt/jamoss/app/main.py ]; then
-  nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 6565 \
-    --app-dir /opt/jamoss > /opt/jamoss/logs/uvicorn.log 2>&1 &
-fi
+# 或通过 API 检查健康
+curl -s http://127.0.0.1:6565/api/health
 ```
 
-安装了 JaMOSS 后，为每个 agent 的 SKILL.md 添加 task-cli.py 命令说明：
+**无需手动安装**。如果服务异常，重启即可：`systemctl restart jmos.service`
+
+Agents 通过 `task-cli.py` 调用 JMOS API：
 
 ```bash
 python3 /opt/jamoss/task-cli.py --key $JAMOSS_API_KEY <command>
@@ -217,7 +216,7 @@ else:
 
 ## 预置模板
 
-如果容器中有预置模板（`/opt/jamoss/templates/` 或管理员预装），可以直接安装：
+以下为可用的预置团队模板，可直接安装：
 
 ### JaMOSS 四角色协作团队
 

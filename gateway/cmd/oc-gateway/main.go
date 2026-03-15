@@ -513,15 +513,18 @@ func jamossProxyHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc
 			return
 		}
 
-		if r.Method != http.MethodGet {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-			return
-		}
-
+		// Determine allowed paths based on HTTP method
 		upstreamPath, logicalPath := buildJaMOSSProxyPaths(r.URL.Path)
-		if !isAllowedJaMOSSReadPath(logicalPath) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "jamoss path not allowed"})
-			return
+		if r.Method == http.MethodGet {
+			if !isAllowedJaMOSSReadPath(logicalPath) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "jamoss path not allowed"})
+				return
+			}
+		} else {
+			if !isAllowedJaMOSSWritePath(logicalPath) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "jamoss write path not allowed"})
+				return
+			}
 		}
 
 		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
@@ -607,6 +610,33 @@ func isAllowedJaMOSSReadPath(p string) bool {
 	case strings.HasPrefix(p, "/tasks"):
 		return true
 	case strings.HasPrefix(p, "/sub-tasks"):
+		return true
+	case strings.HasPrefix(p, "/stats"):
+		return true
+	case p == "/health":
+		return true
+	case strings.HasPrefix(p, "/events"):
+		return true
+	case strings.HasPrefix(p, "/space/"):
+		return true
+	case strings.HasPrefix(p, "/config/"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedJaMOSSWritePath(p string) bool {
+	switch {
+	case strings.HasPrefix(p, "/admin/tasks"):
+		return true
+	case strings.HasPrefix(p, "/tasks"):
+		return true
+	case strings.HasPrefix(p, "/admin/sub-tasks"):
+		return true
+	case strings.HasPrefix(p, "/sub-tasks"):
+		return true
+	case strings.HasPrefix(p, "/logs"):
 		return true
 	default:
 		return false
