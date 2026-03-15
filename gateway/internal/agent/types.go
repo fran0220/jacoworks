@@ -7,7 +7,7 @@ type Event struct {
 	Data  []byte // raw JSON
 }
 
-// ContainerBackend abstracts Docker operations.
+// ContainerBackend abstracts container lifecycle operations.
 type ContainerBackend interface {
 	Start(name string) error
 	Unfreeze(name string) error

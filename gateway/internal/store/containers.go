@@ -7,8 +7,6 @@ import (
 )
 
 const (
-	// Deprecated: vm-agent is being phased out. New code should use ContainerTypeOpenClaw.
-	ContainerTypeVMAgent  = "vm-agent"
 	ContainerTypeOpenClaw = "openclaw"
 )
 

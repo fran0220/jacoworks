@@ -14,7 +14,6 @@ type Config struct {
 	llmMu     sync.RWMutex    `yaml:"-"`
 	Server    ServerConfig    `yaml:"server"`
 	Auth      AuthConfig      `yaml:"auth"`
-	Docker    DockerConfig    `yaml:"docker"`
 	OpenClaw  OpenClawConfig  `yaml:"openclaw"`
 	LLM       LLMConfig       `yaml:"llm"`
 	Database  DatabaseConfig  `yaml:"database"`
@@ -24,7 +23,6 @@ type Config struct {
 }
 
 type OpenClawConfig struct {
-	DockerHost string `yaml:"docker_host"`
 	Image      string `yaml:"image"`
 	Port       int    `yaml:"port"`
 	HostIP     string `yaml:"host_ip"`
@@ -76,15 +74,6 @@ type AuthConfig struct {
 	SessionTTLHours    int    `yaml:"session_ttl_hours"`
 }
 
-type DockerConfig struct {
-	DockerHost   string `yaml:"docker_host"`
-	Image        string `yaml:"image"`
-	Network      string `yaml:"network"`
-	AgentPort    int    `yaml:"agent_port"`
-	HostIP       string `yaml:"host_ip"`
-	GatewayToken string `yaml:"gateway_token"`
-}
-
 type DatabaseConfig struct {
 	URL string `yaml:"url"`
 }
@@ -111,12 +100,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Auth.SessionTTLHours == 0 {
 		cfg.Auth.SessionTTLHours = 720
-	}
-	if cfg.Docker.AgentPort == 0 {
-		cfg.Docker.AgentPort = 18789
-	}
-	if cfg.Docker.Image == "" {
-		cfg.Docker.Image = "jacoworks/vm-agent:latest"
 	}
 	if cfg.OpenClaw.Port == 0 {
 		cfg.OpenClaw.Port = 18789
@@ -172,26 +155,6 @@ func applyEnvOverrides(cfg *Config) {
 		if ttl, err := strconv.Atoi(v); err == nil {
 			cfg.Auth.SessionTTLHours = ttl
 		}
-	}
-	if v := os.Getenv("GATEWAY_DOCKER_HOST"); v != "" {
-		cfg.Docker.DockerHost = v
-	}
-	if v := os.Getenv("GATEWAY_DOCKER_IMAGE"); v != "" {
-		cfg.Docker.Image = v
-	}
-	if v := os.Getenv("GATEWAY_DOCKER_NETWORK"); v != "" {
-		cfg.Docker.Network = v
-	}
-	if v := os.Getenv("GATEWAY_DOCKER_AGENT_PORT"); v != "" {
-		if port, err := strconv.Atoi(v); err == nil {
-			cfg.Docker.AgentPort = port
-		}
-	}
-	if v := os.Getenv("GATEWAY_DOCKER_GATEWAY_TOKEN"); v != "" {
-		cfg.Docker.GatewayToken = v
-	}
-	if v := os.Getenv("GATEWAY_OPENCLAW_HOST"); v != "" {
-		cfg.OpenClaw.DockerHost = v
 	}
 	if v := os.Getenv("GATEWAY_OPENCLAW_IMAGE"); v != "" {
 		cfg.OpenClaw.Image = v

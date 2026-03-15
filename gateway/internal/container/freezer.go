@@ -1,6 +1,7 @@
-package docker
+package container
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -16,12 +17,12 @@ type containerState struct {
 }
 
 // Freezer monitors container activity and applies a two-tier idle strategy:
-//   - After pauseTimeout of inactivity: docker pause (lightweight, instant resume)
-//   - After stopTimeout of being paused: docker stop (frees resources fully)
+//   - After pauseTimeout of inactivity: freeze (lightweight, instant resume)
+//   - After stopTimeout of being frozen: stop (frees resources fully)
 type Freezer struct {
-	client       *Client
-	pauseTimeout time.Duration // idle → pause
-	stopTimeout  time.Duration // paused → stop
+	rt           Runtime
+	pauseTimeout time.Duration // idle → freeze
+	stopTimeout  time.Duration // frozen → stop
 	interval     time.Duration
 	prefix       string // container name prefix to manage (e.g. "agent-")
 
@@ -32,14 +33,14 @@ type Freezer struct {
 	stopCh       chan struct{}
 }
 
-func NewFreezer(client *Client, pauseTimeout, stopTimeout, checkInterval time.Duration) *Freezer {
-	return NewFreezerWithPrefix(client, "agent-", pauseTimeout, stopTimeout, checkInterval)
+func NewFreezer(rt Runtime, pauseTimeout, stopTimeout, checkInterval time.Duration) *Freezer {
+	return NewFreezerWithPrefix(rt, "agent-", pauseTimeout, stopTimeout, checkInterval)
 }
 
 // NewFreezerWithPrefix creates a Freezer with a custom container name prefix.
-func NewFreezerWithPrefix(client *Client, prefix string, pauseTimeout, stopTimeout, checkInterval time.Duration) *Freezer {
+func NewFreezerWithPrefix(rt Runtime, prefix string, pauseTimeout, stopTimeout, checkInterval time.Duration) *Freezer {
 	return &Freezer{
-		client:       client,
+		rt:           rt,
 		pauseTimeout: pauseTimeout,
 		stopTimeout:  stopTimeout,
 		interval:     checkInterval,
@@ -50,8 +51,8 @@ func NewFreezerWithPrefix(client *Client, prefix string, pauseTimeout, stopTimeo
 }
 
 // Touch marks a container as active (call on every proxied request).
-// If the container was paused, this does NOT unpause it — the caller
-// should call client.Unfreeze() separately.
+// If the container was frozen, this does NOT unfreeze it — the caller
+// should call Runtime.Unfreeze() separately.
 func (f *Freezer) Touch(containerName string) {
 	if !strings.HasPrefix(containerName, f.prefix) {
 		return
@@ -108,7 +109,9 @@ func (f *Freezer) SetOnAfterFreeze(fn func(string)) {
 }
 
 func (f *Freezer) checkIdle() {
-	containers, err := f.client.List()
+	ctx := context.Background()
+
+	containers, err := f.rt.List(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("idle monitor: list containers failed")
 		return
@@ -118,7 +121,7 @@ func (f *Freezer) checkIdle() {
 
 	f.mu.Lock()
 
-	var toPause []string
+	var toFreeze []string
 	var toStop []string
 
 	for _, ct := range containers {
@@ -135,7 +138,7 @@ func (f *Freezer) checkIdle() {
 		switch ct.Status {
 		case "running":
 			if now.Sub(cs.lastSeen) > f.pauseTimeout {
-				toPause = append(toPause, ct.Name)
+				toFreeze = append(toFreeze, ct.Name)
 			}
 		case "paused":
 			if cs.paused && now.Sub(cs.pausedAt) > f.stopTimeout {
@@ -145,11 +148,11 @@ func (f *Freezer) checkIdle() {
 	}
 	f.mu.Unlock()
 
-	// Tier 1: pause idle running containers
-	for _, name := range toPause {
-		log.Info().Str("container", name).Dur("idle", f.pauseTimeout).Msg("pausing idle container")
-		if err := f.client.Pause(name); err != nil {
-			log.Error().Err(err).Str("container", name).Msg("pause idle container failed")
+	// Tier 1: freeze idle running containers
+	for _, name := range toFreeze {
+		log.Info().Str("container", name).Dur("idle", f.pauseTimeout).Msg("freezing idle container")
+		if err := f.rt.Freeze(ctx, name); err != nil {
+			log.Error().Err(err).Str("container", name).Msg("freeze idle container failed")
 		} else {
 			f.mu.Lock()
 			if cs, ok := f.containers[name]; ok {
@@ -160,21 +163,21 @@ func (f *Freezer) checkIdle() {
 		}
 	}
 
-	// Tier 2: stop containers that have been paused too long
+	// Tier 2: stop containers that have been frozen too long
 	for _, name := range toStop {
-		log.Info().Str("container", name).Dur("paused_for", f.stopTimeout).Msg("stopping long-paused container")
+		log.Info().Str("container", name).Dur("paused_for", f.stopTimeout).Msg("stopping long-frozen container")
 
 		if f.onBeforeStop != nil {
 			f.onBeforeStop(name)
 		}
 
-		// Unpause first (docker stop requires running state)
-		if err := f.client.Unpause(name); err != nil {
-			log.Warn().Err(err).Str("container", name).Msg("unpause before stop failed")
+		// Unfreeze first (docker stop requires running state)
+		if err := f.rt.Unfreeze(ctx, name); err != nil {
+			log.Warn().Err(err).Str("container", name).Msg("unfreeze before stop failed")
 		}
 
-		if err := f.client.Stop(name); err != nil {
-			log.Error().Err(err).Str("container", name).Msg("stop paused container failed")
+		if err := f.rt.Stop(ctx, name); err != nil {
+			log.Error().Err(err).Str("container", name).Msg("stop frozen container failed")
 		} else {
 			if f.onAfterStop != nil {
 				f.onAfterStop(name)

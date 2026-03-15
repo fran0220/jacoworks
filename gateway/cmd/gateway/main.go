@@ -2,23 +2,15 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,13 +26,10 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
 	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
-	dockerpkg "github.com/fran0220/jacoworks/gateway/internal/docker"
-	execws "github.com/fran0220/jacoworks/gateway/internal/exec"
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	"github.com/fran0220/jacoworks/gateway/internal/games"
 	"github.com/fran0220/jacoworks/gateway/internal/github"
 	"github.com/fran0220/jacoworks/gateway/internal/middleware"
-	"github.com/fran0220/jacoworks/gateway/internal/proxy"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -138,41 +127,6 @@ func main() {
 		"addr": cfg.Addr(),
 	})
 
-	// Initialize Docker client
-	dockerClient := dockerpkg.NewClient(
-		cfg.Docker.DockerHost,
-		cfg.Docker.Image,
-		cfg.Docker.Network,
-		cfg.Docker.AgentPort,
-		cfg.Docker.HostIP,
-	)
-
-	// vm-agent containers run persistently (no idle freeze/stop).
-	// OpenClaw containers use a separate freezer below.
-
-	// OpenClaw Docker client + freezer (separate host, "oc-" prefix)
-	var ocClient *dockerpkg.OpenClawClient
-	var ocFreezer *dockerpkg.Freezer
-	if cfg.OpenClaw.DockerHost != "" {
-		ocDockerClient := dockerpkg.NewClient(
-			cfg.OpenClaw.DockerHost,
-			cfg.OpenClaw.Image,
-			"",
-			cfg.OpenClaw.Port,
-			cfg.OpenClaw.HostIP,
-		)
-		ocClient = dockerpkg.NewOpenClawClient(ocDockerClient, cfg.OpenClaw.DataRoot, cfg.GetLLM, s)
-		ocFreezer = dockerpkg.NewFreezerWithPrefix(ocDockerClient, "oc-", 30*time.Minute, 2*time.Hour, 5*time.Minute)
-		ocFreezer.Start()
-		defer ocFreezer.Stop()
-		ocFreezer.SetOnAfterFreeze(func(containerName string) {
-			if err := s.UpdateContainerStatusByName(context.Background(), containerName, "stopped"); err != nil {
-				log.Error().Err(err).Str("container", containerName).Msg("openclaw idle stop: update status failed")
-			}
-		})
-		log.Info().Str("docker_host", cfg.OpenClaw.DockerHost).Str("image", cfg.OpenClaw.Image).Msg("openclaw backend initialized")
-	}
-
 	// Initialize Goth providers
 	if cfg.Auth.FeishuClientID != "" {
 		baseURL := cfg.Server.PublicURL
@@ -187,21 +141,10 @@ func main() {
 	// Initialize handlers
 	authMiddleware := auth.NewMiddleware(s, cfg.Auth.AdminToken)
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
-	proxyHandler := proxy.NewHandler(s, dockerClient, nil, cfg.Docker.AgentPort, cfg.ChatAgent.URL, cfg.ChatAgent.Token)
-	execHandler := execws.NewHandler(s, dockerClient, nil)
 
-	// Inject container env vars for auto-reprovision of destroyed containers
-	envVars := containerEnvVars(cfg)
-	proxyHandler.SetContainerEnvVars(envVars)
-
-	// Build UpstreamDialer map for unified channel architecture
+	// UpstreamDialer map — OpenClaw routes are handled by oc-gateway; gateway only keeps
+	// the channel pool for legacy desktop/feishu WS connections that haven't migrated yet.
 	dialers := map[string]agent.UpstreamDialer{}
-
-	if ocClient != nil {
-		ocDialer := agent.NewOpenClawDialer(s, ocClient, ocFreezer)
-		ocDialer.SetAutoPairEnabled(true)
-		dialers[store.ContainerTypeOpenClaw] = ocDialer
-	}
 
 	channelPool := agent.NewChannelPool(s, dialers, 5*time.Minute, 1024)
 	defer channelPool.Close()
@@ -237,7 +180,7 @@ func main() {
 
 	// Authenticated: sessions
 	mux.Handle("GET /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(listSessionsHandler(s))))
-	mux.Handle("POST /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(createSessionHandler(s, dockerClient))))
+	mux.Handle("POST /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(createSessionHandler(s))))
 	mux.Handle("GET /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(getSessionHandler(s))))
 	mux.Handle("PUT /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(updateSessionHandler(s))))
 	mux.Handle("DELETE /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteSessionHandler(s))))
@@ -255,14 +198,21 @@ func main() {
 	mux.Handle("GET /api/skills/checksum", authMiddleware.Authenticate(http.HandlerFunc(skillsChecksumHandler(s))))
 	mux.Handle("GET /api/skills/pull", authMiddleware.Authenticate(http.HandlerFunc(skillsPullHandler(s))))
 
-	// Authenticated: skills CRUD (desktop → gateway DB → container hot-push)
+	// Authenticated: skills CRUD (desktop → gateway DB)
 	mux.Handle("GET /api/skills", authMiddleware.Authenticate(http.HandlerFunc(skillsListHandler(s))))
-	mux.Handle("PUT /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsUpsertHandler(s, dockerClient))))
-	mux.Handle("DELETE /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsDeleteHandler(s, dockerClient))))
+	mux.Handle("PUT /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsUpsertHandler(s))))
+	mux.Handle("DELETE /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsDeleteHandler(s))))
+
+	// OpenClaw container routes — migrated to oc-gateway (:18700)
+	ocGone := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone)
+		w.Write([]byte(`{"error":"migrated to oc-gateway"}`))
+	})
 
 	// Authenticated: cowork
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
-	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, dockerClient, ocClient, auditLogger, cfg))))
+	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(ocGone))
 
 	// Authenticated: cron announce (vm-agent → feishu delivery)
 	mux.Handle("POST /api/cron/announce", authMiddleware.Authenticate(http.HandlerFunc(feishuBotHandler.HandleCronAnnounce)))
@@ -279,11 +229,6 @@ func main() {
 	mux.Handle("POST /api/games/deploy", authMiddleware.Authenticate(http.HandlerFunc(gamesHandler.Deploy)))
 	mux.Handle("DELETE /api/games/{id}", authMiddleware.Authenticate(http.HandlerFunc(gamesHandler.Delete)))
 	mux.Handle("POST /api/feedback", authMiddleware.Authenticate(http.HandlerFunc(feedbackHandler(s, ghClient))))
-
-	// Authenticated: chat proxy
-	mux.Handle("POST /v1/chat/completions", authMiddleware.Authenticate(http.HandlerFunc(proxyHandler.ChatCompletions)))
-
-	mux.Handle("GET /ws/exec", authMiddleware.Authenticate(execHandler))
 
 	// Desktop ticket endpoint (same ticket store as webchat)
 	mux.Handle("POST /api/agent/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -312,34 +257,30 @@ func main() {
 	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
 	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
 
-	// User: available teams (templates)
-	mux.Handle("GET /api/teams", authMiddleware.Authenticate(http.HandlerFunc(userTeamsHandler(s, ocClient))))
-	mux.Handle("POST /api/teams/install", authMiddleware.Authenticate(http.HandlerFunc(installUserTeamHandler(s, ocClient, auditLogger))))
+	// User: available teams (templates) — migrated to oc-gateway
+	mux.Handle("GET /api/teams", authMiddleware.Authenticate(ocGone))
+	mux.Handle("POST /api/teams/install", authMiddleware.Authenticate(ocGone))
 
-	// User: JaMOSS read proxy (OpenClaw middleware)
-	jamossProxy := authMiddleware.Authenticate(http.HandlerFunc(jamossProxyHandler(s, ocClient)))
-	mux.Handle("GET /api/jamoss", jamossProxy)
-	mux.Handle("GET /api/jamoss/", jamossProxy)
-	mux.Handle("POST /api/jamoss", jamossProxy)
-	mux.Handle("POST /api/jamoss/", jamossProxy)
-	mux.Handle("PUT /api/jamoss", jamossProxy)
-	mux.Handle("PUT /api/jamoss/", jamossProxy)
-	mux.Handle("DELETE /api/jamoss", jamossProxy)
-	mux.Handle("DELETE /api/jamoss/", jamossProxy)
-	mux.Handle("PATCH /api/jamoss", jamossProxy)
-	mux.Handle("PATCH /api/jamoss/", jamossProxy)
+	// User: JaMOSS read proxy — migrated to oc-gateway
+	mux.Handle("GET /api/jamoss", authMiddleware.Authenticate(ocGone))
+	mux.Handle("GET /api/jamoss/", authMiddleware.Authenticate(ocGone))
+	mux.Handle("POST /api/jamoss", authMiddleware.Authenticate(ocGone))
+	mux.Handle("POST /api/jamoss/", authMiddleware.Authenticate(ocGone))
+	mux.Handle("PUT /api/jamoss", authMiddleware.Authenticate(ocGone))
+	mux.Handle("PUT /api/jamoss/", authMiddleware.Authenticate(ocGone))
+	mux.Handle("DELETE /api/jamoss", authMiddleware.Authenticate(ocGone))
+	mux.Handle("DELETE /api/jamoss/", authMiddleware.Authenticate(ocGone))
+	mux.Handle("PATCH /api/jamoss", authMiddleware.Authenticate(ocGone))
+	mux.Handle("PATCH /api/jamoss/", authMiddleware.Authenticate(ocGone))
 
-	// Admin: container management
-	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listContainersHandler(dockerClient)))))
-	mux.Handle("GET /api/admin/templates", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(listTemplatesHandler(ocClient)))))
-	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(startContainerHandler(dockerClient, s, auditLogger)))))
-	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(stopContainerHandler(dockerClient, s, auditLogger)))))
-	mux.Handle("POST /api/admin/containers/{id}/sync-config", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(syncContainerConfigHandler(s, ocClient, auditLogger)))))
-	mux.Handle("POST /api/admin/containers/{id}/install-template", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(installTemplateHandler(s, ocClient, auditLogger)))))
-	mux.Handle("POST /api/admin/containers/{id}/restart", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(restartContainerHandler(dockerClient, ocClient, s, auditLogger)))))
-
-	// Admin: user management (container provisioning after activation)
-	mux.Handle("POST /api/admin/provision", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(provisionContainerHandler(s, dockerClient, auditLogger, cfg)))))
+	// Admin: container management — migrated to oc-gateway
+	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
+	mux.Handle("GET /api/admin/templates", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
+	mux.Handle("POST /api/admin/containers/{id}/start", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
+	mux.Handle("POST /api/admin/containers/{id}/stop", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
+	mux.Handle("POST /api/admin/containers/{id}/sync-config", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
+	mux.Handle("POST /api/admin/containers/{id}/install-template", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
+	mux.Handle("POST /api/admin/containers/{id}/restart", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
 
 	// Admin: invite codes
 	mux.Handle("POST /api/admin/invite-codes", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(createInviteCodeHandler(s)))))
@@ -349,8 +290,8 @@ func main() {
 	mux.Handle("GET /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(getSettingsHandler(s)))))
 	mux.Handle("PUT /api/admin/settings", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateSettingsHandler(s, cfg, auditLogger, feishuBotClient, ghClient, ph)))))
 
-	// Admin: logs
-	mux.Handle("GET /api/admin/logs", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(adminLogsHandler(dockerClient)))))
+	// Admin: logs — migrated to oc-gateway
+	mux.Handle("GET /api/admin/logs", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -455,478 +396,6 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func listContainersHandler(client *dockerpkg.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		containers, err := client.List()
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, containers)
-	}
-}
-
-func listTemplatesHandler(ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		templates, err := ocClient.ListTemplates()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if templates == nil {
-			templates = []dockerpkg.TemplateSummary{}
-		}
-		writeJSON(w, http.StatusOK, templates)
-	}
-}
-
-// userTeamsHandler returns the templates available to the current user.
-// Unlike the admin endpoint, this includes the current installed template and active leader session key.
-func userTeamsHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
-	type response struct {
-		Installed        string                      `json:"installed"`
-		ActiveSessionKey string                      `json:"activeSessionKey"`
-		Available        []dockerpkg.TemplateSummary `json:"available"`
-	}
-
-	leaderSessionKey := func(tmpl *dockerpkg.TemplateSummary) string {
-		if tmpl == nil {
-			return ""
-		}
-		for _, agent := range tmpl.Agents {
-			if agent.IsLeader && strings.TrimSpace(agent.ID) != "" {
-				return fmt.Sprintf("agent:%s:main", agent.ID)
-			}
-		}
-		return ""
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		available, err := ocClient.ListTemplates()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if available == nil {
-			available = []dockerpkg.TemplateSummary{}
-		}
-
-		installed, _ := s.GetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw)
-		activeSessionKey := ""
-		if installed != "" {
-			if tmpl, err := ocClient.GetTemplateSummary(installed); err == nil {
-				activeSessionKey = leaderSessionKey(tmpl)
-			}
-		}
-
-		writeJSON(w, http.StatusOK, response{
-			Installed:        installed,
-			ActiveSessionKey: activeSessionKey,
-			Available:        available,
-		})
-	}
-}
-
-func installUserTeamHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient, al *audit.Logger) http.HandlerFunc {
-	type installRequest struct {
-		Template string `json:"template"`
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		var req installRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-		req.Template = strings.TrimSpace(req.Template)
-		if req.Template == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template is required"})
-			return
-		}
-
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "openclaw container not found"})
-			return
-		}
-
-		result, err := ocClient.InstallTemplate(r.Context(), info, req.Template)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		if err := s.SetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw, result.Template); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		al.Log(user.ID, "team_install", "template", fmt.Sprintf("%s:%s", info.ContainerName, req.Template), r.RemoteAddr)
-		writeJSON(w, http.StatusOK, result)
-	}
-}
-
-const jamossProxyPrefix = "/api/jamoss"
-
-func jamossProxyHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		if r.Method != http.MethodGet {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-			return
-		}
-
-		upstreamPath, logicalPath := buildJaMOSSProxyPaths(r.URL.Path)
-		if !isAllowedJaMOSSReadPath(logicalPath) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "jamoss path not allowed"})
-			return
-		}
-
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "openclaw container not found"})
-			return
-		}
-		if info.ContainerIP == "" || info.HostPort == 0 {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw container endpoint unavailable"})
-			return
-		}
-
-		if err := ocClient.EnsureRunning(r.Context(), info); err != nil {
-			log.Warn().Err(err).Str("user_id", user.ID).Str("container", info.ContainerName).Msg("jamoss proxy: ensure running failed")
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw container unavailable"})
-			return
-		}
-
-		if !ocClient.IsJaMOSSInstalled(info.ContainerName) {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "jamoss not installed in this container"})
-			return
-		}
-
-		// JaMOSS runs on port 6565 inside the container (same host as OpenClaw)
-		target := &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", info.ContainerIP, 6565)}
-		proxy := &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				req.URL.Path = upstreamPath
-				req.URL.RawPath = ""
-				req.Host = target.Host
-				req.Header.Del("Authorization")
-				req.Header.Set("X-Admin-Token", info.ContainerToken)
-			},
-			ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
-				log.Error().Err(err).Str("target", target.Host).Str("user_id", user.ID).Str("path", logicalPath).Msg("jamoss proxy error")
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "jamoss upstream unavailable"})
-			},
-		}
-
-		proxy.ServeHTTP(w, r)
-	}
-}
-
-func buildJaMOSSProxyPaths(requestPath string) (upstreamPath string, logicalPath string) {
-	relative := strings.TrimPrefix(requestPath, jamossProxyPrefix)
-	if relative == "" {
-		relative = "/"
-	}
-	if !strings.HasPrefix(relative, "/") {
-		relative = "/" + relative
-	}
-	clean := path.Clean(relative)
-	if clean == "." {
-		clean = "/"
-	}
-	return "/api" + clean, clean
-}
-
-func isAllowedJaMOSSReadPath(p string) bool {
-	if p == "/admin/login" {
-		return false
-	}
-	if strings.HasPrefix(p, "/admin/agents/") && strings.HasSuffix(p, "/reset-key") {
-		return false
-	}
-
-	switch {
-	case strings.HasPrefix(p, "/admin/tasks"):
-		return true
-	case strings.HasPrefix(p, "/admin/sub-tasks"):
-		return true
-	case p == "/agents":
-		return true
-	case strings.HasPrefix(p, "/scores/"):
-		return true
-	case strings.HasPrefix(p, "/review-records"):
-		return true
-	case strings.HasPrefix(p, "/logs"):
-		return true
-	case strings.HasPrefix(p, "/feed/"):
-		return true
-	case strings.HasPrefix(p, "/tasks"):
-		return true
-	case strings.HasPrefix(p, "/sub-tasks"):
-		return true
-	default:
-		return false
-	}
-}
-
-func installTemplateHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient, al *audit.Logger) http.HandlerFunc {
-	type installRequest struct {
-		Template string `json:"template"`
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		var req installRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-		req.Template = strings.TrimSpace(req.Template)
-		if req.Template == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template is required"})
-			return
-		}
-
-		containerName := r.PathValue("id")
-		info, err := s.GetContainerInfoByName(r.Context(), containerName)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
-			return
-		}
-
-		if info.ContainerType != store.ContainerTypeOpenClaw {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "install-template only supported for openclaw containers"})
-			return
-		}
-
-		result, err := ocClient.InstallTemplate(r.Context(), info, req.Template)
-		if err != nil {
-			switch {
-			case errors.Is(err, dockerpkg.ErrTemplateNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			case errors.Is(err, dockerpkg.ErrTemplatesDirNotFound):
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			}
-			return
-		}
-
-		al.Log(user.ID, "container_install_template", "container", fmt.Sprintf("%s:%s", containerName, req.Template), r.RemoteAddr)
-		writeJSON(w, http.StatusOK, result)
-	}
-}
-
-func startContainerHandler(client *dockerpkg.Client, s *store.Store, al *audit.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		user := auth.GetUser(r.Context())
-		if err := client.Start(id); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-			return
-		}
-		if err := s.UpdateContainerStatusByName(r.Context(), id, "running"); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		al.Log(user.ID, "container_start", "container", id, r.RemoteAddr)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "started", "container": id})
-	}
-}
-
-func stopContainerHandler(client *dockerpkg.Client, s *store.Store, al *audit.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		user := auth.GetUser(r.Context())
-		if err := client.Stop(id); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-			return
-		}
-		if err := s.UpdateContainerStatusByName(r.Context(), id, "stopped"); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		al.Log(user.ID, "container_stop", "container", id, r.RemoteAddr)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "container": id})
-	}
-}
-
-func syncContainerConfigHandler(s *store.Store, ocClient *dockerpkg.OpenClawClient, al *audit.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		user := auth.GetUser(r.Context())
-
-		info, err := s.GetContainerInfoByName(r.Context(), id)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
-			return
-		}
-
-		if info.ContainerType != store.ContainerTypeOpenClaw {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync-config only supported for openclaw containers"})
-			return
-		}
-
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		changed, err := ocClient.SyncConfig(r.Context(), info)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		al.Log(user.ID, "container_sync_config", "container", id, r.RemoteAddr)
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"container": id,
-			"changed":   changed,
-		})
-	}
-}
-
-func restartContainerHandler(vmClient *dockerpkg.Client, ocClient *dockerpkg.OpenClawClient, s *store.Store, al *audit.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		user := auth.GetUser(r.Context())
-
-		// Determine which docker client to use based on container type
-		info, err := s.GetContainerInfoByName(r.Context(), id)
-		var client *dockerpkg.Client
-		if err == nil && info.ContainerType == store.ContainerTypeOpenClaw && ocClient != nil {
-			client = ocClient.DockerClient()
-		} else {
-			client = vmClient
-		}
-
-		if err := client.Stop(id); err != nil {
-			log.Warn().Err(err).Str("container", id).Msg("restart: stop failed (may already be stopped)")
-		}
-
-		time.Sleep(2 * time.Second)
-
-		if err := client.Start(id); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": fmt.Sprintf("start failed: %s", err.Error())})
-			return
-		}
-
-		if err := s.UpdateContainerStatusByName(r.Context(), id, "running"); err != nil {
-			log.Warn().Err(err).Str("container", id).Msg("restart: update status failed")
-		}
-
-		al.Log(user.ID, "container_restart", "container", id, r.RemoteAddr)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "restarted", "container": id})
-	}
-}
-
-func provisionContainerHandler(s *store.Store, dockerClient *dockerpkg.Client, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
-	type provisionRequest struct {
-		UserID   string `json:"user_id"`
-		Username string `json:"username"`
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req provisionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-		if req.UserID == "" || req.Username == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id and username required"})
-			return
-		}
-
-		admin := auth.GetUser(r.Context())
-
-		containerToken, err := generateToken()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate container token"})
-			return
-		}
-		containerName := containerNameForUser(req.UserID)
-		hostPort := allocateHostPort(r.Context(), s, req.UserID)
-
-		if err := s.CreateContainer(r.Context(), req.UserID, containerName, containerToken, hostPort, "vm-agent"); err != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
-			return
-		}
-
-		envVars := containerEnvVars(cfg)
-
-		// Respond immediately — provisioning runs in background
-		al.Log(admin.ID, "provision_container", "container", containerName, r.RemoteAddr)
-		writeJSON(w, http.StatusAccepted, map[string]interface{}{
-			"user_id":   req.UserID,
-			"container": containerName,
-			"status":    "provisioning",
-		})
-
-		go func() {
-			ip, err := dockerClient.ProvisionContainer(containerName, req.UserID, containerToken, envVars, hostPort)
-			if err != nil {
-				log.Error().Err(err).Str("container", containerName).Msg("async provision failed")
-				return
-			}
-			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer bgCancel()
-			if err := s.UpdateContainer(bgCtx, req.UserID, store.ContainerTypeVMAgent, containerName, ip, containerToken, hostPort); err != nil {
-				log.Error().Err(err).Str("container", containerName).Msg("async provision: persist failed")
-				return
-			}
-			log.Info().Str("container", containerName).Str("ip", ip).Str("user", req.Username).Msg("async provision complete")
-		}()
-	}
-}
-
 func createInviteCodeHandler(s *store.Store) http.HandlerFunc {
 	type createRequest struct {
 		Role      string `json:"role"`
@@ -1016,7 +485,7 @@ func getSessionHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func createSessionHandler(s *store.Store, dockerClient *dockerpkg.Client) http.HandlerFunc {
+func createSessionHandler(s *store.Store) http.HandlerFunc {
 	type createSessionRequest struct {
 		Type          string `json:"type"`
 		WorkspacePath string `json:"workspace_path"`
@@ -1104,7 +573,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 		}
 		containerType := r.URL.Query().Get("container_type")
 		if containerType == "" {
-			containerType = store.ContainerTypeVMAgent
+			containerType = store.ContainerTypeOpenClaw
 		}
 		info, err := s.GetContainerInfo(r.Context(), user.ID, containerType)
 		if err != nil {
@@ -1133,156 +602,6 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 			resp["container_token"] = info.ContainerToken
 		}
 		writeJSON(w, http.StatusOK, resp)
-	}
-}
-
-// selfProvisionHandler allows a user to provision their own container.
-// Accepts optional container_type in request body: "vm-agent" (default) or "openclaw".
-func selfProvisionHandler(s *store.Store, dockerClient *dockerpkg.Client, ocClient *dockerpkg.OpenClawClient, al *audit.Logger, cfg *config.Config) http.HandlerFunc {
-	type provisionBody struct {
-		ContainerType string `json:"container_type"`
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		var body provisionBody
-		_ = json.NewDecoder(r.Body).Decode(&body) // empty body is fine → defaults to vm-agent
-
-		containerType := body.ContainerType
-		if containerType == "" {
-			containerType = "vm-agent"
-		}
-		if containerType != "vm-agent" && containerType != "openclaw" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid container_type"})
-			return
-		}
-
-		if containerType == "openclaw" && ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		// Check if already provisioned
-		info, err := s.GetContainerInfo(r.Context(), user.ID, containerType)
-		if err == nil && info.ContainerName != "" {
-			// Container record exists. If stopped/paused, try to start it.
-			if info.Status != "running" && info.Status != "creating" {
-				if containerType == "openclaw" && ocClient != nil {
-					if startErr := ocClient.EnsureRunning(r.Context(), info); startErr != nil {
-						log.Warn().Err(startErr).Str("container", info.ContainerName).Msg("self-provision: ensure running failed")
-					} else {
-						_ = s.UpdateContainerStatusByName(r.Context(), info.ContainerName, "running")
-					}
-				}
-			}
-			resp := map[string]interface{}{
-				"status":         "ready",
-				"container_name": info.ContainerName,
-				"container_type": info.ContainerType,
-			}
-			if info.ContainerType == "openclaw" {
-				resp["container_token"] = info.ContainerToken
-			}
-			writeJSON(w, http.StatusOK, resp)
-			return
-		}
-
-		containerToken, err := generateToken()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate container token"})
-			return
-		}
-
-		var containerName string
-		var hostPort int
-
-		if containerType == "openclaw" {
-			containerName = openClawContainerName(user.ID)
-			hostPort = allocateOpenClawPort(r.Context(), s, user.ID)
-		} else {
-			containerName = containerNameForUser(user.ID)
-			hostPort = allocateHostPort(r.Context(), s, user.ID)
-		}
-
-		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken, hostPort, containerType); err != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
-			return
-		}
-
-		al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
-		resp := map[string]interface{}{
-			"status":         "provisioning",
-			"container_name": containerName,
-			"container_type": containerType,
-		}
-		if containerType == "openclaw" {
-			resp["container_token"] = containerToken
-		}
-		writeJSON(w, http.StatusAccepted, resp)
-
-		userID := user.ID
-		if containerType == "openclaw" {
-			go func() {
-				ip, err := ocClient.Provision(containerName, userID, containerToken, hostPort)
-				if err != nil {
-					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision failed")
-					return
-				}
-				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer bgCancel()
-				if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeOpenClaw, containerName, ip, containerToken, hostPort); err != nil {
-					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision: persist failed")
-					return
-				}
-				log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async openclaw provision complete")
-			}()
-		} else {
-			envVars := containerEnvVars(cfg)
-			go func() {
-				ip, err := dockerClient.ProvisionContainer(containerName, userID, containerToken, envVars, hostPort)
-				if err != nil {
-					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision failed")
-					return
-				}
-				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer bgCancel()
-				if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeVMAgent, containerName, ip, containerToken, hostPort); err != nil {
-					log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async self-provision: persist failed")
-					return
-				}
-				log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async self-provision complete")
-
-				// Push memory + skills to newly provisioned vm-agent container
-				bgCtx2 := context.Background()
-				memFiles, err := s.GetAllMemoryFiles(bgCtx2, userID)
-				if err == nil && len(memFiles) > 0 {
-					fileMap := make(map[string]string, len(memFiles))
-					for _, f := range memFiles {
-						fileMap[f.FilePath] = f.Content
-					}
-					if err := dockerClient.PushMemoryFiles(containerName, fileMap); err != nil {
-						log.Error().Err(err).Str("container", containerName).Msg("provision: push memory failed")
-					}
-				}
-				for _, owner := range []string{"system", userID} {
-					skillFiles, err := s.GetSkillFiles(bgCtx2, owner)
-					if err == nil && len(skillFiles) > 0 {
-						fileMap := make(map[string]string, len(skillFiles))
-						for _, f := range skillFiles {
-							fileMap[f.FilePath] = f.Content
-						}
-						if err := dockerClient.PushSkillFiles(containerName, fileMap); err != nil {
-							log.Error().Err(err).Str("container", containerName).Msg("provision: push skills failed")
-						}
-					}
-				}
-			}()
-		}
 	}
 }
 
@@ -1823,42 +1142,6 @@ func validateSkillID(skillID string) bool {
 	return true
 }
 
-// pushSkillsToContainer asynchronously re-pushes all skill files (system + user) to the user's container.
-func pushSkillsToContainer(s *store.Store, dc *dockerpkg.Client, userID string) {
-	if dc == nil {
-		return
-	}
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		cInfo, err := s.GetContainerInfo(bgCtx, userID, store.ContainerTypeVMAgent)
-		if err != nil || cInfo.Status != "running" {
-			return
-		}
-
-		// Clear existing skills in container
-		dc.Exec(cInfo.ContainerName, "sh", "-c", "rm -rf /home/agent/.jacoworks/skills/* 2>/dev/null; true")
-
-		// Merge system + user skill files and push
-		for _, owner := range []string{"system", userID} {
-			files, err := s.GetSkillFiles(bgCtx, owner)
-			if err != nil || len(files) == 0 {
-				continue
-			}
-			fileMap := make(map[string]string, len(files))
-			for _, f := range files {
-				fileMap[f.FilePath] = f.Content
-			}
-			if err := dc.PushSkillFiles(cInfo.ContainerName, fileMap); err != nil {
-				log.Warn().Err(err).Str("container", cInfo.ContainerName).Str("owner", owner).Msg("skill hot-push failed")
-			}
-		}
-
-		log.Info().Str("container", cInfo.ContainerName).Str("user_id", userID).Msg("skill hot-push complete")
-	}()
-}
-
 func skillsListHandler(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
@@ -1884,7 +1167,7 @@ func skillsListHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func skillsUpsertHandler(s *store.Store, dc *dockerpkg.Client) http.HandlerFunc {
+func skillsUpsertHandler(s *store.Store) http.HandlerFunc {
 	type fileEntry struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -1934,9 +1217,6 @@ func skillsUpsertHandler(s *store.Store, dc *dockerpkg.Client) http.HandlerFunc 
 			return
 		}
 
-		// Async hot-push to container
-		pushSkillsToContainer(s, dc, user.ID)
-
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"status":     "ok",
 			"skill_id":   skillID,
@@ -1945,7 +1225,7 @@ func skillsUpsertHandler(s *store.Store, dc *dockerpkg.Client) http.HandlerFunc 
 	}
 }
 
-func skillsDeleteHandler(s *store.Store, dc *dockerpkg.Client) http.HandlerFunc {
+func skillsDeleteHandler(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1964,9 +1244,6 @@ func skillsDeleteHandler(s *store.Store, dc *dockerpkg.Client) http.HandlerFunc 
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete skill"})
 			return
 		}
-
-		// Async hot-push to container
-		pushSkillsToContainer(s, dc, user.ID)
 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
@@ -2224,250 +1501,10 @@ func cronJobHistoryHandler() http.HandlerFunc {
 	}
 }
 
-func adminLogsHandler(dockerClient *dockerpkg.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		service := r.URL.Query().Get("service")
-		container := r.URL.Query().Get("container")
-		level := r.URL.Query().Get("level")
-		search := r.URL.Query().Get("search")
-		linesStr := r.URL.Query().Get("lines")
-
-		lines := 200
-		if linesStr != "" {
-			if n, err := strconv.Atoi(linesStr); err == nil && n > 0 && n <= 1000 {
-				lines = n
-			}
-		}
-
-		var rawLogs string
-		var err error
-
-		switch service {
-		case "agent":
-			if container == "" {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "container parameter required for agent logs"})
-				return
-			}
-			rawLogs, err = dockerClient.ContainerLogs(container, lines)
-			if err != nil {
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("failed to fetch container logs: %v", err)})
-				return
-			}
-		case "gateway", "":
-			args := []string{
-				"-u", "jacoworks-gateway",
-				"--output=json",
-				"--no-pager",
-				"-n", fmt.Sprintf("%d", lines),
-			}
-			if since := r.URL.Query().Get("since"); since != "" {
-				args = append(args, "--since", since)
-			}
-			cmd := exec.Command("journalctl", args...)
-			out, cmdErr := cmd.CombinedOutput()
-			if cmdErr != nil {
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("journalctl failed: %v", cmdErr)})
-				return
-			}
-			rawLogs = string(out)
-		default:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "service must be 'gateway' or 'agent'"})
-			return
-		}
-
-		type LogEntry struct {
-			Level     string `json:"level"`
-			Msg       string `json:"msg"`
-			Ts        string `json:"ts"`
-			TraceID   string `json:"trace_id,omitempty"`
-			SessionID string `json:"session_id,omitempty"`
-			UserID    string `json:"user_id,omitempty"`
-			Service   string `json:"service,omitempty"`
-			Raw       string `json:"raw,omitempty"`
-		}
-
-		var entries []LogEntry
-		for _, line := range strings.Split(rawLogs, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-
-			var entry map[string]interface{}
-			if err := json.Unmarshal([]byte(line), &entry); err != nil {
-				entries = append(entries, LogEntry{
-					Level: "info",
-					Msg:   line,
-					Raw:   line,
-				})
-				continue
-			}
-
-			le := LogEntry{}
-
-			if service == "gateway" || service == "" {
-				if msg, ok := entry["MESSAGE"].(string); ok {
-					var inner map[string]interface{}
-					if json.Unmarshal([]byte(msg), &inner) == nil {
-						le.Level = strVal(inner, "level")
-						le.Msg = strVal(inner, "message")
-						if le.Msg == "" {
-							le.Msg = strVal(inner, "msg")
-						}
-						le.TraceID = strVal(inner, "trace_id")
-						le.SessionID = strVal(inner, "session_id")
-						le.UserID = strVal(inner, "user_id")
-						le.Service = "gateway"
-						if ts, ok := entry["__REALTIME_TIMESTAMP"].(string); ok {
-							if tsInt, err := strconv.ParseInt(ts, 10, 64); err == nil {
-								le.Ts = time.Unix(0, tsInt*1000).UTC().Format(time.RFC3339Nano)
-							}
-						}
-					} else {
-						le.Level = "info"
-						le.Msg = msg
-						le.Service = "gateway"
-						le.Raw = msg
-					}
-				} else {
-					continue
-				}
-			} else {
-				le.Level = strVal(entry, "level")
-				le.Msg = strVal(entry, "msg")
-				le.Ts = strVal(entry, "ts")
-				le.TraceID = strVal(entry, "trace_id")
-				le.SessionID = strVal(entry, "session_id")
-				le.UserID = strVal(entry, "user_id")
-				le.Service = strVal(entry, "service")
-				if le.Service == "" {
-					le.Service = "vm-agent"
-				}
-			}
-
-			if level != "" && le.Level != level {
-				continue
-			}
-
-			if search != "" {
-				searchLower := strings.ToLower(search)
-				if !strings.Contains(strings.ToLower(le.Msg), searchLower) &&
-					!strings.Contains(strings.ToLower(le.TraceID), searchLower) &&
-					!strings.Contains(strings.ToLower(le.SessionID), searchLower) &&
-					!strings.Contains(strings.ToLower(le.UserID), searchLower) &&
-					!strings.Contains(strings.ToLower(le.Raw), searchLower) {
-					continue
-				}
-			}
-
-			entries = append(entries, le)
-		}
-
-		if entries == nil {
-			entries = []LogEntry{}
-		}
-
-		writeJSON(w, http.StatusOK, entries)
-	}
-}
-
-func strVal(m map[string]interface{}, key string) string {
-	if v, ok := m[key]; ok {
-		switch t := v.(type) {
-		case string:
-			return t
-		case float64:
-			return fmt.Sprintf("%.0f", t)
-		default:
-			return fmt.Sprintf("%v", v)
-		}
-	}
-	return ""
-}
-
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
-}
-
-func generateToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
-// containerEnvVars builds the environment variables to inject into a new container.
-// Includes all LLM-related keys that vm-agent's config.ts reads from env.
-func containerEnvVars(cfg *config.Config) map[string]string {
-	llm := cfg.GetLLM()
-	env := map[string]string{
-		"LLM_PROXY_URL":  llm.ProxyURL,
-		"LLM_PROXY_KEY":  llm.ProxyKey,
-		"OPENAI_API_KEY": llm.OpenAIAPIKey,
-		"FAL_API_KEY":    llm.FalAPIKey,
-	}
-	// Optional keys — only inject if configured
-	if llm.EmbeddingAPIKey != "" {
-		env["EMBEDDING_API_KEY"] = llm.EmbeddingAPIKey
-	}
-	if llm.EmbeddingBaseURL != "" {
-		env["EMBEDDING_BASE_URL"] = llm.EmbeddingBaseURL
-	}
-	if llm.TavilyKey != "" {
-		env["TAVILY_API_KEY"] = llm.TavilyKey
-	}
-	if llm.ExaAPIKey != "" {
-		env["EXA_API_KEY"] = llm.ExaAPIKey
-	}
-	if llm.JimengAPIURL != "" {
-		env["JIMENG_API_URL"] = llm.JimengAPIURL
-	}
-	if llm.JimengAPIKey != "" {
-		env["JIMENG_API_KEY"] = llm.JimengAPIKey
-	}
-	if llm.PrimaryModel != "" {
-		env["PRIMARY_MODEL"] = llm.PrimaryModel
-	}
-	if llm.PrimaryProvider != "" {
-		env["PRIMARY_PROVIDER"] = llm.PrimaryProvider
-	}
-	if cfg.Docker.GatewayToken != "" {
-		env["GATEWAY_TOKEN"] = cfg.Docker.GatewayToken
-	}
-	if cfg.Server.PublicURL != "" {
-		env["GATEWAY_URL"] = cfg.Server.PublicURL
-	}
-	return env
-}
-
-func containerNameForUser(userID string) string {
-	sum := sha256.Sum256([]byte(userID))
-	return "agent-" + hex.EncodeToString(sum[:8])
-}
-
-func openClawContainerName(userID string) string {
-	sum := sha256.Sum256([]byte(userID))
-	return "oc-" + hex.EncodeToString(sum[:8])
-}
-
-// allocateHostPort assigns a unique host port from the range [19000, 19999].
-// It uses a deterministic base from the user ID hash and probes for an unused port.
-func allocateHostPort(ctx context.Context, s *store.Store, userID string) int {
-	sum := sha256.Sum256([]byte(userID))
-	base := int(sum[0])<<8 | int(sum[1])
-	port := 19000 + (base % 1000)
-	// Simple approach: deterministic mapping. Collisions are rare with <1000 users.
-	// For production scale, query DB for used ports and find a free one.
-	return port
-}
-
-func allocateOpenClawPort(ctx context.Context, s *store.Store, userID string) int {
-	sum := sha256.Sum256([]byte(userID))
-	base := int(sum[0])<<8 | int(sum[1])
-	return 18800 + (base % 200) // Keep range small: 18800-18999
 }
 
 func isTerminal() bool {

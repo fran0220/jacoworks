@@ -1,0 +1,19 @@
+server:
+  port: 18700
+  host: "0.0.0.0"
+
+auth:
+  admin_token: ""
+
+database:
+  url: "postgresql://postgres:PASSWORD@127.0.0.1:5433/jacoworks"
+
+openclaw:
+  docker_host: ""  # ignored for Incus — uses local Unix socket
+  image: "openclaw-base"  # Incus image alias (was Docker image name)
+  port: 18789
+  host_ip: "127.0.0.1"
+  base_port: 18800
+  data_root: "/srv/jacoworks/openclaw"
+
+llm: {}

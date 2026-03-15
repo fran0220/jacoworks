@@ -3,28 +3,34 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 
-	dockerpkg "github.com/fran0220/jacoworks/gateway/internal/docker"
 	ocpkg "github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 	"github.com/rs/zerolog/log"
 )
 
+// OpenClawBackend abstracts OpenClaw container operations for the WS dialer.
+// *openclaw.Client satisfies this interface.
+type OpenClawBackend interface {
+	EnsureRunning(ctx context.Context, info *store.ContainerInfo) error
+	UpstreamAddr(info *store.ContainerInfo) string
+}
+
 // OpenClawDialer implements UpstreamDialer for OpenClaw containers.
 // Messages are transparently proxied — the OC protocol is managed by the webchat client.
 type OpenClawDialer struct {
 	store           *store.Store
-	oc              *dockerpkg.OpenClawClient
+	oc              OpenClawBackend
 	freezer         Freezer
 	autoPairEnabled bool
 }
 
-func NewOpenClawDialer(s *store.Store, oc *dockerpkg.OpenClawClient, freezer Freezer) *OpenClawDialer {
+func NewOpenClawDialer(s *store.Store, oc OpenClawBackend, freezer Freezer) *OpenClawDialer {
 	return &OpenClawDialer{
 		store:   s,
 		oc:      oc,
@@ -47,12 +53,22 @@ func (d *OpenClawDialer) EnsureRunning(ctx context.Context, info *store.Containe
 func (d *OpenClawDialer) Dial(info *store.ContainerInfo) (*websocket.Conn, error) {
 	upstreamURL := d.UpstreamURL(info)
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	// Set Origin header to match OpenClaw's allowedOrigins
-	originURL := strings.Replace(upstreamURL, "ws://", "http://", 1)
+	// Set Origin to match OpenClaw's allowedOrigins for control-ui mode.
+	originURL := "http://127.0.0.1:" + fmt.Sprintf("%d", info.HostPort)
+	if info.HostPort == 0 {
+		originURL = "http://127.0.0.1:18789"
+	}
 	headers := http.Header{"Origin": []string{originURL}}
 	conn, _, err := dialer.Dial(upstreamURL, headers)
 	if err != nil {
 		return nil, err
+	}
+
+	// Complete OpenClaw challenge-response handshake so the upstream
+	// connection is authenticated before we start proxying client messages.
+	if err := ocpkg.HandshakeConn(conn, info.ContainerToken, 10*time.Second); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("openclaw handshake: %w", err)
 	}
 
 	// Start auto-pairer in background

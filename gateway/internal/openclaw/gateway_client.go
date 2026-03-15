@@ -151,6 +151,80 @@ func (gc *GatewayClient) RevokePair(ctx context.Context, deviceID string) error 
 	return nil
 }
 
+// HandshakeConn performs the OpenClaw challenge-response handshake on an
+// already-established WebSocket connection. On success the connection is
+// authenticated and ready for protocol traffic.
+// This is used by the ChannelPool upstream dialer to authenticate the
+// persistent proxy connection before forwarding client messages.
+func HandshakeConn(conn *websocket.Conn, token string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = defaultConnectTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	conn.SetReadDeadline(deadline)
+	defer conn.SetReadDeadline(time.Time{})
+
+	// 1. Wait for connect.challenge
+	var challenge Frame
+	if err := conn.ReadJSON(&challenge); err != nil {
+		return fmt.Errorf("read challenge: %w", err)
+	}
+	if challenge.Type != "event" || challenge.Event != "connect.challenge" {
+		return fmt.Errorf("expected connect.challenge, got type=%q event=%q", challenge.Type, challenge.Event)
+	}
+
+	log.Debug().Msg("openclaw handshake: received connect.challenge")
+
+	// 2. Send connect request
+	reqID := fmt.Sprintf("hs-%d", time.Now().UnixNano())
+	connectParams := ConnectParams{
+		MinProtocol: 3,
+		MaxProtocol: 3,
+		Client: ClientInfo{
+			ID:       "openclaw-control-ui",
+			Version:  "1.0.0",
+			Platform: "linux",
+			Mode:     "ui",
+		},
+		Auth:   AuthInfo{Token: token},
+		Role:   "operator",
+		Scopes: []string{"operator.admin", "operator.read", "operator.write", "operator.pairing", "operator.approvals", "operator.talk.secrets"},
+		Caps:   []string{"tool-events"},
+	}
+	paramsJSON, err := json.Marshal(connectParams)
+	if err != nil {
+		return fmt.Errorf("marshal connect params: %w", err)
+	}
+
+	req := Frame{
+		Type:   "req",
+		ID:     reqID,
+		Method: "connect",
+		Params: paramsJSON,
+	}
+
+	conn.SetWriteDeadline(deadline)
+	if err := conn.WriteJSON(req); err != nil {
+		return fmt.Errorf("write connect: %w", err)
+	}
+	conn.SetWriteDeadline(time.Time{})
+
+	// 3. Wait for response
+	var res Frame
+	if err := conn.ReadJSON(&res); err != nil {
+		return fmt.Errorf("read connect response: %w", err)
+	}
+	if res.Type != "res" || res.ID != reqID {
+		return fmt.Errorf("unexpected response: type=%q id=%q", res.Type, res.ID)
+	}
+	if res.OK == nil || !*res.OK {
+		return fmt.Errorf("connect rejected: %s", string(res.Error))
+	}
+
+	log.Debug().Str("response", string(res.Error)).RawJSON("payload", res.Payload).Msg("openclaw handshake: complete")
+	return nil
+}
+
 // ── Internal ──────────────────────────────────────────────────────
 
 // handshake waits for connect.challenge and sends the connect request.
@@ -180,14 +254,14 @@ func (gc *GatewayClient) handshake(ctx context.Context) error {
 		MinProtocol: 3,
 		MaxProtocol: 3,
 		Client: ClientInfo{
-			ID:       "gateway-client",
+			ID:       "openclaw-control-ui",
 			Version:  "1.0.0",
 			Platform: "linux",
-			Mode:     "backend",
+			Mode:     "ui",
 		},
 		Auth:   AuthInfo{Token: gc.token},
 		Role:   "operator",
-		Scopes: []string{"operator.read", "operator.write"},
+		Scopes: []string{"operator.admin", "operator.read", "operator.write", "operator.pairing", "operator.approvals"},
 		Caps:   []string{"tool-events"},
 	}
 	paramsJSON, err := json.Marshal(connectParams)
