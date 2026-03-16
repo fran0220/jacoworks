@@ -9,7 +9,10 @@
 ```
 桌面端 (Tauri + React)
   ├─ 本地模式: sidecar RPC → vm-agent → Pi SDK → LLM 中转站
-  └─ 协作模式: WebSocket → Go 网关 → WireGuard VPN → Docker 容器 (vm-agent)
+  └─ 协作模式: WebSocket → Go 网关 → OpenClaw Incus VM
+
+Web 聊天 (webchat React SPA)
+  └─ ticket auth → oc-gateway → OpenClaw Incus VM (Ubuntu Desktop + VNC)
 
 Go 网关 (jacoapi.jingao.club)
   ├─ 认证 (飞书 SSO / 密码 / 激活码)
@@ -31,12 +34,14 @@ Rust 官网 (jaco.jingao.club)
 | `vm-agent/` | Node.js + Pi SDK | AI Agent sidecar，本地读写文件 |
 | `gateway/` | Go + PostgreSQL | API 网关：认证、会话、代理 |
 | `website/` | Rust (Axum + Askama) | 官网、文档、管理后台 |
+| `webchat/` | React 18 + TypeScript | OpenClaw Web 聊天前端 (SPA) |
+| `openclaw/` | 团队模板 + JMOS (Go) | 多 Agent 协作模板与协作网关 |
 | `deploy/` | SQL + Shell + 部署脚本 | 部署脚本、数据库迁移 |
 
 ## 双模式
 
 - **本地模式** (`type="chat"`) — Agent 通过 sidecar RPC 直接读写本地文件，对话不经网关
-- **协作模式** (`type="cowork"`) — 每用户独立 Docker 容器，WebSocket 经网关代理到 vm-agent
+- **协作模式** (`type="cowork"`) — 每用户独立 Incus VM (Ubuntu Desktop)，通过 oc-gateway 代理到 OpenClaw
 
 ## 支持模型
 

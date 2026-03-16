@@ -277,3 +277,28 @@
 **规则**: OpenClaw 连接时必须显式请求所有需要的 scope。已知 scope 列表：`operator.admin`, `operator.read`, `operator.write`, `operator.pairing`, `operator.approvals`, `operator.talk.secrets`。`DangerouslyDisableDeviceAuth: true` 跳过设备配对，但不授予额外 scope。
 
 **附带修复**: OpenClaw 容器内 `/home/node/.openclaw/agents` 目录被 root 所有，需 `chown -R node:node` 才能让 OpenClaw 进程写入。
+
+## 2026-03-17: Python 签名问题 + MinerU PDF 读取失败
+
+**触发**: 用户报告桌面端读取 PDF 文件失败，提示 "Python库的签名问题"。macOS ARM 和 Windows 均受影响。
+
+**根因分析** (oracle 协助):
+1. **target 污染**: `release.sh` 先对所有 target 运行 `prepare-release.sh`（批量 prepare），然后才逐个 `cargo tauri build`。由于 `resources/runtimes/python/` 是共享目录，arm64 的 Python 被 x86_64 覆盖，导致 arm64 构建打包了错误架构的 Python
+2. **签名时机错误**: Python 在 `prepare-release.sh`（打包前）签名，但 Tauri 打包后最终 `.app` 里的 Python 可能未正确保留签名
+3. **本地测试不可靠**: 开发机无 Gatekeeper/quarantine/notarization 真实校验
+4. **Windows 问题**: 不是签名问题，可能是未签名的 `python.exe`/DLL 被 Defender 拦截
+
+**修复**:
+1. **MinerU 去 Python 化**: 将 `mineru_upload.py` 完整移植为 TypeScript (`vm-agent/src/lib/mineru-upload.ts`)，`read-document.ts` 直接调用，不再 spawn Python 子进程。彻底消除 PDF 读取对 Python 签名的依赖
+2. **target stamp 机制**: `prepare-release.sh` 写入 `.pbs-stamp` 文件记录 target+archive 组合，防止不同架构复用
+3. **构建顺序修复**: `release.sh` 从"批量 prepare → 批量 build"改为"逐 target prepare → build"，确保每个 target 打包对应架构的 Python
+4. **find 覆盖加强**: 签名 find 扩展覆盖 `*.bundle`、可执行权限文件
+5. **工具错误状态修复**: `read_document` 所有错误返回路径补充 `isError: true`
+6. **文件选择 fallback**: 附件上传时 workspace 为空时自动使用 `defaultWorkspace`
+
+**规则**:
+- 跨架构构建时，共享资源目录必须有 target 防污染机制（stamp/clean）
+- prepare + build 必须 per-target 原子执行，不能批量 prepare 再批量 build
+- 外部脚本依赖（Python spawn）是脆弱环节，尽量用原生 TS/Node 替代
+- 工具返回错误时，必须设置 `isError: true`，否则 UI 会显示成功
+- macOS 签名验证必须在 clean machine 上测试最终产物，不能只在开发机验证

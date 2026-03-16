@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -174,9 +175,27 @@ func main() {
 	mux.Handle("PATCH /api/jamoss", jamossProxy)
 	mux.Handle("PATCH /api/jamoss/", jamossProxy)
 
+	// VNC reverse proxy (authenticated, per-user)
+	vncHandler := authMiddleware.Authenticate(http.HandlerFunc(vncProxyHandler(s, cfg.OpenClaw.HostIP)))
+	mux.Handle("GET /vnc/", vncHandler)
+
 	mux.Handle("POST /api/admin/containers/{id}/sync-config", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(syncContainerConfigHandler(s, ocClient, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/install-template", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(installTemplateHandler(s, ocClient, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/restart", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(restartContainerHandler(ocClient, s, auditLogger)))))
+
+	// Profile CRUD (user-level)
+	mux.Handle("GET /api/profiles", authMiddleware.Authenticate(http.HandlerFunc(userListProfilesHandler(s, ocClient))))
+	mux.Handle("GET /api/profiles/{name}", authMiddleware.Authenticate(http.HandlerFunc(userGetProfileHandler(ocClient))))
+	mux.Handle("POST /api/profiles", authMiddleware.Authenticate(http.HandlerFunc(userCreateProfileHandler(s, ocClient, auditLogger))))
+	mux.Handle("PUT /api/profiles/{name}", authMiddleware.Authenticate(http.HandlerFunc(userUpdateProfileHandler(s, ocClient, auditLogger))))
+	mux.Handle("DELETE /api/profiles/{name}", authMiddleware.Authenticate(http.HandlerFunc(userDeleteProfileHandler(s, ocClient, auditLogger))))
+
+	// Template CRUD (read: user-level, write: admin-only)
+	mux.Handle("GET /api/templates", authMiddleware.Authenticate(http.HandlerFunc(listTemplatesAdminHandler(ocClient))))
+	mux.Handle("GET /api/templates/{name}", authMiddleware.Authenticate(http.HandlerFunc(getTemplateHandler(ocClient))))
+	mux.Handle("POST /api/admin/templates", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(createTemplateHandler(s, ocClient, auditLogger)))))
+	mux.Handle("PUT /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateTemplateHandler(s, ocClient, auditLogger)))))
+	mux.Handle("DELETE /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(deleteTemplateHandler(s, ocClient, auditLogger)))))
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -359,8 +378,9 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 
 		containerName := openClawContainerName(user.ID)
 		hostPort := allocateOpenClawPort(r.Context(), s, user.ID)
+		vncPort := allocateVncPort(hostPort)
 
-		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken, hostPort, store.ContainerTypeOpenClaw); err != nil {
+		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken, hostPort, vncPort, store.ContainerTypeOpenClaw); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
 			return
 		}
@@ -375,7 +395,7 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 
 		userID := user.ID
 		go func() {
-			ip, err := ocClient.Provision(containerName, userID, containerToken, hostPort)
+			ip, err := ocClient.Provision(containerName, userID, containerToken, hostPort, vncPort)
 			if err != nil {
 				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision failed")
 				return
@@ -384,7 +404,7 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer bgCancel()
 
-			if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeOpenClaw, containerName, ip, containerToken, hostPort); err != nil {
+			if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeOpenClaw, containerName, ip, containerToken, hostPort, vncPort); err != nil {
 				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision: persist failed")
 				return
 			}
@@ -442,7 +462,7 @@ func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
 			}
 		}
 
-		profiles := ocClient.ListProfiles()
+		profiles := ocClient.ListProfilesMerged(user.ID)
 		if profiles == nil {
 			profiles = []ocpkg.ProfileSummary{}
 		}
@@ -784,6 +804,369 @@ func restartContainerHandler(ocClient *ocpkg.Client, s *store.Store, al *audit.L
 	}
 }
 
+// ── Profile CRUD handlers (user-scoped) ──────────────────────
+
+func userListProfilesHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		profiles := ocClient.ListProfilesMerged(user.ID)
+		writeJSON(w, http.StatusOK, profiles)
+	}
+}
+
+func userGetProfileHandler(ocClient *ocpkg.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		name := r.PathValue("name")
+		// Try user profile first, fall back to system profile
+		detail, err := ocClient.UserGetProfileDetail(user.ID, name)
+		if err != nil {
+			if errors.Is(err, ocpkg.ErrProfileNotFound) {
+				// Try system profile
+				detail, err = ocpkg.GetProfileDetail(name)
+				if err != nil {
+					if errors.Is(err, ocpkg.ErrProfileNotFound) {
+						writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
+						return
+					}
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, detail)
+	}
+}
+
+func userCreateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
+		var detail ocpkg.ProfileDetail
+		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		detail.Name = strings.TrimSpace(detail.Name)
+		if detail.Name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+			return
+		}
+
+		// Check if user profile already exists
+		if _, err := ocClient.UserGetProfileDetail(user.ID, detail.Name); err == nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "profile already exists"})
+			return
+		}
+
+		if err := ocClient.UserSaveProfile(user.ID, &detail); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "profile_create", "profile", detail.Name, r.RemoteAddr)
+		go propagateToUserContainer(s, ocClient, user.ID)
+		writeJSON(w, http.StatusCreated, map[string]string{"name": detail.Name, "status": "created"})
+	}
+}
+
+func userUpdateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
+		name := r.PathValue("name")
+		var detail ocpkg.ProfileDetail
+		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		detail.Name = name
+
+		// Save (create or overwrite) the user profile
+		if err := ocClient.UserSaveProfile(user.ID, &detail); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "profile_update", "profile", name, r.RemoteAddr)
+		go propagateToUserContainer(s, ocClient, user.ID)
+		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "updated"})
+	}
+}
+
+func userDeleteProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+
+		name := r.PathValue("name")
+		if err := ocClient.UserDeleteProfile(user.ID, name); err != nil {
+			if errors.Is(err, ocpkg.ErrProfileNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "profile_delete", "profile", name, r.RemoteAddr)
+		go propagateToUserContainer(s, ocClient, user.ID)
+		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "deleted"})
+	}
+}
+
+// ── Template CRUD handlers ───────────────────────────────────
+
+func listTemplatesAdminHandler(ocClient *ocpkg.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		templates, err := ocClient.ListTemplates()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if templates == nil {
+			templates = []ocpkg.TemplateSummary{}
+		}
+		writeJSON(w, http.StatusOK, templates)
+	}
+}
+
+func getTemplateHandler(ocClient *ocpkg.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		name := r.PathValue("name")
+		detail, err := ocClient.GetTemplateDetail(name)
+		if err != nil {
+			if errors.Is(err, ocpkg.ErrTemplateNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	}
+}
+
+func createTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var detail ocpkg.TemplateDetail
+		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		detail.Name = strings.TrimSpace(detail.Name)
+		if detail.Name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+			return
+		}
+
+		if _, err := ocClient.GetTemplateDetail(detail.Name); err == nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "template already exists"})
+			return
+		}
+
+		if err := ocClient.SaveTemplate(&detail); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "template_create", "template", detail.Name, r.RemoteAddr)
+		go propagateToAllOpenClawContainers(s, ocClient)
+		writeJSON(w, http.StatusCreated, map[string]string{"name": detail.Name, "status": "created"})
+	}
+}
+
+func updateTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		name := r.PathValue("name")
+		var detail ocpkg.TemplateDetail
+		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		detail.Name = name
+
+		if _, err := ocClient.GetTemplateDetail(name); err != nil {
+			if errors.Is(err, ocpkg.ErrTemplateNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := ocClient.SaveTemplate(&detail); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "template_update", "template", name, r.RemoteAddr)
+		go propagateTemplateToContainers(s, ocClient, name)
+		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "updated"})
+	}
+}
+
+func deleteTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ocClient == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		name := r.PathValue("name")
+		if err := ocClient.DeleteTemplate(name); err != nil {
+			if errors.Is(err, ocpkg.ErrTemplateNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		al.Log(user.ID, "template_delete", "template", name, r.RemoteAddr)
+		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "deleted"})
+	}
+}
+
+// ── Propagation helpers ──────────────────────────────────────
+
+func propagateToUserContainer(s *store.Store, ocClient *ocpkg.Client, userID string) {
+	ctx := context.Background()
+	info, err := s.GetContainerInfo(ctx, userID, store.ContainerTypeOpenClaw)
+	if err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Msg("propagate to user: container not found")
+		return
+	}
+	if info.Status != "running" {
+		return
+	}
+	if _, err := ocClient.SyncConfig(ctx, info); err != nil {
+		log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate to user: sync config failed")
+	}
+	if _, err := ocClient.DeployProfiles(info.ContainerName); err != nil {
+		log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate to user: deploy profiles failed")
+	}
+	if _, err := ocClient.DeployUserProfiles(info.ContainerName, userID); err != nil {
+		log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate to user: deploy user profiles failed")
+	}
+}
+
+func propagateToAllOpenClawContainers(s *store.Store, ocClient *ocpkg.Client) {
+	ctx := context.Background()
+	containers, err := s.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
+	if err != nil {
+		log.Error().Err(err).Msg("propagate: list containers failed")
+		return
+	}
+	for _, info := range containers {
+		if info.Status != "running" {
+			continue
+		}
+		if _, err := ocClient.SyncConfig(ctx, info); err != nil {
+			log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate: sync config failed")
+		}
+		if _, err := ocClient.DeployProfiles(info.ContainerName); err != nil {
+			log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate: deploy profiles failed")
+		}
+	}
+}
+
+func propagateTemplateToContainers(s *store.Store, ocClient *ocpkg.Client, templateName string) {
+	ctx := context.Background()
+	containers, err := s.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
+	if err != nil {
+		log.Error().Err(err).Msg("propagate template: list containers failed")
+		return
+	}
+	for _, info := range containers {
+		if info.Status != "running" {
+			continue
+		}
+		installed, _ := s.GetContainerTemplate(ctx, info.UserID, store.ContainerTypeOpenClaw)
+		if installed != templateName {
+			continue
+		}
+		if _, err := ocClient.InstallTemplate(ctx, info, templateName); err != nil {
+			log.Warn().Err(err).Str("container", info.ContainerName).Str("template", templateName).Msg("propagate template: install failed")
+		}
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -807,6 +1190,114 @@ func allocateOpenClawPort(ctx context.Context, s *store.Store, userID string) in
 	sum := sha256.Sum256([]byte(userID))
 	base := int(sum[0])<<8 | int(sum[1])
 	return 18800 + (base % 200)
+}
+
+func allocateVncPort(ocPort int) int {
+	return ocPort + 1000 // OC=18823 → VNC=19823
+}
+
+// ── VNC reverse proxy ────────────────────────────────────────
+
+func vncProxyHandler(s *store.Store, hostIP string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		if err != nil || info.VncPort == 0 {
+			http.Error(w, "VNC not available", http.StatusServiceUnavailable)
+			return
+		}
+
+		targetPath := strings.TrimPrefix(r.URL.Path, "/vnc")
+		if targetPath == "" {
+			targetPath = "/"
+		}
+
+		// WebSocket upgrade for VNC stream (noVNC → websockify)
+		if isWebSocketUpgrade(r) {
+			proxyVncWebSocket(w, r, hostIP, info.VncPort, targetPath)
+			return
+		}
+
+		// Regular HTTP reverse proxy for noVNC static files
+		targetURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", hostIP, info.VncPort))
+		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+		originalDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			originalDirector(req)
+			req.URL.Path = targetPath
+			req.URL.RawQuery = r.URL.RawQuery
+		}
+		proxy.ServeHTTP(w, r)
+	}
+}
+
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
+func proxyVncWebSocket(w http.ResponseWriter, r *http.Request, hostIP string, port int, path string) {
+	targetURL := fmt.Sprintf("ws://%s:%d%s", hostIP, port, path)
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	headers := http.Header{}
+	if v := r.Header.Get("Sec-WebSocket-Protocol"); v != "" {
+		headers.Set("Sec-WebSocket-Protocol", v)
+	}
+
+	backConn, _, err := dialer.Dial(targetURL, headers)
+	if err != nil {
+		log.Warn().Err(err).Str("target", targetURL).Msg("vnc ws proxy: dial failed")
+		http.Error(w, "VNC backend unavailable", http.StatusBadGateway)
+		return
+	}
+	defer backConn.Close()
+
+	upgrader := websocket.Upgrader{
+		CheckOrigin:  func(r *http.Request) bool { return true },
+		Subprotocols: websocket.Subprotocols(r),
+	}
+	frontConn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Warn().Err(err).Msg("vnc ws proxy: upgrade failed")
+		return
+	}
+	defer frontConn.Close()
+
+	// Bidirectional relay
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			msgType, msg, err := backConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := frontConn.WriteMessage(msgType, msg); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			msgType, msg, err := frontConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := backConn.WriteMessage(msgType, msg); err != nil {
+				return
+			}
+		}
+	}()
+	<-done
 }
 
 func isTerminal() bool {

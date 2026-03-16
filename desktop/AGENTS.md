@@ -23,6 +23,7 @@ src/
                                AgentationDevTools (dev-only Agentation 调试面板)
                                ClawIcon ConfirmDialog CustomSelect
                                PreviewDrawer (文件预览抽屉, 语法高亮)
+                               AssistantContent (统一助手消息渲染: markdown/thinking/tool/visual/status)
     hooks/                     use-agent-bootstrap use-chat-stream
                                use-cowork-connection use-responsive-sidebar
                                use-session-state use-cron-results
@@ -34,10 +35,11 @@ src/
                                chat-stream-store (per-session 流状态, useSyncExternalStore)
                                session-store (本地 SQLite CRUD via Tauri invoke)
                                file-utils tool-utils hljs-setup cowork
+                               assistant-parts (AssistantPart 序列化/反序列化辅助)
     cowork/                    容器 API (api.ts) + 遗留类型 (types.ts)
       lib/api.ts               容器状态检查 + 自助分配
     styles/                    按组件拆分 CSS (chat composer layout sidebar task-panel...)
-    types.ts                   ChatMessage ChatSession StreamBlock
+    types.ts                   ChatMessage ChatSession AssistantPart
 ```
 
 ## Design Token — 强制约束
@@ -76,6 +78,23 @@ Desktop 在 `resources/runtimes/` 中捆绑 Python (python-build-standalone)、b
 ## 自动更新
 
 `use-updater.ts` 使用 `@tauri-apps/plugin-updater` 实现运行时自动更新。启动后检查更新 → 展示可用版本 → 用户确认下载安装。更新端点由 Rust 官网提供 (`GET /api/update/:target/:arch/:version`)。
+
+## 内联可视化 (render_visual)
+
+Agent 可通过 `render_visual` 工具在对话中内联渲染交互式 HTML widget (图表、动画、图解、表格等)。
+
+**数据流**: vm-agent `render_visual` 工具返回 `{content, details: {type, title, html}}` → `use-chat-stream.ts` tool_execution_end 将 `details` 存入 tool part 的 `visualData` 字段 → `AssistantContent.tsx` 检测到 `visualData` 时跳过工具条，直接渲染 `VisualWidget` 组件 (iframe)，与文字回答融为一体。
+
+**样式一致性**: iframe 加载时自动注入基础 CSS (`VISUAL_BASE_CSS`)，匹配应用暖色奶油主题 (背景 `#FAF7F4`、文字 `#1A1A1A`/`#5A5248`、边框 `#E0D8D0`)。系统提示词包含完整色板指引，引导 LLM 生成风格一致的 HTML。
+
+**自适应高度**: `sandbox="allow-scripts allow-same-origin"` + `onLoad` 直接读 `contentDocument.scrollHeight` + `ResizeObserver` 持续监听，消除 iframe 滚动条。
+
+**关键文件**:
+- `vm-agent/src/extensions/visual.ts` — Pi SDK 工具定义
+- `vm-agent/src/prompts/system.ts` — `<visual_tools>` 提示词块 (使用时机 + 色板)
+- `desktop/src/react/components/AssistantContent.tsx` — `VisualWidget` 组件 + `injectVisualBaseStyles()`
+- `desktop/src/react/styles/visual.css` — widget 外框样式
+- `desktop/src/react/types.ts` — `AssistantPart` tool 变体含 `visualData?` 字段
 
 ## 开发规范
 

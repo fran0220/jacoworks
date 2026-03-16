@@ -1,0 +1,118 @@
+{
+  "name": "godotforge",
+  "displayName": "GodotForge 游戏开发团队",
+  "description": "基于 JMOS 协作框架的 7 角色游戏开发团队。游戏制作人负责 GDD 与任务编排，4 名专精执行者 (玩法/关卡/UI/视效音效) 通过 godot-forge CLI 操作 Godot 4.x 项目，QA 测试员验证构建质量，巡查者监控系统健康。支持 ForgeSync 实时编辑器同步，用户可通过 VNC 实时观看游戏开发过程。",
+  "version": "1.0.0",
+  "agents": [
+    {
+      "id": "game-director",
+      "name": "游戏制作人",
+      "role": "planner",
+      "prompt": "prompts/game-director.md",
+      "skills": ["game-director-skill"],
+      "model": "proxy/gpt-5.4",
+      "isLeader": true,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 900000 },
+        "sessionTarget": "isolated",
+        "message": "检查任务进度，分配待办子任务，跟进阻塞项，验收里程碑交付"
+      }
+    },
+    {
+      "id": "gameplay-dev",
+      "name": "玩法程序员",
+      "role": "executor",
+      "prompt": "prompts/gameplay-dev.md",
+      "skills": ["gameplay-dev-skill"],
+      "model": "proxy/gpt-5.3-codex",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 900000 },
+        "sessionTarget": "isolated",
+        "message": "检查我的子任务，继续编码进行中的任务，认领新的玩法开发任务"
+      }
+    },
+    {
+      "id": "level-designer",
+      "name": "关卡设计师",
+      "role": "executor",
+      "prompt": "prompts/level-designer.md",
+      "skills": ["level-designer-skill"],
+      "model": "proxy/gpt-5.4",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 900000 },
+        "sessionTarget": "isolated",
+        "message": "检查我的子任务，继续关卡搭建任务，认领新的场景设计任务"
+      }
+    },
+    {
+      "id": "ui-dev",
+      "name": "UI 开发者",
+      "role": "executor",
+      "prompt": "prompts/ui-dev.md",
+      "skills": ["ui-dev-skill"],
+      "model": "proxy/gpt-5.4",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 1200000 },
+        "sessionTarget": "isolated",
+        "message": "检查我的子任务，继续 UI 开发任务，认领新的界面设计任务"
+      }
+    },
+    {
+      "id": "vfx-audio",
+      "name": "视效音效师",
+      "role": "executor",
+      "prompt": "prompts/vfx-audio.md",
+      "skills": ["vfx-audio-skill"],
+      "model": "proxy/gemini-3.1-flash-image-preview",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 1200000 },
+        "sessionTarget": "isolated",
+        "message": "检查我的子任务，继续视效音效任务，认领新的资源制作任务"
+      }
+    },
+    {
+      "id": "qa-tester",
+      "name": "QA 测试员",
+      "role": "reviewer",
+      "prompt": "prompts/qa-tester.md",
+      "skills": ["qa-tester-skill"],
+      "model": "proxy/gpt-5.4",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 900000 },
+        "sessionTarget": "isolated",
+        "message": "检查待审查的子任务，运行验证测试，逐个审查评分"
+      }
+    },
+    {
+      "id": "patrol",
+      "name": "巡查者",
+      "role": "patrol",
+      "prompt": "prompts/patrol.md",
+      "skills": ["patrol-skill"],
+      "model": "proxy/gpt-5.4",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 1800000 },
+        "sessionTarget": "isolated",
+        "message": "执行巡查：超时检测、卡住检测、资源引用检查、场景完整性、孤儿任务"
+      }
+    }
+  ],
+  "workspace": {
+    "sharedRoot": "/data/teams/{team_id}",
+    "files": {
+      "AGENTS.md": "workspace/AGENTS.md",
+      "RULES.md": "rules/default-rules.md"
+    }
+  },
+  "middleware": {
+    "type": "jamoss",
+    "port": 6565,
+    "database": "sqlite:///data/teams/{team_id}/tasks.db"
+  }
+}

@@ -1,5 +1,5 @@
 // Package openclaw provides backend-neutral OpenClaw container orchestration.
-// It depends on container.Runtime instead of the Docker SDK.
+// It depends on container.Runtime for backend-neutral instance management.
 package openclaw
 
 import (
@@ -49,6 +49,11 @@ func (c *Client) Runtime() container.Runtime {
 	return c.rt
 }
 
+// HostIP returns the host IP used for upstream connections and health checks.
+func (c *Client) HostIP() string {
+	return c.hostIP
+}
+
 const defaultGatewayPort = 18789
 
 // resolveGatewayPort returns the gateway port, falling back to the default.
@@ -86,8 +91,8 @@ func (c *Client) ContainerEnvVars() map[string]string {
 }
 
 // Provision creates and starts a new OpenClaw container for a user.
-func (c *Client) Provision(name, userID, token string, hostPort int) (string, error) {
-	log.Info().Str("name", name).Str("user_id", userID).Int("host_port", hostPort).Msg("provisioning openclaw container")
+func (c *Client) Provision(name, userID, token string, hostPort, vncPort int) (string, error) {
+	log.Info().Str("name", name).Str("user_id", userID).Int("host_port", hostPort).Int("vnc_port", vncPort).Msg("provisioning openclaw container")
 
 	ctx := context.Background()
 	userDir := fmt.Sprintf("%s/%s", c.dataRoot, userID)
@@ -105,6 +110,13 @@ func (c *Client) Provision(name, userID, token string, hostPort int) (string, er
 
 	gatewayPort := c.resolveGatewayPort(hostPort)
 
+	var extraPorts []container.PortMapping
+	if vncPort > 0 {
+		extraPorts = append(extraPorts, container.PortMapping{
+			HostPort: vncPort, ContainerPort: 6080, // noVNC websockify
+		})
+	}
+
 	spec := container.InstanceSpec{
 		Name:  name,
 		Image: c.image,
@@ -121,6 +133,7 @@ func (c *Client) Provision(name, userID, token string, hostPort int) (string, er
 		},
 		HostPort:      hostPort,
 		ContainerPort: defaultGatewayPort,
+		ExtraPorts:    extraPorts,
 		HealthCmd:     fmt.Sprintf("curl -fsS http://127.0.0.1:%d/healthz || exit 1", gatewayPort),
 	}
 
@@ -250,7 +263,7 @@ func (c *Client) EnsureRunning(ctx context.Context, info *store.ContainerInfo) e
 		return fmt.Errorf("check status: %w", err)
 	}
 
-	healthURL := fmt.Sprintf("http://%s:%d/healthz", c.hostIP, info.HostPort)
+	healthURL := fmt.Sprintf("http://%s:%d/healthz", c.resolveHost(info.ContainerIP), info.HostPort)
 
 	var healthErr error
 	switch status.Status {
@@ -269,7 +282,7 @@ func (c *Client) EnsureRunning(ctx context.Context, info *store.ContainerInfo) e
 		healthErr = httpHealthPoll(healthURL, 30*time.Second)
 	case "not_found":
 		log.Info().Str("name", info.ContainerName).Str("user_id", info.UserID).Msg("openclaw container not found, reprovisioning")
-		if _, err := c.Provision(info.ContainerName, info.UserID, info.ContainerToken, info.HostPort); err != nil {
+		if _, err := c.Provision(info.ContainerName, info.UserID, info.ContainerToken, info.HostPort, info.VncPort); err != nil {
 			return fmt.Errorf("reprovision %s: %w", info.ContainerName, err)
 		}
 		return nil
@@ -296,15 +309,20 @@ func (c *Client) EnsureRunning(ctx context.Context, info *store.ContainerInfo) e
 
 // UpstreamAddr returns the WebSocket upstream address for an OpenClaw container.
 func (c *Client) UpstreamAddr(info *store.ContainerInfo) string {
-	host := c.hostIP
-	if info.ContainerIP != "" {
-		host = info.ContainerIP
-	}
+	host := c.resolveHost(info.ContainerIP)
 	port := info.HostPort
 	if port == 0 {
 		port = defaultGatewayPort
 	}
 	return fmt.Sprintf("ws://%s:%d", host, port)
+}
+
+// resolveHost returns containerIP if non-empty, otherwise falls back to c.hostIP.
+func (c *Client) resolveHost(containerIP string) string {
+	if containerIP != "" {
+		return containerIP
+	}
+	return c.hostIP
 }
 
 // sha256hex computes the hex-encoded SHA-256 hash of data.

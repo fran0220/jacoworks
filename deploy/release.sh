@@ -132,12 +132,8 @@ do_build() {
 
   log "Prepare release resources"
 
-  for entry in "${TARGETS[@]}"; do
-    IFS=: read -r TARGET PLATFORM BUNDLES <<< "$entry"
-    # Sidecar already compiled to binaries/ above, no --sidecar-from needed
-    bash "$TAURI_DIR/scripts/prepare-release.sh" "$TARGET"
-    info "Resources prepared: $TARGET"
-  done
+  # NOTE: prepare + build must be done per-target, NOT batched,
+  # because resources/runtimes/python is shared and target-specific.
 
   log "Install desktop dependencies"
   cd "$REPO_ROOT/desktop"
@@ -151,6 +147,10 @@ do_build() {
     IFS=: read -r TARGET PLATFORM BUNDLES <<< "$entry"
     echo ""
     echo "🔨 Building $PLATFORM ($TARGET)..."
+
+    # Prepare resources (downloads correct Python for THIS target)
+    bash "$TAURI_DIR/scripts/prepare-release.sh" "$TARGET"
+    info "Resources prepared: $TARGET"
 
     # Export signing env vars for Tauri
     export TAURI_SIGNING_PRIVATE_KEY

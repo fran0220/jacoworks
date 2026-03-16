@@ -1,10 +1,9 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { spawn } from "node:child_process";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve, extname, basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { chunkMarkdown, getMemoryStore, type MemoryStoreConfig } from "../lib/memory-store.js";
+import { mineruUpload } from "../lib/mineru-upload.js";
 
 // ─── Parameter Schema ───────────────────────────────
 
@@ -25,8 +24,6 @@ const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".
 const MINERU_DOC_EXTS = new Set([".docx", ".doc", ".pdf", ".pptx", ".ppt"]);
 const LARGE_CONTENT_THRESHOLD = 2000;
 const SUMMARY_PREVIEW_CHARS = 500;
-const MINERU_TIMEOUT_MS = 300_000;
-const PYTHON_CMD = process.platform === "win32" ? "python" : "python3";
 
 function isSupported(ext: string): boolean {
   return DOC_EXTS.has(ext) || IMAGE_EXTS.has(ext);
@@ -34,193 +31,38 @@ function isSupported(ext: string): boolean {
 
 // ─── Readers ────────────────────────────────────────
 
-interface MinerUScriptSuccess {
-  ok: true;
-  markdown_path: string;
-  images_dir?: string;
-  chars?: number;
-}
-
-interface MinerUScriptFailure {
-  ok: false;
-  error: string;
-}
-
-type MinerUScriptResult = MinerUScriptSuccess | MinerUScriptFailure;
-
-function resolveMinerUScriptPath(): string {
-  const candidates = [
-    fileURLToPath(new URL("../scripts/mineru_upload.py", import.meta.url)),
-    resolve(process.cwd(), "src/scripts/mineru_upload.py"),
-    resolve(process.cwd(), "dist/scripts/mineru_upload.py"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return candidates[0];
-}
-
-function parseMineruOutput(stdout: string): MinerUScriptResult {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    throw new Error("MinerU returned empty stdout");
-  }
-
-  const parseOne = (raw: string): MinerUScriptResult | null => {
-    try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      if (parsed.ok === true) {
-        if (typeof parsed.markdown_path !== "string" || !parsed.markdown_path.trim()) {
-          throw new Error("MinerU missing markdown_path");
-        }
-        return {
-          ok: true,
-          markdown_path: parsed.markdown_path,
-          images_dir: typeof parsed.images_dir === "string" ? parsed.images_dir : undefined,
-          chars: typeof parsed.chars === "number" ? parsed.chars : undefined,
-        };
-      }
-
-      if (parsed.ok === false) {
-        return {
-          ok: false,
-          error: typeof parsed.error === "string" ? parsed.error : "MinerU parse failed",
-        };
-      }
-
-      return null;
-    } catch {
-      return null;
-    }
-  };
-
-  const direct = parseOne(trimmed);
-  if (direct) return direct;
-
-  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const parsed = parseOne(lines[i]);
-    if (parsed) return parsed;
-  }
-
-  throw new Error(`Invalid MinerU output: ${trimmed.slice(0, 500)}`);
-}
-
 async function readViaMinerU(
   filePath: string,
   token: string,
   outputDir: string,
   signal?: AbortSignal,
 ): Promise<{ text: string; markdownPath: string; imagesDir?: string; chars: number }> {
-  const scriptPath = resolveMinerUScriptPath();
-  if (!existsSync(scriptPath)) {
-    throw new Error(`MinerU script not found: ${scriptPath}`);
-  }
-
   mkdirSync(outputDir, { recursive: true });
 
-  const args = [
-    scriptPath,
-    filePath,
-    "--token",
+  const result = await mineruUpload(filePath, {
     token,
-    "--output-dir",
     outputDir,
-    "--language",
-    "ch",
-    "--timeout",
-    "600",
-  ];
-
-  return new Promise((resolveResult, reject) => {
-    const child = spawn(PYTHON_CMD, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let aborted = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, MINERU_TIMEOUT_MS);
-
-    const onAbort = () => {
-      aborted = true;
-      clearTimeout(timer);
-      child.kill("SIGKILL");
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf-8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf-8");
-    });
-
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(new Error(`Failed to spawn MinerU script: ${err.message}`));
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-
-      if (timedOut) {
-        reject(new Error("MinerU parsing timeout after 300s"));
-        return;
-      }
-      if (aborted) {
-        reject(new Error("MinerU parsing cancelled"));
-        return;
-      }
-
-      let result: MinerUScriptResult;
-      try {
-        result = parseMineruOutput(stdout);
-      } catch (parseErr) {
-        if (code !== 0) {
-          const stderrSnippet = stderr.trim().slice(0, 500);
-          reject(new Error(`MinerU script exited with code ${code}${stderrSnippet ? `: ${stderrSnippet}` : ""}`));
-          return;
-        }
-        reject(parseErr as Error);
-        return;
-      }
-
-      if (!result.ok) {
-        reject(new Error(result.error || "MinerU parse failed"));
-        return;
-      }
-
-      if (code !== 0) {
-        const stderrSnippet = stderr.trim().slice(0, 500);
-        reject(new Error(`MinerU script exited with code ${code}${stderrSnippet ? `: ${stderrSnippet}` : ""}`));
-        return;
-      }
-
-      const markdownPath = resolve(outputDir, result.markdown_path);
-      if (!existsSync(markdownPath)) {
-        reject(new Error(`MinerU markdown not found: ${markdownPath}`));
-        return;
-      }
-
-      const text = readFileSync(markdownPath, "utf-8").trim();
-      resolveResult({
-        text: text || "(empty document)",
-        markdownPath,
-        imagesDir: result.images_dir,
-        chars: typeof result.chars === "number" ? result.chars : text.length,
-      });
-    });
+    language: "ch",
+    timeoutMs: 600_000,
+    signal,
   });
+
+  if (!result.ok) {
+    throw new Error(result.error || "MinerU parse failed");
+  }
+
+  const markdownPath = result.markdown_path;
+  if (!existsSync(markdownPath)) {
+    throw new Error(`MinerU markdown not found: ${markdownPath}`);
+  }
+
+  const text = readFileSync(markdownPath, "utf-8").trim();
+  return {
+    text: text || "(empty document)",
+    markdownPath,
+    imagesDir: result.images_dir,
+    chars: result.chars,
+  };
 }
 
 interface XlsxReadResult {
@@ -430,6 +272,7 @@ export function createReadDocumentExtension(
           return {
             content: [{ type: "text" as const, text: `Error: file not found: ${filePath}` }],
             details: {},
+            isError: true,
           };
         }
 
@@ -437,6 +280,7 @@ export function createReadDocumentExtension(
           return {
             content: [{ type: "text" as const, text: `Error: unsupported format '${ext}'. Supported: docx, xlsx, csv, pdf, pptx, png, jpg, etc.` }],
             details: {},
+            isError: true,
           };
         }
 
@@ -458,6 +302,7 @@ export function createReadDocumentExtension(
             return {
               content: [{ type: "text" as const, text: "请在管理后台配置 MinerU Token" }],
               details: { path: filePath, format: ext },
+              isError: true,
             };
           }
 
@@ -563,6 +408,7 @@ export function createReadDocumentExtension(
           return {
             content: [{ type: "text" as const, text: `Error reading ${ext} file: ${(err as Error).message}` }],
             details: {},
+            isError: true,
           };
         }
       },

@@ -835,7 +835,6 @@ async fn import_files_native(
         .dialog()
         .file()
         .set_title("选择文件")
-        .add_filter("所有文件", &["*"])
         .blocking_pick_files();
 
     let Some(files) = picked else {

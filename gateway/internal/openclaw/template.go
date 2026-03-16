@@ -18,11 +18,13 @@ import (
 // ── Template types ───────────────────────────────────────────
 
 type TemplateSummary struct {
+	Type        string                 `json:"type"`
 	Name        string                 `json:"name"`
 	DisplayName string                 `json:"displayName"`
 	Description string                 `json:"description"`
 	Version     string                 `json:"version"`
 	Agents      []TemplateAgentSummary `json:"agents"`
+	Theme       json.RawMessage        `json:"theme,omitempty"`
 }
 
 type TemplateAgentSummary struct {
@@ -48,6 +50,7 @@ type openclawTemplateManifest struct {
 	Version     string                        `json:"version"`
 	Agents      []openclawTemplateAgent       `json:"agents"`
 	Workspace   openclawTemplateWorkspaceSpec `json:"workspace"`
+	Theme       json.RawMessage               `json:"theme,omitempty"`
 }
 
 type openclawTemplateAgent struct {
@@ -235,11 +238,13 @@ func (c *Client) ListTemplates() ([]TemplateSummary, error) {
 		}
 
 		results = append(results, TemplateSummary{
+			Type:        "team",
 			Name:        manifest.Name,
 			DisplayName: manifest.DisplayName,
 			Description: manifest.Description,
 			Version:     manifest.Version,
 			Agents:      agents,
+			Theme:       manifest.Theme,
 		})
 	}
 
@@ -268,12 +273,173 @@ func (c *Client) GetTemplateSummary(templateName string) (*TemplateSummary, erro
 	}
 
 	return &TemplateSummary{
+		Type:        "team",
 		Name:        manifest.Name,
 		DisplayName: manifest.DisplayName,
 		Description: manifest.Description,
 		Version:     manifest.Version,
 		Agents:      agents,
+		Theme:       manifest.Theme,
 	}, nil
+}
+
+// ── Template CRUD ────────────────────────────────────────────
+
+// TemplateDetail is the full representation of a template including file contents.
+type TemplateDetail struct {
+	Type        string                        `json:"type"`
+	Name        string                        `json:"name"`
+	DisplayName string                        `json:"displayName"`
+	Description string                        `json:"description"`
+	Version     string                        `json:"version"`
+	Agents      []openclawTemplateAgent       `json:"agents"`
+	Workspace   openclawTemplateWorkspaceSpec `json:"workspace"`
+	Files       map[string]string             `json:"files,omitempty"`
+	Theme       json.RawMessage               `json:"theme,omitempty"`
+}
+
+// GetTemplateDetail loads a template's manifest and all text files in its directory.
+func (c *Client) GetTemplateDetail(name string) (*TemplateDetail, error) {
+	manifest, templateDir, err := c.loadTemplate(name)
+	if err != nil {
+		return nil, err
+	}
+
+	files := make(map[string]string)
+	err = filepath.WalkDir(templateDir, func(filePath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(templateDir, filePath)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "template.json" {
+			return nil
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("read file %s: %w", rel, err)
+		}
+		files[rel] = string(data)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk template dir %s: %w", name, err)
+	}
+
+	log.Debug().Str("template", name).Int("files", len(files)).Msg("loaded template detail")
+
+	return &TemplateDetail{
+		Type:        "team",
+		Name:        manifest.Name,
+		DisplayName: manifest.DisplayName,
+		Description: manifest.Description,
+		Version:     manifest.Version,
+		Agents:      manifest.Agents,
+		Workspace:   manifest.Workspace,
+		Files:       files,
+		Theme:       manifest.Theme,
+	}, nil
+}
+
+// validateTemplateName checks the template name is safe for filesystem use.
+func validateTemplateName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
+		return fmt.Errorf("invalid template name: %q", name)
+	}
+	return nil
+}
+
+// SaveTemplate writes a template manifest and its files to the templates directory.
+func (c *Client) SaveTemplate(detail *TemplateDetail) error {
+	if err := validateTemplateName(detail.Name); err != nil {
+		return err
+	}
+
+	templatesDir, err := resolveTemplatesDir()
+	if err != nil {
+		return err
+	}
+
+	templateDir := filepath.Join(templatesDir, detail.Name)
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		return fmt.Errorf("create template dir: %w", err)
+	}
+
+	// Write template.json (manifest only, no files field).
+	manifest := openclawTemplateManifest{
+		Name:        detail.Name,
+		DisplayName: detail.DisplayName,
+		Description: detail.Description,
+		Version:     detail.Version,
+		Agents:      detail.Agents,
+		Workspace:   detail.Workspace,
+		Theme:       detail.Theme,
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal template manifest: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(templateDir, "template.json"), data, 0o644); err != nil {
+		return fmt.Errorf("write template manifest: %w", err)
+	}
+
+	// Write files from the Files map.
+	for relPath, content := range detail.Files {
+		relPath = strings.TrimSpace(strings.ReplaceAll(relPath, "\\", "/"))
+		if relPath == "template.json" {
+			continue
+		}
+		if strings.Contains(relPath, "..") || filepath.IsAbs(relPath) {
+			return fmt.Errorf("invalid file path in template: %q", relPath)
+		}
+
+		targetPath := filepath.Join(templateDir, filepath.FromSlash(relPath))
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return fmt.Errorf("mkdir for file %s: %w", relPath, err)
+		}
+		if err := os.WriteFile(targetPath, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("write file %s: %w", relPath, err)
+		}
+	}
+
+	log.Info().Str("template", detail.Name).Str("version", detail.Version).Int("files", len(detail.Files)).Msg("template saved")
+	return nil
+}
+
+// DeleteTemplate removes an entire template directory.
+func (c *Client) DeleteTemplate(name string) error {
+	if err := validateTemplateName(name); err != nil {
+		return err
+	}
+
+	templatesDir, err := resolveTemplatesDir()
+	if err != nil {
+		return err
+	}
+
+	templateDir := filepath.Join(templatesDir, name)
+	if _, err := os.Stat(templateDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrTemplateNotFound, name)
+		}
+		return fmt.Errorf("stat template dir: %w", err)
+	}
+
+	if err := os.RemoveAll(templateDir); err != nil {
+		return fmt.Errorf("remove template dir %s: %w", name, err)
+	}
+
+	log.Info().Str("template", name).Msg("template deleted")
+	return nil
 }
 
 // ── Template file operations ─────────────────────────────────

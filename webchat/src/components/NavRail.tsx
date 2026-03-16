@@ -1,4 +1,4 @@
-import { MessageSquare, Users, ListTodo, Box, Activity, Monitor } from "lucide-react";
+import { MessageSquare, Users, ListTodo, Box, Activity, Monitor, Orbit } from "lucide-react";
 import type { ActiveTab } from "../App";
 import { USER_NAME } from "../lib/config";
 
@@ -9,6 +9,7 @@ const TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
   { key: "desktop", label: "桌面", Icon: Monitor },
   { key: "container", label: "容器", Icon: Box },
   { key: "feed", label: "动态", Icon: Activity },
+  { key: "observatory", label: "观测站", Icon: Orbit },
 ];
 
 export default function NavRail({

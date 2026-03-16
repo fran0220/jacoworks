@@ -64,14 +64,14 @@ func (c *Client) Create(ctx context.Context, spec container.InstanceSpec) error 
 
 	devices := map[string]map[string]string{}
 
-	// Bind mounts from BindMounts field → disk devices.
+	// Bind mounts → disk devices (virtiofs on VMs, 9p on containers).
+	// VMs don't support shift:true; ownership is fixed post-launch via chown.
 	for i, m := range spec.BindMounts {
 		devName := fmt.Sprintf("disk%d", i)
 		devices[devName] = map[string]string{
 			"type":   "disk",
 			"source": m.Source,
 			"path":   m.Target,
-			"shift":  "true",
 		}
 	}
 
@@ -89,9 +89,22 @@ func (c *Client) Create(ctx context.Context, spec container.InstanceSpec) error 
 		}
 	}
 
+	// Extra port mappings → additional proxy devices (e.g., VNC).
+	for i, pm := range spec.ExtraPorts {
+		if pm.HostPort > 0 && pm.ContainerPort > 0 {
+			devName := fmt.Sprintf("proxy%d", i+1)
+			devices[devName] = map[string]string{
+				"type":    "proxy",
+				"listen":  fmt.Sprintf("tcp:%s:%d", c.hostIP, pm.HostPort),
+				"connect": fmt.Sprintf("tcp:0.0.0.0:%d", pm.ContainerPort),
+				"bind":    "host",
+			}
+		}
+	}
+
 	req := api.InstancesPost{
 		Name: spec.Name,
-		Type: api.InstanceTypeContainer,
+		Type: api.InstanceTypeVM,
 		Source: api.InstanceSource{
 			Type:  "image",
 			Alias: spec.Image,
@@ -157,7 +170,7 @@ func (c *Client) Unfreeze(ctx context.Context, name string) error {
 	}
 }
 
-// Unpause is an alias for Unfreeze (Docker compatibility).
+// Unpause is an alias for Unfreeze (API compatibility).
 func (c *Client) Unpause(ctx context.Context, name string) error {
 	return c.Unfreeze(ctx, name)
 }
@@ -209,7 +222,7 @@ func (c *Client) Status(ctx context.Context, name string) (*container.ContainerI
 
 // List returns all container instances.
 func (c *Client) List(ctx context.Context) ([]container.ContainerInfo, error) {
-	instances, err := c.server.GetInstances(api.InstanceTypeContainer)
+	instances, err := c.server.GetInstances(api.InstanceTypeAny)
 	if err != nil {
 		return nil, fmt.Errorf("incus list: %w", err)
 	}
@@ -397,11 +410,13 @@ func extractIP(state *api.InstanceState) string {
 		return ""
 	}
 
-	// Prefer eth0.
-	if net, ok := state.Network["eth0"]; ok {
-		for _, addr := range net.Addresses {
-			if addr.Family == "inet" && addr.Scope == "global" {
-				return addr.Address
+	// Prefer eth0 (containers) or enp5s0 (VMs).
+	for _, iface := range []string{"eth0", "enp5s0"} {
+		if net, ok := state.Network[iface]; ok {
+			for _, addr := range net.Addresses {
+				if addr.Family == "inet" && addr.Scope == "global" {
+					return addr.Address
+				}
 			}
 		}
 	}

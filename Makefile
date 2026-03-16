@@ -133,11 +133,15 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		curl -sf http://localhost:8847/health"
 	@echo "✅ Gateway 已部署"
 
-deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64)
+deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64 + 同步 openclaw/)
 	@echo "📦 部署 OC Gateway → $(LOCAL_HOST)..."
 	cd gateway && CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags='-s -w' -o /tmp/oc-gateway ./cmd/oc-gateway
-	scp /tmp/oc-gateway $(LOCAL_HOST):/opt/jacoworks/oc-gateway
-	ssh $(LOCAL_HOST) "chmod +x /opt/jacoworks/oc-gateway && systemctl restart jacoworks-oc-gateway && sleep 2 && curl -sf http://localhost:18700/health"
+	scp /tmp/oc-gateway $(LOCAL_HOST):/opt/jacoworks/oc-gateway.new
+	@echo "📂 同步 openclaw/ 目录..."
+	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/openclaw"
+	rsync -a --delete openclaw/templates/ $(LOCAL_HOST):/opt/jacoworks/openclaw/templates/
+	rsync -a --delete openclaw/skills/ $(LOCAL_HOST):/opt/jacoworks/openclaw/skills/
+	ssh $(LOCAL_HOST) "mv /opt/jacoworks/oc-gateway.new /opt/jacoworks/oc-gateway && chmod +x /opt/jacoworks/oc-gateway && systemctl restart jacoworks-oc-gateway && sleep 2 && curl -sf http://localhost:18700/health"
 	@echo "✅ OC Gateway 已部署"
 
 deploy-website: deploy-sync ## 部署 Website 到 jingao (远程编译)
@@ -207,7 +211,7 @@ clean: ## 清理所有构建产物
 	rm -rf desktop/dist/ desktop/src-tauri/target/
 
 # ═══════════════════════════════════════════
-#  Docker (vm-agent server → oracle)
+#  vm-agent Docker (oracle ARM64)
 # ═══════════════════════════════════════════
 
 docker-build-agent: ## 在 Oracle 上原地构建 vm-agent ARM64 镜像 (无需 Mac 跨架构)
@@ -258,7 +262,7 @@ redeploy-agent: docker-build-agent ## 强制重建所有 vm-agent 容器 (有停
 		echo "✅ 旧容器已清理，新容器将由网关按需创建"'
 
 # ═══════════════════════════════════════════
-#  Incus (OpenClaw 系统容器 → local)
+#  Incus (OpenClaw VM → local)
 # ═══════════════════════════════════════════
 
 setup-incus: ## 初始化 local 服务器 Incus 环境
@@ -266,12 +270,12 @@ setup-incus: ## 初始化 local 服务器 Incus 环境
 	ssh $(LOCAL_HOST) "chmod +x /tmp/setup-incus.sh && /tmp/setup-incus.sh"
 	@echo "✅ Incus 环境已初始化"
 
-build-openclaw-image: ## 构建 OpenClaw Incus 金色镜像
+build-openclaw-image: ## 构建 OpenClaw Incus VM 基础镜像
 	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
 	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh"
 	@echo "✅ OpenClaw 镜像已构建"
 
-rebuild-openclaw-image: ## 重建 OpenClaw Incus 金色镜像
+rebuild-openclaw-image: ## 重建 OpenClaw Incus VM 基础镜像
 	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
 	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh --force"
 	@echo "✅ OpenClaw 镜像已重建"

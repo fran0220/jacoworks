@@ -114,8 +114,18 @@ export default function Composer({
   const handleFileSelect = async () => {
     setPlusMenuOpen(false);
 
+    // Use defaultWorkspace as fallback when session has no workspace set
+    let ws = workspacePath;
+    if (!ws) {
+      const syncRoot = getSettings().defaultWorkspace;
+      if (syncRoot) {
+        ws = syncRoot;
+        onWorkspaceChange(syncRoot);
+      }
+    }
+
     setReadingCount(1);
-    const { imported, warnings: newWarnings } = await importFilesNative(workspacePath);
+    const { imported, warnings: newWarnings } = await importFilesNative(ws);
     setReadingCount(0);
 
     for (const msg of newWarnings) addWarning(msg);
@@ -123,8 +133,15 @@ export default function Composer({
   };
 
   const handleDrop = useCallback(async (paths: string[]) => {
+    // Use defaultWorkspace as fallback
+    let ws = workspacePath;
+    if (!ws) {
+      const syncRoot = getSettings().defaultWorkspace;
+      if (syncRoot) ws = syncRoot;
+    }
+
     setReadingCount((count) => count + 1);
-    const { imported, warnings: newWarnings } = await importFilesByPaths(paths, workspacePath);
+    const { imported, warnings: newWarnings } = await importFilesByPaths(paths, ws);
     setReadingCount((count) => count - 1);
 
     for (const msg of newWarnings) addWarning(msg);

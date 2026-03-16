@@ -68,9 +68,9 @@ Go 网关 (Gateway)
   ├─ 会话 CRUD + LLM 配置下发
   ├─ 统一 WS 代理 (UpstreamDialer + ChannelPool, 事件缓冲 + 断点续传)
   ├─ SSE/HTTP bridge (GET /api/oc/stream, POST /api/oc/send, GET /api/oc/status)
-  ├─ WS exec (GET /ws/exec — Docker 容器内执行)
+  ├─ WS exec (GET /ws/exec — 容器内执行)
   ├─ JaMOSS 中间件代理 (/api/jamoss/*)
-  ├─ Docker 容器管理 (SSH via Tailscale → oracle/local)
+  ├─ 容器/VM 管理 (Docker → oracle, Incus VM → local)
   ├─ 技能存储与分发 (system + user skills → 容器 provision 时推送)
   └─ 云端定时任务调度
 
@@ -82,7 +82,7 @@ Rust 官网 (Website, Axum + Askama)
 
 **本地优先桌面端**: 桌面端对话走本地 sidecar RPC (stdin/stdout)，不经网关/容器。Bundled runtimes (Python, bash) 无需用户安装。备用 SSE/HTTP bridge 可连接云端容器。
 
-**双容器后端**: vm-agent (云端/server 模式, oracle ARM64) / OpenClaw (webchat, local x86_64)，通过 `containers.container_type` 区分。
+**双容器后端**: vm-agent (Docker, oracle ARM64) / OpenClaw (Incus VM, local x86_64)，通过 `containers.container_type` 区分。
 
 **统一 WS 连接管理**: Webchat WS 连接走 `/ws/oc` ticket 端点 → `ChannelPool` 持久上游连接。`UpstreamDialer` 接口抽象 vm-agent/OpenClaw 协议差异。`RingBuffer` 事件缓冲支持 `lastSeq` 断点续传。
 
@@ -93,8 +93,8 @@ Rust 官网 (Website, Axum + Askama)
 | 节点 | Tailscale IP | 公网 IP | 用途 |
 |------|-------------|---------|------|
 | jingao | 100.103.6.91 | 82.156.239.212 | 网关 + 官网 + PostgreSQL |
-| oracle | 100.94.98.106 | — | vm-agent Docker 容器 (ARM64) |
-| local | 100.97.254.31 | — | OpenClaw Docker 容器 (x86_64) + win-build VM |
+| oracle | 100.94.98.106 | — | vm-agent Docker (ARM64) |
+| local | 100.97.254.31 | — | OpenClaw Incus VM (x86_64) + win-build KVM |
 
 SSH 访问统一走 Tailscale IP。Oracle 公网被墙时 Tailscale 自动 DERP 中继，无需手动干预。
 

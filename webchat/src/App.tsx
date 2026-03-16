@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import type { ChatSession, ChatMessage, StreamBlock } from "./types";
 import { WSClient, type WSFrame } from "./lib/ws-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "./lib/event-parser";
@@ -17,7 +17,9 @@ import TasksPanel from "./components/TasksPanel";
 import TeamPanel from "./components/TeamPanel";
 import SetupGate from "./components/SetupGate";
 
-export type ActiveTab = "chat" | "teams" | "cron" | "container" | "desktop" | "feed";
+const AgentObservatory = lazy(() => import("./components/AgentObservatory"));
+
+export type ActiveTab = "chat" | "teams" | "cron" | "container" | "desktop" | "feed" | "observatory";
 
 const ACTIVE_TEAM_STORAGE_KEY = "jacoworks.webchat.active-team.v1";
 
@@ -80,6 +82,7 @@ export default function App() {
   const activeTeamSessionKeyRef = useRef(activeTeamSessionKey);
   const renderTimer = useRef<number | null>(null);
   const wsRef = useRef<WSClient | null>(null);
+  const observatoryEventRef = useRef<((event: { kind: string; text?: string; toolName?: string }) => void) | null>(null);
 
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
@@ -168,6 +171,10 @@ export default function App() {
       },
       onFrame(frame: WSFrame) {
         let parsed = parseFrame(frame);
+
+        if (parsed.kind !== "ignore") {
+          observatoryEventRef.current?.(parsed);
+        }
 
         if (parsed.kind === "proxy_ready") {
           setConnState("connected");
@@ -402,6 +409,19 @@ export default function App() {
         {activeTab === "desktop" && <DesktopPanel />}
         {activeTab === "cron" && <TasksPanel />}
         {activeTab === "feed" && <FeedPanel />}
+        {activeTab === "observatory" && (
+          <Suspense fallback={<div className="observatory-loading"><span className="spinner" /><span>加载中…</span></div>}>
+            <AgentObservatory
+              onWsEvent={observatoryEventRef}
+              activeTeamSessionKey={activeTeamSessionKey}
+              onTeamChange={handleTeamChange}
+              onSend={handleSend}
+              onAbort={handleAbort}
+              streaming={streaming}
+              connState={connState}
+            />
+          </Suspense>
+        )}
       </div>
     </div>
   );

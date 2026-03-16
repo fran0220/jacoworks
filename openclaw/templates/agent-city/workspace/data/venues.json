@@ -1,0 +1,18 @@
+{
+  "nearby_venues": [
+    {
+      "name": "亦庄龙湖天街",
+      "type": "商场",
+      "distance": "1.2km",
+      "highlights": ["餐饮", "电影院", "购物"]
+    },
+    {
+      "name": "大族广场",
+      "type": "商业综合体",
+      "distance": "0.8km",
+      "highlights": ["美食街", "咖啡", "电竞主题店"]
+    }
+  ],
+  "last_updated": "2026-03-16T00:00:00Z",
+  "note": "初始种子数据，探店达人通过 web_search 持续更新"
+}

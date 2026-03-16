@@ -153,23 +153,31 @@ esac
 
 PYTHON_DIR="$RUNTIMES_DIR/python"
 
-# Check if already populated (bin/python3 on unix, python.exe on windows)
+# Stamp file to ensure target-specific Python (prevent arm64/x86_64 contamination)
+PYTHON_STAMP="$PYTHON_DIR/.pbs-stamp"
+EXPECTED_STAMP="${TARGET}|${PBS_ARCHIVE}"
+
+# Check if already populated AND matches current target
 if [[ "$TARGET" == *"windows"* ]]; then
   PYTHON_CHECK="$PYTHON_DIR/python.exe"
 else
   PYTHON_CHECK="$PYTHON_DIR/bin/python3"
 fi
 
-if [[ -f "$PYTHON_CHECK" ]]; then
-  echo "  ✅ Python: already populated"
-else
+NEED_DOWNLOAD=true
+if [[ -f "$PYTHON_CHECK" ]] && [[ -f "$PYTHON_STAMP" ]] && [[ "$(cat "$PYTHON_STAMP" 2>/dev/null)" == "$EXPECTED_STAMP" ]]; then
+  echo "  ✅ Python: already populated (matches $TARGET)"
+  NEED_DOWNLOAD=false
+fi
+
+if $NEED_DOWNLOAD; then
   echo "📦 Downloading python-build-standalone for $TARGET..."
   PBS_DOWNLOAD="$TMPD/$PBS_ARCHIVE"
   curl -L --progress-bar -o "$PBS_DOWNLOAD" "${PBS_BASE_URL}/${PBS_ARCHIVE}"
 
-  # python-build-standalone extracts to python/ subdirectory
-  mkdir -p "$RUNTIMES_DIR"
+  # Always clean and re-extract to prevent stale/wrong-arch contamination
   rm -rf "$PYTHON_DIR"
+  mkdir -p "$RUNTIMES_DIR"
   tar -xzf "$PBS_DOWNLOAD" -C "$RUNTIMES_DIR"
   # The archive extracts as "python/" which is exactly our target dir name
 
@@ -202,25 +210,31 @@ else
 
   PYTHON_SIZE=$(du -sh "$PYTHON_DIR" | cut -f1)
   echo "  ✅ Python: $PYTHON_VERSION ($PYTHON_SIZE)"
+
+  # Write stamp so next run with same target can skip download
+  echo "$EXPECTED_STAMP" > "$PYTHON_STAMP"
 fi
 
 # ─── 6b. Sign Python binaries for macOS notarization ────────────
+# NOTE: This pre-signs in the source tree. For maximum reliability,
+# also sign inside the final .app bundle before outer app signing.
+# See Makefile release target for post-bundle signing step.
 
 if [[ "$TARGET" == *"apple-darwin"* ]]; then
   SIGN_ID="${APPLE_SIGNING_IDENTITY:-Developer ID Application: fan Z (9UUWCMKMDH)}"
   echo "🔏 Signing Python binaries with: $SIGN_ID"
 
   SIGN_COUNT=0
-  # Sign all Mach-O binaries, dylibs, and .so files
+  # Sign ALL Mach-O files — not just by extension, but by actual file type detection.
+  # python-build-standalone may include executables without standard extensions.
   while IFS= read -r -d '' binary; do
-    # Check if it's actually a Mach-O file
     if file "$binary" | grep -q "Mach-O"; then
       codesign --force --options runtime --timestamp \
         --sign "$SIGN_ID" "$binary" 2>/dev/null && \
         SIGN_COUNT=$((SIGN_COUNT + 1)) || \
         echo "  ⚠️  Failed to sign: $binary"
     fi
-  done < <(find "$PYTHON_DIR" \( -name "python*" -o -name "*.dylib" -o -name "*.so" \) -type f -print0 2>/dev/null)
+  done < <(find "$PYTHON_DIR" -type f \( -name "*.dylib" -o -name "*.so" -o -name "*.bundle" -o -name "python*" -o -perm +111 \) -print0 2>/dev/null)
 
   echo "  ✅ Signed $SIGN_COUNT Python binaries"
 fi

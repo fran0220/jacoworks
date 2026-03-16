@@ -82,6 +82,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Unified path: all container types go through ChannelPool
 	channel, info, err := h.pool.GetOrCreate(r.Context(), userID, containerType)
 	if err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Str("type", containerType).Msg("ws bridge: GetOrCreate failed")
 		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
 	}

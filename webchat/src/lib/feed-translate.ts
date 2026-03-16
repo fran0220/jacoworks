@@ -62,6 +62,17 @@ const ROLE_LABELS: Record<string, string> = {
   patrol: "巡查员",
 };
 
+let _roleLabelsOverride: Record<string, string> | null = null;
+
+export function setRoleLabels(labels: Record<string, string>): void {
+  _roleLabelsOverride = labels;
+}
+
+function getRoleLabel(role: string): string {
+  if (_roleLabelsOverride?.[role]) return _roleLabelsOverride[role];
+  return ROLE_LABELS[role] ?? role;
+}
+
 const DETAIL_LABELS: Record<string, string> = {
   comment: "评语",
   result: "结果",
@@ -142,7 +153,7 @@ export function translateFeedLog(log: FeedLog): TranslatedActivity {
     verb: rule?.verb ?? `访问了 ${log.path}`,
     colorClass: rule?.colorClass ?? "feed-tone-slate",
     agentName: log.agent_name ?? "未知",
-    agentRole: ROLE_LABELS[log.agent_role ?? ""] ?? log.agent_role ?? "",
+    agentRole: getRoleLabel(log.agent_role ?? ""),
     agentId: log.agent_id ?? "",
     objectName,
     details,

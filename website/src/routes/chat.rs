@@ -14,6 +14,7 @@ struct ChatTemplate {
     auth_token: String,
     openclaw_token: String,
     openclaw_ws_port: i32,
+    openclaw_vnc_url: String,
     posthog_key: String,
     posthog_host: String,
 }
@@ -34,16 +35,22 @@ pub async fn page(
         .to_string();
 
     // Look up OpenClaw container token + WS port for this user (empty/0 if vm-agent or no container)
-    let (openclaw_token, openclaw_ws_port) = sqlx::query_as::<_, (String, Option<i32>)>(
-        "SELECT COALESCE(container_token, ''), host_port FROM containers WHERE user_id = $1 AND container_type = 'openclaw'",
+    let (openclaw_token, openclaw_ws_port, vnc_port) = sqlx::query_as::<_, (String, Option<i32>, Option<i32>)>(
+        "SELECT COALESCE(container_token, ''), host_port, vnc_port FROM containers WHERE user_id = $1 AND container_type = 'openclaw'",
     )
     .bind(&auth.user.id)
     .fetch_optional(&state.db)
     .await
     .ok()
     .flatten()
-    .map(|(t, p)| (t, p.unwrap_or(0)))
+    .map(|(t, p, v)| (t, p.unwrap_or(0), v.unwrap_or(0)))
     .unwrap_or_default();
+
+    let openclaw_vnc_url = if vnc_port > 0 {
+        format!("{}/vnc/vnc.html", gateway_url)
+    } else {
+        String::new()
+    };
 
     render_template(&ChatTemplate {
         gateway_url,
@@ -51,6 +58,7 @@ pub async fn page(
         auth_token: auth.token,
         openclaw_token,
         openclaw_ws_port,
+        openclaw_vnc_url,
         posthog_key: state.config.posthog.api_key.clone(),
         posthog_host: state.config.posthog.host.clone(),
     })

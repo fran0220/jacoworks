@@ -171,7 +171,7 @@ func (f *Freezer) checkIdle() {
 			f.onBeforeStop(name)
 		}
 
-		// Unfreeze first (docker stop requires running state)
+		// Unfreeze first (stop requires running state)
 		if err := f.rt.Unfreeze(ctx, name); err != nil {
 			log.Warn().Err(err).Str("container", name).Msg("unfreeze before stop failed")
 		}

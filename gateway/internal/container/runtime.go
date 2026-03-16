@@ -5,19 +5,26 @@ import (
 	"time"
 )
 
+// PortMapping describes an additional host→container port mapping.
+type PortMapping struct {
+	HostPort      int
+	ContainerPort int
+}
+
 // InstanceSpec describes a new container to create.
 type InstanceSpec struct {
 	Name          string
 	Image         string            // container image alias
 	Env           map[string]string // environment variables
 	Labels        map[string]string
-	HostPort      int         // port to expose on host (mapped to ContainerPort)
-	ContainerPort int         // port inside the container (default 18789)
-	BindMounts    []BindMount // host→container directory mounts
-	User          string      // user to run as (e.g. "root")
-	MemoryMB      int         // memory limit in MB (0 = no limit)
-	CPUs          int         // CPU limit (0 = no limit)
-	HealthCmd     string      // health check command (optional)
+	HostPort      int           // port to expose on host (mapped to ContainerPort)
+	ContainerPort int           // port inside the container (default 18789)
+	ExtraPorts    []PortMapping // additional port mappings (e.g., VNC)
+	BindMounts    []BindMount   // host→container directory mounts
+	User          string        // user to run as (e.g. "root")
+	MemoryMB      int           // memory limit in MB (0 = no limit)
+	CPUs          int           // CPU limit (0 = no limit)
+	HealthCmd     string        // health check command (optional)
 }
 
 // BindMount maps a host directory to a container path.

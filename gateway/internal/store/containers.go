@@ -16,6 +16,7 @@ type ContainerInfo struct {
 	ContainerIP    string
 	ContainerToken string
 	HostPort       int
+	VncPort        int    // noVNC websockify port on host
 	ContainerType  string // active value: "openclaw"
 	Status         string // "creating" | "running" | "paused" | "stopped" | "exited"
 }
@@ -37,22 +38,22 @@ type Container struct {
 func (s *Store) GetContainerInfo(ctx context.Context, userID, containerType string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'openclaw'), COALESCE(status, 'creating')
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(vnc_port, 0), COALESCE(container_type, 'openclaw'), COALESCE(status, 'creating')
 		 FROM containers WHERE user_id = $1 AND container_type = $2`,
 		userID, containerType,
-	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType, &info.Status)
+	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.VncPort, &info.ContainerType, &info.Status)
 	if err != nil {
 		return nil, fmt.Errorf("get container info: %w", err)
 	}
 	return info, nil
 }
 
-func (s *Store) CreateContainer(ctx context.Context, userID, containerName, containerToken string, hostPort int, containerType string) error {
+func (s *Store) CreateContainer(ctx context.Context, userID, containerName, containerToken string, hostPort, vncPort int, containerType string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO containers (user_id, container_name, container_token, host_port, container_type, status)
-		 VALUES ($1, $2, $3, $4, $5, 'creating')
-		 ON CONFLICT (user_id, container_type) DO UPDATE SET container_name = $2, container_token = $3, host_port = $4, container_ip = NULL, status = 'creating'`,
-		userID, containerName, containerToken, hostPort, containerType,
+		`INSERT INTO containers (user_id, container_name, container_token, host_port, vnc_port, container_type, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'creating')
+		 ON CONFLICT (user_id, container_type) DO UPDATE SET container_name = $2, container_token = $3, host_port = $4, vnc_port = $5, container_ip = NULL, status = 'creating'`,
+		userID, containerName, containerToken, hostPort, vncPort, containerType,
 	)
 	return err
 }
@@ -65,11 +66,11 @@ func (s *Store) UpdateContainerIP(ctx context.Context, userID, containerType, ip
 	return err
 }
 
-func (s *Store) UpdateContainer(ctx context.Context, userID, containerType, name, ip, token string, hostPort int) error {
+func (s *Store) UpdateContainer(ctx context.Context, userID, containerType, name, ip, token string, hostPort, vncPort int) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE containers SET container_name = $1, container_ip = $2::inet, container_token = $3, host_port = $4, status = 'running'
-		 WHERE user_id = $5 AND container_type = $6`,
-		name, ip, token, hostPort, userID, containerType,
+		`UPDATE containers SET container_name = $1, container_ip = $2::inet, container_token = $3, host_port = $4, vnc_port = $5, status = 'running'
+		 WHERE user_id = $6 AND container_type = $7`,
+		name, ip, token, hostPort, vncPort, userID, containerType,
 	)
 	return err
 }
@@ -88,6 +89,29 @@ func (s *Store) UpdateContainerStatusByName(ctx context.Context, containerName, 
 	return nil
 }
 
+// ListContainersByType returns all containers of a given type.
+func (s *Store) ListContainersByType(ctx context.Context, containerType string) ([]*ContainerInfo, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(vnc_port, 0), COALESCE(container_type, 'openclaw'), COALESCE(status, 'creating')
+		 FROM containers WHERE container_type = $1`,
+		containerType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list containers by type: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*ContainerInfo
+	for rows.Next() {
+		info := &ContainerInfo{}
+		if err := rows.Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.VncPort, &info.ContainerType, &info.Status); err != nil {
+			return nil, fmt.Errorf("scan container: %w", err)
+		}
+		results = append(results, info)
+	}
+	return results, rows.Err()
+}
+
 // GetUserIDByContainerName looks up the user who owns a container (for freeze-time memory pull).
 func (s *Store) GetUserIDByContainerName(ctx context.Context, containerName string) (string, error) {
 	var userID string
@@ -100,10 +124,10 @@ func (s *Store) GetUserIDByContainerName(ctx context.Context, containerName stri
 func (s *Store) GetContainerInfoByName(ctx context.Context, containerName string) (*ContainerInfo, error) {
 	info := &ContainerInfo{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(container_type, 'openclaw'), COALESCE(status, 'creating')
+		`SELECT user_id, container_name, COALESCE(host(container_ip), ''), container_token, COALESCE(host_port, 0), COALESCE(vnc_port, 0), COALESCE(container_type, 'openclaw'), COALESCE(status, 'creating')
 		 FROM containers WHERE container_name = $1`,
 		containerName,
-	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.ContainerType, &info.Status)
+	).Scan(&info.UserID, &info.ContainerName, &info.ContainerIP, &info.ContainerToken, &info.HostPort, &info.VncPort, &info.ContainerType, &info.Status)
 	if err != nil {
 		return nil, fmt.Errorf("get container info by name: %w", err)
 	}
