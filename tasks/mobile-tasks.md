@@ -1,329 +1,373 @@
-# Mobile App — 分步实施任务追踪
+# Mobile App — WebChat + Capacitor 实施清单
 
 > 主规划文档: `tasks/mobile-app-plan.md`
-> 工作模式: 每步 handoff 到 deep 模式实施，完成后回主线更新状态
+> 目标: 交付基于现有 `webchat` 的云端移动 App
+> 约束: 本清单不再沿用旧的 `RN/Expo/shared` 路线
 
 ## 状态图例
 
-- ⬜ 待开始 | 🟡 进行中 | ✅ 完成 | 🔴 阻塞 | ⏭️ 跳过
+- ⬜ 待开始
+- 🟡 进行中
+- ✅ 完成
+- 🔴 阻塞
+- ⏭️ 跳过
 
----
+## Phase 0: 方案落地与冻结
 
-## Phase 0: 共享层抽取 + 网关扩展 (预计 1 周)
+### Step 0.1 ✅ 冻结旧方案
 
-### Step 0.1 ⬜ 创建 shared/ 包骨架
-
-**目标**: 初始化 `shared/` 包结构，配置 monorepo 引用
+**目标**: 明确旧 `React Native + Expo + shared/` 方案停用
 
 **交付物**:
-- `shared/package.json` (`@jacoworks/shared`, type: module, exports 配置)
-- `shared/tsconfig.json` (ES2022, strict, 产出 `dist/`)
-- `shared/tsconfig.build.json` (排除测试)
-- `desktop/package.json` 添加 `@jacoworks/shared` workspace 依赖
-- `desktop/tsconfig.json` 添加 paths alias
-- 根目录 `package.json` 添加 workspaces (如需)
 
-**验证**: `cd shared && npx tsc --noEmit` 通过
+- `tasks/mobile-app-plan.md` 已重写
+- `tasks/mobile-tasks.md` 已重写
+- 新方案明确写明 `webchat + Capacitor + 远程托管 /chat`
 
----
+### Step 0.2 ✅ 形成实施 PRD
 
-### Step 0.2 ⬜ 抽取 types.ts + config.ts → shared/
+**目标**: 把移动端首版范围、非目标、验收标准固定下来
 
-**目标**: 将纯类型和常量抽取到 shared，桌面端改为 re-export
+**交付物**:
 
-**操作**:
-1. `desktop/src/react/types.ts` → `shared/types.ts` (100% 复制)
-2. `desktop/src/react/lib/config.ts` 中的 `MODEL_OPTIONS`, `THINKING_LEVELS`, `DEFAULT_MODEL`, `AppSettings` 类型 → `shared/config.ts`
-3. 桌面端 `types.ts` 改为 `export * from "@jacoworks/shared/types"`
-4. 桌面端 `config.ts` 保留 `getSettings()`/`updateSettings()`/`ensureDefaultWorkspace()` (localStorage 依赖)，常量从 shared import
+- `.agents/tasks/prd-mobile-capacitor-app.md`
 
-**验证**: `cd desktop && npm run check && npm test`
+**验收**:
 
----
+- PRD 与主规划一致
+- 明确首版不包含文件上传、推送、观测站
 
-### Step 0.3 ⬜ 抽取 auth-core.ts → shared/
+## Phase 1: Capacitor 壳 MVP
 
-**目标**: 参数化 storage，创建 `createAuthModule()` 工厂函数
+### Step 1.1 🟡 建立 Capacitor 工程
 
-**操作**:
-1. 定义 `StorageAdapter` 接口: `getItem`, `setItem`, `removeItem`
-2. 定义 `AuthCallbacks` 接口: `onAuthExpired(path)`, `onLoginRedirect(url)`
-3. 定义 `HttpFetch` 类型: `(url, options) => Promise<{status, body}>`
-4. `shared/auth-core.ts`: `createAuthModule(storage, callbacks, httpFetch, gatewayUrl)` 返回所有 auth 方法
-5. 桌面端 `auth.ts` 改为薄 adapter：用 localStorage + window.dispatchEvent 实例化
+**目标**: 在现有 `webchat` 基础上增加原生壳
 
-**验证**: `cd desktop && npm run check && npm test` (auth.test.ts 必须通过)
+**建议改动**:
 
----
+- 在 `webchat/` 内增加 Capacitor 配置
+- 引入 `ios/` 与 `android/` 工程
+- 定义 App ID、应用名、图标、启动页
 
-### Step 0.4 ⬜ 抽取 sessions.ts → shared/
+**建议文件**:
 
-**目标**: 参数化 HTTP transport 和 auth token 获取
+- `webchat/capacitor.config.ts`
+- `webchat/package.json`
 
-**操作**:
-1. `shared/sessions.ts`: `createSessionsModule(httpFetch, getToken, gatewayUrl)` 工厂
-2. 导出所有 session CRUD + `generateTitle` + helper types
-3. 桌面端 `sessions.ts` 改为薄 adapter
+**验收**:
 
-**验证**: `cd desktop && npm run check && npm test` (sessions.test.ts 必须通过)
+- `webchat` 可通过 Capacitor 在 iOS/Android 模拟器启动
 
----
+**当前进度**:
 
-### Step 0.5 ⬜ 抽取 agent-protocol.ts → shared/
+- 已新增 `webchat/capacitor.config.ts`
+- 已引入 `@capacitor/core` / `@capacitor/cli` / `@capacitor/ios` / `@capacitor/android` / `@capacitor/browser`
+- 已生成 `webchat/ios/` 与 `webchat/android/`
+- `npm run cap:doctor` / `npm run cap:sync` 已通过
+- Android 原生构建受本机 Java Runtime 缺失阻塞
+- iOS `xcodebuild` 在当前环境卡在 `Resolve Package Graph`，尚未完成本地编译验收
 
-**目标**: 提取云端协议相关的纯逻辑 (不含 Tauri 本地 RPC)
+### Step 1.2 ✅ 确认远程托管入口
 
-**操作**:
-1. `shared/agent-protocol.ts`:
-   - `PromptPayload`, `CloudPromptPayload` 类型
-   - `AgentRpcEvent` 类型
-   - `AsyncEventQueue<T>` 类
-   - `nextCommandId(prefix)` 函数
-   - `startCloudStream(ws, payload, onMessage)` 函数
-   - `abortCloudSession(ws, sessionId)` 函数
-   - `requestCloudTitleGeneration(ws, ...)` 函数
-2. 定义 `CloudAgentWSLike` 接口: `{ isReady, send(cmd) }` (不引入完整 CloudAgentWS 类)
-3. 桌面端 `agent.ts` 保留 Tauri 本地 RPC 部分，云端函数从 shared import
+**目标**: App 壳稳定打开远程 `/chat`
 
-**验证**: `cd desktop && npm run check && npm test`
+**建议改动**:
 
----
+- 配置 App 首屏加载线上或预发 `/chat`
+- 区分开发环境与生产环境基址
+- 为 WebView 设置允许导航域名
 
-### Step 0.6 ⬜ 抽取 cloud-agent-ws.ts → shared/
+**验收**:
 
-**目标**: 参数化 lifecycle hooks (visibilitychange, online, setTimeout)
+- App 启动后能稳定进入 `/chat`
+- 未登录时可自动进入 `/login`
 
-**操作**:
-1. 定义 `LifecycleAdapter` 接口 (见 mobile-app-plan.md §4.3)
-2. `shared/cloud-agent-ws.ts`: `CloudAgentWS` 接受 `LifecycleAdapter` + `gatewayUrl` + `getToken`
-3. 去掉直接 `window.*` / `document.*` 引用
-4. 桌面端创建 `webLifecycleAdapter` 传入
+### Step 1.3 🟡 保持现有网页登录闭环
 
-**验证**: `cd desktop && npm run check && npm test`
+**目标**: 在不改认证架构的前提下打通首版登录
 
----
+**范围**:
 
-### Step 0.7 ⬜ 抽取 stream-reducer.ts → shared/
+- 首版只保证用户名密码登录
+- 保持 `/login -> /chat` 的现有网页流程
+- 不在首版引入 Feishu Deep Link
 
-**目标**: 提取流式事件处理纯逻辑 (无 DOM/RAF/scroll)
+**相关文件**:
 
-**操作**:
-1. 从 `use-chat-stream.ts` 提取:
-   - `StreamBlock` 状态机更新逻辑 (processSessionEvent)
-   - `collectMetaBlocks()`, `isUntitledTitle()`, `buildPrompt()`
-   - `finalizeBlocks()`: 从 blocks 生成 assistant message
-2. `shared/stream-reducer.ts`: 纯函数，输入 event → 输出 blocks 变更
-3. 桌面端 `use-chat-stream.ts` 调用 shared 函数，保留 DOM/RAF/scroll 逻辑
+- `website/src/main.rs`
+- `website/templates/login.html`
 
-**验证**: `cd desktop && npm run check && npm test`
+**验收**:
 
----
+- WebView 中可完成用户名密码登录
+- 登录完成后可进入 `/chat`
+- 退出登录后可回到 `/login`
 
-### Step 0.8 ⬜ 桌面端全量验证
+**当前进度**:
 
-**目标**: 确保 shared 抽取后桌面端完全不受影响
+- 架构未改写，仍沿用现有网页 `/login -> /chat` 闭环
+- App 壳默认指向远程托管 `/chat`
+- 尚未在可运行的 iOS/Android 模拟器环境里完成端到端验收
 
-**操作**:
-1. `cd desktop && npm run check` (TypeScript 无错)
-2. `cd desktop && npm test` (所有 vitest 通过)
-3. `cd shared && npx tsc --noEmit` (shared 包编译通过)
-4. 手动启动 `make dev-desktop` 验证核心流程:
-   - 登录 → 会话列表 → 新建对话 → 发消息 → 流式渲染 → 停止
-   - 云端模式连接 + 对话
+### Step 1.4 ✅ 增加 App 运行时识别
 
-**验证**: 所有 check 通过 + 手动烟雾测试
+**目标**: 让 `webchat` 能感知自己运行在移动壳中
 
----
+**建议改动**:
 
-### Step 0.9 ⬜ Gateway: POST /api/mobile/agent/ensure
+- 新增平台检测工具
+- 区分 browser 与 capacitor 运行环境
+- 对外链、窗口打开、实验性能力进行差异化处理
 
-**目标**: 幂等容器确保端点
+**建议文件**:
 
-**操作**:
-1. `gateway/cmd/gateway/main.go` 添加路由 `POST /api/mobile/agent/ensure`
-2. 逻辑: 查 containers 表 → running 直接返回 → 无/stopped → 调 docker provision → poll ready
-3. 响应: `{ "status": "ready"|"provisioning"|"error", "container_name", "ws_path": "/ws/agent" }`
-4. 复用现有 `internal/docker/` 逻辑
+- `webchat/src/lib/platform.ts`
+- `webchat/src/lib/external-open.ts`
 
-**验证**: `cd gateway && go vet ./... && go test ./...`
+**验收**:
 
----
+- 前端能判断是否运行在 Capacitor
+- `target="_blank"` 类行为不再依赖浏览器默认实现
 
-### Step 0.10 ⬜ Gateway: Sessions 分页 + 飞书 Deep Link
+### Step 1.5 ✅ 适配移动导航结构
 
-**目标**: 会话列表分页 + 飞书 SSO 支持 custom scheme
+**目标**: 将现有 `webchat` 调整为移动 App 可用的主导航
 
-**操作**:
-1. `GET /api/sessions` 增加 `?cursor=&limit=` 查询参数 (默认 limit=50, 向后兼容)
-2. `store/sessions.go` SQL 加 `WHERE updated_at < $cursor ORDER BY updated_at DESC LIMIT $limit`
-3. 飞书 SSO callback: `redirect` 参数支持 `jacoworks://` scheme
-4. `auth/handlers.go` 校验 redirect URL (白名单 custom scheme)
+**首版导航**:
 
-**验证**: `cd gateway && go vet ./... && go test ./...`
+- 对话
+- 团队
+- 任务
+- 动态
+- 我的
 
----
+**首版移出主导航**:
 
-## Phase 1: Mobile MVP (预计 4-6 周)
+- 容器
+- 观测站
+- 数字之城
 
-### Step 1.1 ⬜ Expo 项目初始化
+**验收**:
 
-**目标**: 创建 mobile/ Expo 项目，配置与 shared/ 集成
+- 手机尺寸下可稳定使用主导航
+- 不再暴露首版不支持的重型模块
 
-**操作**:
-- `npx create-expo-app mobile` + Expo Prebuild
-- Expo Router 基础页面结构 (`app/_layout.tsx`, `app/login.tsx`, `app/(tabs)/`)
-- `mobile/package.json` 依赖 `@jacoworks/shared`
-- Design Token 常量 (`mobile/theme/tokens.ts`)
-- `mobile/adapters/` 骨架 (storage, http, lifecycle)
+### Step 1.6 🟡 打通 `SetupGate` 与聊天闭环
 
-**验证**: `cd mobile && npx tsc --noEmit && npx expo start` 能启动
+**目标**: 保证容器准备、WS 连接、聊天主流程在 App 内可用
 
----
+**范围**:
 
-### Step 1.2 ⬜ 移动端认证 (登录 + 路由守卫)
+- `/api/cowork/container-status`
+- `/api/cowork/provision`
+- `/api/oc/ws-ticket`
+- `/ws/oc`
+- 聊天、停止生成、标题生成、历史会话
 
-**目标**: 用户名密码登录 + token 持久化 + AuthGuard
+**相关文件**:
 
-**操作**:
-- `mobile/adapters/storage.ts`: SecureStore adapter 实现 StorageAdapter
-- `mobile/adapters/http.ts`: 原生 fetch adapter 实现 HttpFetch
-- 用 shared `createAuthModule()` 初始化 auth
-- Login 页面 UI (TextInput + 登录按钮)
-- `_layout.tsx` AuthGuard: 无 token → login, 有 token → tabs
-- 飞书 SSO: 后续 Step (先只做密码登录)
+- `webchat/src/components/SetupGate.tsx`
+- `webchat/src/lib/container.ts`
+- `webchat/src/lib/openclaw-client.ts`
+- `webchat/src/App.tsx`
 
-**验证**: 模拟器登录 → 进入主界面 → 退出后回到登录页
+**验收**:
 
----
+- 无容器用户首次进入可自动 provision
+- 连接成功后可稳定聊天
+- 停止生成与会话切换正常
 
-### Step 1.3 ⬜ 会话列表 + 新建会话
+**当前进度**:
 
-**目标**: FlatList 会话列表 + 下拉刷新 + 新建 + 滑动删除
+- Web 逻辑未拆分，继续复用既有 `SetupGate`、聊天、WS 和会话能力
+- `npm run typecheck` / `npm run build` / `npm run cap:sync` 已通过
+- 尚未在原生模拟器里完成完整聊天链路烟测
 
-**操作**:
-- 用 shared `createSessionsModule()` 初始化 sessions
-- `(tabs)/index.tsx`: FlatList + SessionItem 组件
-- 下拉刷新 (RefreshControl)
-- 新建会话按钮 → createSession → 跳转 chat/[id]
-- 滑动删除 (Swipeable)
+### Step 1.7 ✅ 保留团队、任务、动态
 
-**验证**: 能看到真实会话列表、新建、删除
+**目标**: 让首版移动 App 保持 OpenClaw 的核心产品能力
 
----
+**范围**:
 
-### Step 1.4 ⬜ WebSocket 连接 + 容器确保
+- TeamPanel
+- TasksPanel
+- FeedPanel
 
-**目标**: CloudAgentWS 移动端集成 + 自动 ensure container
+**验收**:
 
-**操作**:
-- `mobile/adapters/lifecycle.ts`: AppState + NetInfo adapter 实现 LifecycleAdapter
-- 用 shared `CloudAgentWS` + mobileLifecycleAdapter
-- 进入主界面后自动 `POST /api/mobile/agent/ensure`
-- WS 连接 + ready 状态管理 (Context Provider)
-- 连接状态 UI 提示 (准备中/已连接/断开)
+- 可安装和切换团队
+- 可查看任务与 Cron
+- 可查看活动流
 
-**验证**: App 启动后容器 ready + WS 连接成功
+### Step 1.8 ✅ 远程桌面 Beta 入口
 
----
+**目标**: 首版保留桌面能力，但不承诺内嵌 noVNC 稳定
 
-### Step 1.5 ⬜ 流式聊天核心
+**策略**:
 
-**目标**: 发消息 → 流式接收 → Markdown 渲染
+- App 中保留远程桌面入口
+- 默认优先外跳系统浏览器或 In-App Browser
+- 内嵌 iframe 模式只做实验验证
 
-**操作**:
-- `chat/[id].tsx`: 消息列表 + Composer (TextInput + Send/Stop)
-- 用 shared `startCloudStream` 发送 prompt
-- 流式事件处理 (用 shared stream-reducer)
-- 节流渲染 (50-100ms batch setState)
-- Markdown 渲染 (react-native-markdown-display)
-- 代码高亮 (react-native-syntax-highlighter)
-- 工具状态卡片 (ToolStatus 组件)
-- 停止生成 (abortCloudSession)
+**相关文件**:
 
-**验证**: 完整对话流程 — 发消息 → 流式输出 → 工具调用 → 完成
+- `webchat/src/components/DesktopPanel.tsx`
 
----
+**验收**:
 
-### Step 1.6 ⬜ 模型切换 + 图片 + 完善
+- 用户能从 App 打开远程桌面
+- 外跳策略在 iOS/Android 都可工作
 
-**目标**: ModelPicker、图片附件、键盘适配、断线重连
+**当前进度**:
 
-**操作**:
-- ModelPicker (BottomSheet)
-- 图片附件 (expo-image-picker → 上传)
-- 图片结果查看 (ImageViewer)
-- KeyboardAvoidingView 适配
-- 断线重连 UI (自动重连 + 提示)
-- MMKV 本地缓存 (离线查看历史会话)
+- 远程桌面入口已收纳到“我的”
+- 移动端/Capacitor 运行时默认走外跳浏览器
+- 桌面浏览器仍保留嵌入式预览
 
-**验证**: 切换模型对话、发送图片、键盘不遮挡输入框
+## Phase 2: 移动可用性补强
 
----
+### Step 2.1 ⬜ 键盘与安全区专项修补
 
-### Step 1.7 ⬜ EAS Build + 内测分发
+**目标**: 解决 WebView 下输入区遮挡与滚动错位
 
-**目标**: iOS + Android 双端内测包
+**建议改动**:
 
-**操作**:
-- `eas.json` 配置 (preview profile)
-- iOS: Ad Hoc provisioning
-- Android: APK 直接分发
-- 基础 E2E 烟雾测试
+- 引入 Capacitor Keyboard 或等价方案
+- 对 `visualViewport`、底部 inset、滚动容器做专项适配
+- 调整 Composer 聚焦与页面滚动策略
 
-**验证**: 真机安装 → 登录 → 对话完整流程
+**相关文件**:
 
----
+- `webchat/src/components/Composer.tsx`
+- `webchat/src/styles/index.css`
 
-## Phase 2: 企业能力 (预计 2-4 周)
+**验收**:
 
-### Step 2.1 ⬜ 定时任务
+- iOS 和 Android 真机下输入区不被遮挡
+- 键盘弹起时消息区和发送区位置稳定
 
-- 任务列表 / 创建 / 删除 (复用 Gateway `/api/cron/jobs` API)
-- `(tabs)/tasks.tsx` 页面
+### Step 2.2 ⬜ Feishu SSO Deep Link
 
-### Step 2.2 ⬜ 飞书 SSO Deep Link
+**目标**: 支持 App 从系统浏览器完成 Feishu 登录再回跳
 
-- 系统浏览器 → 飞书授权 → `jacoworks://auth/callback?token=xxx`
-- expo-linking 捕获
+**建议改动**:
 
-### Step 2.3 ⬜ 文档上传 + 推送通知
+- 注册 `jacoworks://` scheme
+- 网关允许自定义 scheme redirect
+- 网站登录页可触发 App 回跳
 
-- 文件选择 (expo-document-picker) → 上传 Gateway
-- APNs/FCM 推送 token 注册
-- 推送 devices 表 (009_push_devices.sql)
+**相关文件**:
 
-### Step 2.4 ⬜ 会话搜索 + 分享
+- `gateway/internal/auth/handlers.go`
+- `website/src/main.rs`
+- Capacitor iOS/Android URL scheme 配置
 
-- 会话列表搜索
-- Share Extension (iOS) / Share Target (Android)
+**验收**:
 
----
+- Feishu 登录后可回到 App
+- 回跳后能进入 `/chat`
 
-## Phase 3: 高级能力 (预计 4-8 周)
+### Step 2.3 ⬜ 文件上传能力
 
-### Step 3.1 ⬜ 协作容器视图
-### Step 3.2 ⬜ 语音输入
-### Step 3.3 ⬜ 深色模式
-### Step 3.4 ⬜ 性能优化 (FlashList)
-### Step 3.5 ⬜ CI: EAS + GitHub Actions
-### Step 3.6 ⬜ 应用商店提交
+**目标**: 为聊天补上附件能力
 
----
+**需要同时完成**:
 
-## Makefile 扩展 (Phase 1 期间添加)
+- 前端附件按钮与上传状态
+- 后端上传 API
+- 存储策略
+- 聊天消息附件引用模型
 
-```makefile
-dev-mobile:     cd mobile && npx expo start --dev-client
-check-mobile:   cd mobile && npx tsc --noEmit && npm test
-check-shared:   cd shared && npx tsc --noEmit
-```
+**相关文件范围**:
 
----
+- `webchat/src/components/Composer.tsx`
+- `webchat/src/types.ts`
+- `gateway/`
+- `website/` 或对象存储接入点
 
-## 注意事项
+**验收**:
 
-1. **Phase 0 是关键路径** — 所有后续步骤依赖 shared 层正确抽取
-2. **每步完成后更新此文档状态** (⬜ → ✅)
-3. **桌面端回归测试** — Step 0.2~0.8 每步都必须跑 `check-desktop`
-4. **Gateway 扩展** — Step 0.9~0.10 独立于前端抽取，可并行
-5. **共享层只放纯逻辑** — 无 DOM, 无 React, 无 RN, 无平台 API
+- 可从手机选择图片或文件
+- 上传后消息里可引用附件
+- Agent 可收到附件信息
+
+### Step 2.4 ⬜ 原生分享
+
+**目标**: 增加系统分享能力
+
+**范围**:
+
+- App 内分享会话链接或文本
+- 评估是否支持系统“分享到 JAcoworks”
+
+**约束**:
+
+- 入站分享应与附件模型统一设计
+
+## Phase 3: 移动高级能力
+
+### Step 3.1 ⬜ 推送通知
+
+**目标**: 支持任务结果和重要事件通知
+
+**需要新增**:
+
+- 推送设备表
+- 设备注册 API
+- APNs/FCM 发送链路
+- 通知点击回到会话或任务
+
+**验收**:
+
+- App 可注册设备 token
+- 服务端可向设备发送通知
+- 点击通知可回到目标页面
+
+### Step 3.2 ⬜ 远程桌面内嵌模式评估
+
+**目标**: 评估是否把 noVNC 作为默认体验
+
+**验证维度**:
+
+- 触控
+- 输入法
+- 剪贴板
+- 全屏
+- 稳定性
+
+**结果要求**:
+
+- 验证通过才提升为默认模式
+- 否则维持浏览器外跳策略
+
+### Step 3.3 ⬜ 观测站与数字之城移动评估
+
+**目标**: 在真机上评估 GPU 与交互成本
+
+**范围**:
+
+- `AgentObservatory`
+- `DigitalCityPanel`
+
+**验收**:
+
+- 给出“保留 / 裁剪 / 继续延后”的结论
+
+## 明确废弃的旧任务
+
+以下旧任务不再执行：
+
+- 新建 `mobile/` Expo 项目
+- 新建 `shared/` 包
+- 从桌面端抽 `CloudAgentWS`
+- 新增 `/api/mobile/agent/ensure`
+- 沿用 `/ws/agent` 作为移动端主链路
+
+## 总验收
+
+满足以下条件时，视为移动端方案进入可开发状态：
+
+- Capacitor 工程路径确定
+- 远程托管 `/chat` 路线确定
+- 首版范围与非目标无歧义
+- 认证、远程桌面、文件上传三类风险都已分阶段处理

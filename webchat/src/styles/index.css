@@ -152,6 +152,10 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   transition: all 0.15s;
 }
 
+.nav-rail-btn span {
+  display: none;
+}
+
 .nav-rail-btn:hover {
   color: rgba(255, 255, 255, 0.8);
   background: rgba(255, 255, 255, 0.08);
@@ -595,9 +599,53 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 
 /* ===== Mobile ===== */
 @media (max-width: 768px) {
-  .app-layout { height: 100dvh; }
+  .app-layout {
+    height: 100dvh;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
 
-  .nav-rail { display: none; }
+  .nav-rail {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: calc(64px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    flex-direction: row;
+    align-items: stretch;
+    background: rgba(42, 37, 32, 0.96);
+    backdrop-filter: blur(12px);
+    z-index: 60;
+  }
+  .nav-rail-top,
+  .nav-rail-bottom {
+    display: none;
+  }
+  .nav-rail-tabs {
+    flex: 1;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+    padding: 0.4rem 0.35rem;
+    gap: 0.35rem;
+  }
+  .nav-rail-btn {
+    width: auto;
+    min-width: 56px;
+    height: 44px;
+    padding: 0.35rem 0.5rem;
+    flex-direction: column;
+    gap: 0.18rem;
+    border-radius: 0.8rem;
+  }
+  .nav-rail-btn span {
+    display: block;
+    font-size: 0.625rem;
+    line-height: 1;
+  }
+
   .context-panel { display: none; }
   .context-panel.open {
     display: flex;
@@ -618,7 +666,13 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 
   .mobile-menu-btn { display: flex; }
 
-  .panel-container { padding: 0.875rem; }
+  .panel-container {
+    padding: 0.875rem 0.875rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .messages-area {
+    padding: 1rem 1rem calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  }
 
   .composer {
     padding: 0.625rem 0.75rem calc(0.8rem + env(safe-area-inset-bottom, 0px));
@@ -669,6 +723,17 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   padding: 1.25rem;
 }
 
+.me-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.me-panel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
 .panel-header {
   display: flex;
   align-items: center;
@@ -712,6 +777,91 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   font-size: 0.8125rem;
 }
 
+.my-panel-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.my-panel-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.my-panel-card-head strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.9375rem;
+}
+
+.my-panel-card-head p,
+.my-panel-note {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.my-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(196, 114, 74, 0.12);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.my-panel-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.my-panel-primary,
+.my-panel-secondary {
+  min-height: 44px;
+  padding: 0.7rem 1rem;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.my-panel-primary {
+  color: #fff;
+  background: var(--accent);
+}
+
+.my-panel-primary:hover {
+  background: var(--accent-hover);
+}
+
+.my-panel-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.my-panel-secondary {
+  color: var(--text-primary);
+  background: #fff;
+  border: 1px solid var(--border);
+}
+
+.my-panel-secondary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .panel-error {
   margin-top: 0.75rem;
   padding: 0.5rem 0.75rem;
@@ -731,6 +881,48 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   padding: 1rem;
+}
+
+.desktop-panel-beta-card {
+  margin: auto;
+  max-width: 520px;
+  width: 100%;
+  padding: 1.25rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  box-shadow: 0 16px 40px rgba(26, 24, 22, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.desktop-panel-beta-card h3 {
+  font-size: 1rem;
+}
+
+.desktop-panel-beta-card p {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.desktop-panel-launch-btn {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0.7rem 1rem;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #fff;
+  background: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.desktop-panel-launch-btn:hover {
+  background: var(--accent-hover);
 }
 
 .container-status-row,
@@ -1295,8 +1487,17 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 .desktop-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: clamp(420px, 72vh, 760px);
   overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  box-shadow: 0 16px 40px rgba(26, 24, 22, 0.06);
+}
+
+.desktop-panel-beta {
+  height: auto;
+  min-height: 0;
 }
 
 .desktop-panel-fullscreen {
@@ -1304,6 +1505,10 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   inset: 0;
   z-index: 1000;
   background: var(--bg-primary);
+  height: auto;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .desktop-panel-toolbar {
@@ -1354,6 +1559,7 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   border: none;
   width: 100%;
   background: #000;
+  min-height: 320px;
 }
 
 .desktop-panel-empty {
@@ -1361,11 +1567,14 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  min-height: 280px;
   gap: 0.75rem;
   color: var(--text-muted);
   text-align: center;
   padding: 2rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
 }
 .desktop-panel-empty h3 {
   margin: 0;

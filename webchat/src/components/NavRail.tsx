@@ -1,36 +1,47 @@
-import { MessageSquare, Users, ListTodo, Box, Activity, Monitor, Orbit, Globe } from "lucide-react";
+import { MessageSquare, Users, ListTodo, Box, Activity, Orbit, Globe, UserRound } from "lucide-react";
 import type { ActiveTab } from "../App";
 import { USER_NAME } from "../lib/config";
 
-const TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
+const DESKTOP_TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
   { key: "chat", label: "对话", Icon: MessageSquare },
   { key: "teams", label: "团队", Icon: Users },
   { key: "cron", label: "任务", Icon: ListTodo },
-  { key: "desktop", label: "桌面", Icon: Monitor },
   { key: "container", label: "容器", Icon: Box },
   { key: "feed", label: "动态", Icon: Activity },
+  { key: "me", label: "我的", Icon: UserRound },
   { key: "observatory", label: "观测站", Icon: Orbit },
   { key: "city", label: "数字之城", Icon: Globe },
 ];
 
+const MOBILE_TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
+  { key: "chat", label: "对话", Icon: MessageSquare },
+  { key: "teams", label: "团队", Icon: Users },
+  { key: "cron", label: "任务", Icon: ListTodo },
+  { key: "feed", label: "动态", Icon: Activity },
+  { key: "me", label: "我的", Icon: UserRound },
+];
+
 export default function NavRail({
   activeTab,
+  compact,
   connState,
   onTabChange,
 }: {
   activeTab: ActiveTab;
+  compact: boolean;
   connState: "disconnected" | "connecting" | "connected";
   onTabChange: (tab: ActiveTab) => void;
 }) {
   const initial = (USER_NAME || "U").charAt(0).toUpperCase();
+  const tabs = compact ? MOBILE_TABS : DESKTOP_TABS;
 
   return (
-    <nav className="nav-rail">
+    <nav className={`nav-rail${compact ? " compact" : ""}`}>
       <div className="nav-rail-top">
         <span className="nav-rail-brand">J</span>
       </div>
       <div className="nav-rail-tabs">
-        {TABS.map(({ key, label, Icon }) => (
+        {tabs.map(({ key, label, Icon }) => (
           <button
             key={key}
             className={`nav-rail-btn${activeTab === key ? " active" : ""}`}
@@ -38,6 +49,7 @@ export default function NavRail({
             title={label}
           >
             <Icon size={18} />
+            {compact && <span>{label}</span>}
           </button>
         ))}
       </div>

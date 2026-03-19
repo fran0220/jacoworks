@@ -11,16 +11,17 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Composer from "./components/Composer";
 import ContainerPanel from "./components/ContainerPanel";
-import DesktopPanel from "./components/DesktopPanel";
 import FeedPanel from "./components/FeedPanel";
 import TasksPanel from "./components/TasksPanel";
 import TeamPanel from "./components/TeamPanel";
 import SetupGate from "./components/SetupGate";
+import MyPanel from "./components/MyPanel";
+import { isCompactViewport } from "./lib/platform";
 
 const AgentObservatory = lazy(() => import("./components/AgentObservatory"));
 const DigitalCityPanel = lazy(() => import("./components/DigitalCityPanel"));
 
-export type ActiveTab = "chat" | "teams" | "cron" | "container" | "desktop" | "feed" | "observatory" | "city";
+export type ActiveTab = "chat" | "teams" | "cron" | "container" | "feed" | "observatory" | "city" | "me";
 
 const ACTIVE_TEAM_STORAGE_KEY = "jacoworks.webchat.active-team.v1";
 
@@ -65,10 +66,10 @@ export default function App() {
   const [connState, setConnState] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
+  const [compactLayout, setCompactLayout] = useState(() => isCompactViewport());
 
   // null = not yet validated, "" = no token (show SetupGate), "xxx" = verified token
   const [ocToken, setOcToken] = useState<string | null>(() => getOpenClawToken() || null);
-
   // SetupGate calls this after confirming the container is truly online.
   const handleGateReady = useCallback((token: string) => {
     window.__OPENCLAW_TOKEN__ = token;
@@ -108,6 +109,31 @@ export default function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+
+    const media = window.matchMedia("(max-width: 768px)");
+    const onChange = (event: MediaQueryListEvent) => {
+      setCompactLayout(event.matches);
+    };
+
+    setCompactLayout(media.matches);
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", onChange);
+      return () => media.removeEventListener("change", onChange);
+    }
+
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!compactLayout) return;
+    if (activeTab === "container" || activeTab === "observatory" || activeTab === "city") {
+      setActiveTab("chat");
+    }
+  }, [activeTab, compactLayout]);
 
   const scheduleRender = useCallback((delayMs = 50) => {
     if (renderTimer.current !== null) return;
@@ -377,6 +403,7 @@ export default function App() {
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <NavRail
         activeTab={activeTab}
+        compact={compactLayout}
         connState={connState}
         onTabChange={(tab) => {
           setActiveTab(tab);
@@ -394,9 +421,11 @@ export default function App() {
         />
       )}
       <div className="chat-main">
-        <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
-          ☰
-        </button>
+        {compactLayout && activeTab === "chat" && (
+          <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
+            ☰
+          </button>
+        )}
         {activeTab === "chat" && (
           <>
             <ChatView messages={messages} blocks={blocks} streaming={streaming} error={error} />
@@ -407,9 +436,9 @@ export default function App() {
           <TeamPanel activeSessionKey={activeTeamSessionKey} onSwitchTeam={handleSwitchTeamFromPanel} />
         )}
         {activeTab === "container" && <ContainerPanel />}
-        {activeTab === "desktop" && <DesktopPanel />}
         {activeTab === "cron" && <TasksPanel />}
         {activeTab === "feed" && <FeedPanel />}
+        {activeTab === "me" && <MyPanel />}
         {activeTab === "observatory" && (
           <Suspense fallback={<div className="observatory-loading"><span className="spinner" /><span>加载中…</span></div>}>
             <AgentObservatory
