@@ -1,4 +1,4 @@
-import { AlertTriangle, Bug, LoaderCircle } from "lucide-react";
+import { AlertTriangle, Bug, LoaderCircle, MessageCircleWarning } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChatView from "./react/components/ChatView";
 import LoginPanel from "./react/components/LoginPanel";
@@ -18,6 +18,8 @@ import {
   subscribeAuth,
 } from "./react/lib/auth";
 import { getSettings } from "./react/lib/config";
+import type { FeedbackDraft } from "./react/lib/feedback";
+import { getLatestError, subscribeErrors, buildDraftForError } from "./react/lib/feedback";
 import { syncMemory } from "./react/lib/memory-sync";
 
 const RpcLogPanel = lazy(() => import("./react/components/RpcLogPanel"));
@@ -33,6 +35,9 @@ export default function App() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [debugEnabled, setDebugEnabled] = useState(() => getSettings().debugLogEnabled);
   const [showRpcLog, setShowRpcLog] = useState(false);
+  const [feedbackPrefill, setFeedbackPrefill] = useState<FeedbackDraft | null>(null);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "model" | "memory" | "skills" | "feedback">("general");
+  const [latestError, setLatestError] = useState(getLatestError);
   const [streamingSessions, setStreamingSessions] = useState<Set<string>>(() => new Set());
   const [unreadSessions, setUnreadSessions] = useState<Set<string>>(() => new Set());
 
@@ -54,6 +59,17 @@ export default function App() {
       syncMemory().catch(() => {});
     }
   }, [authenticated, bootstrapDone]);
+
+  useEffect(() => subscribeErrors(() => setLatestError(getLatestError())), []);
+
+  const openFeedbackForError = useCallback(async () => {
+    const err = latestError;
+    if (!err) return;
+    const draft = await buildDraftForError(err);
+    setFeedbackPrefill(draft);
+    setSettingsInitialTab("feedback");
+    setShowSettings(true);
+  }, [latestError]);
 
   const updater = useUpdater();
   const {
@@ -219,7 +235,11 @@ export default function App() {
           title={title}
           sidebarOpen={isSidebarOpen}
           onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={() => {
+            setSettingsInitialTab("general");
+            setFeedbackPrefill(null);
+            setShowSettings(true);
+          }}
           taskPanelOpen={showTaskPanel}
           onToggleTaskPanel={() => {
             setTaskPanelOpen((v) => {
@@ -288,15 +308,31 @@ export default function App() {
       </div>
 
       {showRpcLog && <Suspense fallback={null}><RpcLogPanel onClose={() => setShowRpcLog(false)} /></Suspense>}
+
+      {latestError && Date.now() - latestError.ts < 300_000 && (
+        <button
+          className="floating-feedback-btn"
+          onClick={openFeedbackForError}
+          title={latestError.title}
+        >
+          <MessageCircleWarning size={16} />
+          反馈问题
+        </button>
+      )}
+
       {showSettings && (
         <Suspense fallback={null}>
           <SettingsModal
             onClose={() => {
               setShowSettings(false);
+              setFeedbackPrefill(null);
+              setSettingsInitialTab("general");
               const d = getSettings().debugLogEnabled;
               setDebugEnabled(d);
               if (!d) setShowRpcLog(false);
             }}
+            initialTab={settingsInitialTab}
+            feedbackPrefill={feedbackPrefill}
             onCreateSkill={() => {
               setShowSettings(false);
               const d = getSettings().debugLogEnabled;

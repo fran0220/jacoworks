@@ -48,7 +48,8 @@ func (s *AgentService) RegisterAgent(ctx context.Context, name, role, descriptio
 		return nil, err
 	}
 	if existing != nil {
-		return nil, &store.ValidationError{Message: "agent name already exists: " + name}
+		// Idempotent: return existing agent (with API key) instead of error
+		return existing, nil
 	}
 
 	apiKey, err := generateAPIKey()

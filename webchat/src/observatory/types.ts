@@ -119,6 +119,7 @@ export interface WorldAgent {
   role: string;
   config: RoleConfig;
   vrm: VRM | null;
+  root: THREE.Object3D;
   state: AgentState;
   position: THREE.Vector3;
   targetZone: ZoneId | null;

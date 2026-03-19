@@ -15,3 +15,5 @@ export function getOpenClawVncUrl(): string {
 export const OPENCLAW_TOKEN = getOpenClawToken();
 
 export const DEFAULT_OPENCLAW_SESSION_KEY = window.__OPENCLAW_SESSION_KEY__ || "agent:default:main";
+
+export const MAPBOX_TOKEN: string = window.__MAPBOX_TOKEN__ || "";

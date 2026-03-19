@@ -25,11 +25,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { selectFolder } from "../lib/cowork";
-import { getSettings, updateSettings, GATEWAY_URL, MODEL_OPTIONS, THINKING_LEVELS, type AppSettings } from "../lib/config";
+import { getSettings, updateSettings, GATEWAY_URL, getModelOptions, getServerDefaultModel, THINKING_LEVELS, type AppSettings } from "../lib/config";
 import { getToken } from "../lib/auth";
 import { getMemoryStats as fetchMemoryStats, clearAllMemory } from "../lib/memory-sync";
 import { httpFetch } from "../lib/transport";
 import { useSkills, setSkills, fetchSkills, deleteSkill as apiDeleteSkill, type SkillDefinition } from "../lib/skills";
+import type { FeedbackDraft } from "../lib/feedback";
 import ConfirmDialog from "./ConfirmDialog";
 import CustomSelect from "./CustomSelect";
 
@@ -47,6 +48,8 @@ export interface SettingsModalProps {
   onCreateSkill?: () => void;
   /** 关闭设置并跳转新会话，发送 GitHub 安装指令 */
   onInstallSkill?: (url: string) => void;
+  initialTab?: Tab;
+  feedbackPrefill?: FeedbackDraft | null;
 }
 
 function formatBytes(bytes: number): string {
@@ -194,6 +197,12 @@ function GeneralTab() {
 function ModelTab() {
   const [settings, setSettings] = useState(getSettings);
   const [restartHint, setRestartHint] = useState(false);
+  const modelOptions = getModelOptions();
+
+  const effectiveModel = settings.defaultModelPinned && settings.defaultModel
+    ? settings.defaultModel
+    : getServerDefaultModel();
+  const followLabel = modelOptions.find((item) => item.value === getServerDefaultModel())?.label || getServerDefaultModel();
 
   const handleChange = (patch: Partial<AppSettings>) => {
     const updated = { ...settings, ...patch };
@@ -219,12 +228,46 @@ function ModelTab() {
               </div>
             </div>
             <CustomSelect
-              options={MODEL_OPTIONS}
-              value={settings.defaultModel}
-              onChange={(v) => handleChange({ defaultModel: v })}
+              options={[
+                { value: "follow", label: `跟随网关主模型（${followLabel}）` },
+                { value: "custom", label: "手动固定模型" },
+              ]}
+              value={settings.defaultModelPinned ? "custom" : "follow"}
+              onChange={(v) => {
+                if (v === "follow") {
+                  handleChange({ defaultModelPinned: false, defaultModel: "" });
+                  return;
+                }
+                handleChange({ defaultModelPinned: true, defaultModel: effectiveModel });
+              }}
             />
           </div>
         </div>
+
+        {settings.defaultModelPinned && (
+          <div className="settings-item">
+            <div className="settings-item-main">
+              <div className="settings-item-info">
+                <Cpu size={16} />
+                <div>
+                  <div className="settings-item-label">固定模型</div>
+                  <div className="settings-item-desc">
+                    仅在「手动固定模型」模式生效
+                  </div>
+                </div>
+              </div>
+              <CustomSelect
+                options={modelOptions}
+                value={effectiveModel}
+                onChange={(v) => handleChange({ defaultModelPinned: true, defaultModel: v })}
+              />
+            </div>
+          </div>
+        )}
+
+        {!settings.defaultModelPinned && (
+          <div className="settings-hint">当前跟随网关主模型：{followLabel}</div>
+        )}
 
         <div className="settings-item">
           <div className="settings-item-main">
@@ -479,7 +522,7 @@ function BuiltinSkillCard({ skill }: { skill: SkillDefinition }) {
 
 // ─── Tab: Feedback ──────────────────────────────────────
 
-function FeedbackTab() {
+function FeedbackTab({ initialDraft }: { initialDraft?: FeedbackDraft }) {
   const [category, setCategory] = useState("bug");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -488,6 +531,17 @@ function FeedbackTab() {
   const [result, setResult] = useState<{ number: number; url: string } | null>(null);
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Apply prefilled draft when it changes
+  useEffect(() => {
+    if (!initialDraft?.draftKey) return;
+    if (initialDraft.category) setCategory(initialDraft.category);
+    if (initialDraft.title) setTitle(initialDraft.title);
+    if (initialDraft.description) setDescription(initialDraft.description);
+    if (initialDraft.images) setImages(initialDraft.images);
+    setResult(null);
+    setError("");
+  }, [initialDraft?.draftKey]);
 
   const compressImage = useCallback((file: File | Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -848,8 +902,8 @@ function SkillsTab({
 
 // ─── Main Modal ─────────────────────────────────────────
 
-export default function SettingsModal({ onClose, onCreateSkill, onInstallSkill }: SettingsModalProps) {
-  const [tab, setTab] = useState<Tab>("general");
+export default function SettingsModal({ onClose, onCreateSkill, onInstallSkill, initialTab, feedbackPrefill }: SettingsModalProps) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? "general");
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -888,7 +942,7 @@ export default function SettingsModal({ onClose, onCreateSkill, onInstallSkill }
             {tab === "model" && <ModelTab />}
             {tab === "memory" && <MemoryTab />}
             {tab === "skills" && <SkillsTab onCreateSkill={onCreateSkill} onInstallSkill={onInstallSkill} />}
-            {tab === "feedback" && <FeedbackTab />}
+            {tab === "feedback" && <FeedbackTab initialDraft={feedbackPrefill ?? undefined} />}
           </div>
         </div>
       </div>

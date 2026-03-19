@@ -14,13 +14,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDragDrop } from "../hooks/use-drag-drop";
 import { useClickOutside } from "../hooks/use-click-outside";
-import { MODEL_OPTIONS } from "../lib/config";
+import { getModelOptions, getSettings } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder, isDefaultSyncDir } from "../lib/cowork";
 import { importFilesByPaths, importFilesNative, formatSize } from "../lib/file-utils";
 import { addRecentFolder, getRecentFolders } from "../lib/recentFolders";
-import { getSettings } from "../lib/config";
 import type { AttachedFile } from "../types";
 
 function ElapsedTime({ startedAt }: { startedAt: number }) {
@@ -312,7 +311,7 @@ export default function Composer({
 
         <div className="composer-toolbar-right">
           <CustomSelect
-            options={MODEL_OPTIONS}
+            options={getModelOptions()}
             value={model}
             onChange={onModelChange}
             disabled={isStreaming}

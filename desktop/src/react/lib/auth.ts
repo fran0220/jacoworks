@@ -180,6 +180,9 @@ export async function fetchAgentConfig(): Promise<{
   mineru_token?: string;
   jimeng_api_url?: string;
   jimeng_api_key?: string;
+  primary_model?: string;
+  primary_provider?: string;
+  models?: Array<{ id: string; provider: string; label: string }>;
 }> {
   const response = await authFetch("/api/agent/config", { method: "GET" });
   if (response.status !== 200) {

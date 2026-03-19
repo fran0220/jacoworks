@@ -56,7 +56,7 @@ export class AvatarNavigator {
     pos.z += nz * step;
 
     // Smooth rotation to face movement direction
-    const root = this.agent.vrm ? this.agent.vrm.scene : null;
+    const root = this.agent.root;
     if (root) {
       const angle = Math.atan2(nx, nz);
       this.targetQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);

@@ -2,7 +2,7 @@ import { ChevronDown } from "lucide-react";
 import { useCallback } from "react";
 import { useChatStream } from "../hooks/use-chat-stream";
 import type { AgentTransport } from "../lib/agent-transport";
-import { MODEL_OPTIONS } from "../lib/config";
+import { getModelOptions } from "../lib/config";
 import type { AttachedFile, ChatSession } from "../types";
 import AgentStatusBar from "./AgentStatusBar";
 import AssistantContent from "./AssistantContent";
@@ -70,8 +70,9 @@ export default function ChatView({
 
   const handleSwitchModel = useCallback(() => {
     const currentModel = sessionState.model;
-    const currentIdx = MODEL_OPTIONS.findIndex(m => m.value === currentModel);
-    const next = MODEL_OPTIONS[(currentIdx + 1) % MODEL_OPTIONS.length];
+    const options = getModelOptions();
+    const currentIdx = options.findIndex(m => m.value === currentModel);
+    const next = options[(currentIdx + 1) % options.length];
     updateModel(next.value);
   }, [sessionState.model, updateModel]);
 

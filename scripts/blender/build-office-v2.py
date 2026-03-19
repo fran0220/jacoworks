@@ -253,6 +253,18 @@ imp("coatRackStanding.glb", pos=(tx+4.2, ty-3.8, 0), name="tower_coat")
 imp("pillowBlue.glb", pos=(tx-2, ty-0.5, 0.35*S), name="tower_pillow1")
 imp("pillow.glb", pos=(tx+2, ty+0.5, 0.35*S), name="tower_pillow2")
 
+# ── Tower: Extra creative differentiation (unique to this zone) ──
+# Standalone whiteboard/easel area (small round table + books as "portfolio")
+tower_port = imp("tableRound.glb", pos=(tx-3.5, ty+1.5, 0), sc=S*0.8, name="tower_portfolio_tbl")
+if tower_port:
+    tp_z = top_z(tower_port) + 0.01
+    imp("books.glb", pos=(tx-3.5, ty+1.5, tp_z), name="tower_portfolio")
+# Extra design chairs in reading nook (make tower feel like a "creative lounge" not "break room")
+imp("chairModernCushion.glb", pos=(tx-3.5, ty-2.0, 0), rot_z=math.pi/3, name="tower_modern_ch1")
+imp("chairModernCushion.glb", pos=(tx+3.5, ty+3.0, 0), rot_z=-math.pi/3, name="tower_modern_ch2")
+# Second TV for dual-screen brainstorm setup
+imp("televisionVintage.glb", pos=(tx-4.0, ty+1.5, 0), rot_z=math.pi/2, name="tower_vintagetv")
+
 # ── GATE 4b: Court — 评审室 (6, 6) ───────────────────────
 print("\n⚖️ Court (review room)...")
 crx, cry = 6, 6
@@ -406,6 +418,18 @@ imp("rugDoormat.glb", pos=(0, -0.5, 0.01), name="hub_entrymat")
 # Vintage TV as "info display" near entry
 imp("televisionVintage.glb", pos=(-3.5, -0.5, 0), rot_z=math.pi/4, name="hub_infotv")
 
+# ── Hub: Extra reception identity elements ──
+# Large floor lamp flanking reception (beacon visual)
+imp("lampSquareFloor.glb", pos=(-3.5, 2.0, 0), name="hub_recep_lamp_l")
+imp("lampSquareFloor.glb", pos=(3.5, 2.0, 0), name="hub_recep_lamp_r")
+# Welcome bench near entry
+imp("benchCushionLow.glb", pos=(-2.5, -4.2, 0), rot_z=0, name="hub_welcome_bench")
+# Extra side display with visitor info
+hub_vd = imp("sideTableDrawers.glb", pos=(3.5, -3.5, 0), name="hub_visitor_desk")
+if hub_vd:
+    hvd_z = top_z(hub_vd) + 0.01
+    imp("laptop.glb", pos=(3.5, -3.5, hvd_z), name="hub_visitor_lap")
+
 # ── GATE 5: Corridors + Decoration + Ceiling Fans ─────────
 print("\n🌿 Corridors & decorations...")
 
@@ -469,95 +493,206 @@ for (cfn, cfx, cfy) in [
 
 # === INSERTION POINT ===
 
-# ── GATE 7: Zone Differentiation Boost ────────────────────
-print("\n🎨 Zone differentiation boost...")
+# ══════════════════════════════════════════════════════════
+# ── GATE 7: Massive Zone Identity Overhaul ────────────────
+# ══════════════════════════════════════════════════════════
+print("\n🎨 Zone identity overhaul...")
 
-# Tower: extra creative props — design chair accent + small table with lamp
-imp("loungeDesignChair.glb", pos=(-6-3.5, 6+3, 0), rot_z=math.pi/3, name="tower_accent_ch")
-imp("sideTableDrawers.glb", pos=(-6+3.5, 6+3.5, 0), name="tower_nightstand")
-tower_ns = [o for o in bpy.data.objects if o.name == "tower_nightstand"]
-if tower_ns:
-    tns_z = top_z(tower_ns[0]) + 0.01
-    imp("lampRoundTable.glb", pos=(-6+3.5, 6+3.5, tns_z), name="tower_tablelamp")
-
-# Court: extra formal props — double paneling as "rules board" + speaker podium
-imp("paneling.glb", pos=(6-4.0, 6+4.0, 0), sc=S*1.2, name="court_panel1")
-imp("paneling.glb", pos=(6-3.0, 6+4.0, 0), sc=S*1.2, name="court_panel2")
-imp("speaker.glb", pos=(6-4.0, 6-1.5, 0), name="court_speaker_floor")
-
-# Hub: extra landmark — tall bookcase wall + side display table
-imp("bookcaseClosed.glb", pos=(-3.2, 3.5, 0), sc=S*1.2, name="hub_tallcase")
+# ─── HUB: Transform into unmistakable reception/lobby ─────
+# Double-height bookcase wall behind reception as brand wall
+imp("bookcaseClosed.glb", pos=(-3.5, 3.5, 0), sc=S*1.3, name="hub_tallcase_l")
+imp("bookcaseClosed.glb", pos=(3.5, 3.5, 0), sc=S*1.3, name="hub_tallcase_r")
+# Large reception counter (kitchenBar repurposed)
+imp("kitchenBar.glb", pos=(-1.5, 1.0, 0), name="hub_counter1")
+imp("kitchenBar.glb", pos=(0, 1.0, 0), name="hub_counter1b")
+imp("kitchenBarEnd.glb", pos=(1.5, 1.0, 0), name="hub_counter2")
+# Distinctive large rug anchoring reception
+imp("rugRectangle.glb", pos=(0, 0, 0.003), sc=S*2.2, name="hub_main_rug")
+# Wall-mounted TV as lobby info display (opposite side from vintage TV)
+imp("cabinetTelevision.glb", pos=(3.5, -0.5, 0), rot_z=-math.pi/2, name="hub_tvcab")
+imp("televisionModern.glb", pos=(3.7, -0.5, 0.6), sc=S*1.3, rot_z=-math.pi/2, name="hub_info_tv")
+# Extra waiting chairs (different style for variety)
+imp("chairCushion.glb", pos=(-3.5, -2.5, 0), rot_z=math.pi/4, name="hub_wait_ch1")
+imp("chairCushion.glb", pos=(3.5, -2.5, 0), rot_z=-math.pi/4, name="hub_wait_ch2")
+# Magazine table in waiting area
+hub_magt = imp("tableCoffee.glb", pos=(-2.5, -3.5, 0), name="hub_magtable")
+if hub_magt:
+    hmt_z = top_z(hub_magt) + 0.01
+    imp("books.glb", pos=(-2.5, -3.5, hmt_z), name="hub_magazines")
+# Side display table with books
 imp("sideTable.glb", pos=(3.2, 0.5, 0), name="hub_display")
 hub_disp = [o for o in bpy.data.objects if o.name == "hub_display"]
 if hub_disp:
     hd_z2 = top_z(hub_disp[0]) + 0.01
     imp("plantSmall1.glb", pos=(3.2, 0.5, hd_z2), name="hub_disp_plant")
+# Coat rack for visitor coats
+imp("coatRack.glb", pos=(-3.8, -0.5, 0), name="hub_coatrack")
+# Floor lamp for ambient warmth
+imp("lampRoundFloor.glb", pos=(-3.5, -1.0, 0), name="hub_flamp")
 
-# Forge: dev atmosphere — whiteboard (wide bookcase) + extra boxes + cable tray (sideTableDrawers)
+# ─── FORGE: Amplify dev team atmosphere ───────────────────
+# Whiteboard wall (wide bookcase) — team planning board
 imp("bookcaseClosedWide.glb", pos=(-6+4.2, -6-4.0, 0), rot_z=math.pi/2, sc=S*1.2, name="forge_whiteboard")
-imp("cardboardBoxClosed.glb", pos=(-6+3.5, -6+4.5, 0), name="forge_box3")
+# Server rack / monitoring station (stacked cabinets + screens)
 imp("sideTableDrawers.glb", pos=(-6-4.2, -6+1.5, 0), name="forge_cabinet")
-# Forge: extra screens stacked on low shelf to look like "monitoring wall"
 forge_cab = [o for o in bpy.data.objects if o.name == "forge_cabinet"]
 if forge_cab:
     fcab_z = top_z(forge_cab[0]) + 0.01
     imp("laptop.glb", pos=(-6-4.2, -6+1.5, fcab_z), rot_z=math.pi/2, name="forge_lap_extra")
+imp("sideTableDrawers.glb", pos=(-6-4.2, -6+3.0, 0), name="forge_cabinet2")
+forge_cab2 = [o for o in bpy.data.objects if o.name == "forge_cabinet2"]
+if forge_cab2:
+    fcab2_z = top_z(forge_cab2[0]) + 0.01
+    imp("computerScreen.glb", pos=(-6-4.2, -6+3.0, fcab2_z), rot_z=math.pi/2, name="forge_mon_extra")
+# Shipping/delivery boxes (startup feel)
+imp("cardboardBoxClosed.glb", pos=(-6+3.5, -6+4.5, 0), name="forge_box3")
+imp("cardboardBoxOpen.glb", pos=(-6+4.0, -6+4.5, 0), name="forge_box4")
+imp("cardboardBoxClosed.glb", pos=(-6+4.5, -6+4.5, 0), sc=S*0.8, name="forge_box5")
+# Standing meeting table for daily standup
+imp("tableRound.glb", pos=(-6+3.5, -6-2.5, 0), sc=S*0.9, name="forge_standup")
+forge_su = [o for o in bpy.data.objects if o.name == "forge_standup"]
+if forge_su:
+    fsu_z = top_z(forge_su[0]) + 0.01
+    imp("laptop.glb", pos=(-6+3.5, -6-2.5, fsu_z), name="forge_su_laptop")
+# Entrance mat
+imp("rugDoormat.glb", pos=(-6, -1.5, 0.01), name="forge_entrance_mat")
+# Second floor lamp (corner warmth)
+imp("lampSquareFloor.glb", pos=(-6-4.0, -6-3.5, 0), name="forge_flamp2")
 
-# Lounge: kitchen bar counter extension + extra stools
+# ─── TOWER: Unmistakable creative studio/brainstorm ───────
+# Accent design chair + reading corner
+imp("loungeDesignChair.glb", pos=(-6-3.5, 6+3, 0), rot_z=math.pi/3, name="tower_accent_ch")
+# Nightstand with table lamp (reading corner)
+imp("sideTableDrawers.glb", pos=(-6+3.5, 6+3.5, 0), name="tower_nightstand")
+tower_ns = [o for o in bpy.data.objects if o.name == "tower_nightstand"]
+if tower_ns:
+    tns_z = top_z(tower_ns[0]) + 0.01
+    imp("lampRoundTable.glb", pos=(-6+3.5, 6+3.5, tns_z), name="tower_tablelamp")
+# Layered rug for texture depth
+imp("rugRounded.glb", pos=(-6, 6, 0.003), sc=S*2.0, name="tower_rug_rounded")
+# Idea wall — triple paneling with plants (inspiration board)
+imp("paneling.glb", pos=(-6-4.2, 6-1.5, 0), sc=S*1.2, rot_z=math.pi/2, name="tower_idea1")
+imp("paneling.glb", pos=(-6-4.2, 6+0.5, 0), sc=S*1.2, rot_z=math.pi/2, name="tower_idea2")
+imp("paneling.glb", pos=(-6-4.2, 6+2.5, 0), sc=S*1.2, rot_z=math.pi/2, name="tower_idea3")
+# Extra creative seating (loungeChair for sketching)
+imp("loungeChair.glb", pos=(-6-3, 6-3, 0), rot_z=math.pi/4, name="tower_sketch_ch")
+# Small table for sketch materials
+tower_skt = imp("sideTable.glb", pos=(-6-2.5, 6-3.5, 0), name="tower_sketch_tbl")
+if tower_skt:
+    tsk_z = top_z(tower_skt) + 0.01
+    imp("books.glb", pos=(-6-2.5, 6-3.5, tsk_z), name="tower_sketchbooks")
+# Second floor lamp opposite side
+imp("lampRoundFloor.glb", pos=(-6+4.0, 6-3.5, 0), name="tower_flamp2")
+
+# ─── COURT: Formal authority and hierarchy ────────────────
+# Double paneling as "rules/compliance board"
+imp("paneling.glb", pos=(6-4.0, 6+4.0, 0), sc=S*1.2, name="court_panel1")
+imp("paneling.glb", pos=(6-3.0, 6+4.0, 0), sc=S*1.2, name="court_panel2")
+imp("paneling.glb", pos=(6-2.0, 6+4.0, 0), sc=S*1.2, name="court_panel3")
+# Speaker podium (presentation station)
+imp("speaker.glb", pos=(6-4.0, 6-1.5, 0), name="court_speaker_floor")
+# Entrance mat + head chair
+imp("rugDoormat.glb", pos=(6, 1.5, 0.01), name="court_entrance_mat")
+imp("chairModernFrameCushion.glb", pos=(6, 6+3.5, 0), rot_z=math.pi, name="court_head_chair")
+# Credenza / side cabinet for documents
+imp("bookcaseClosedWide.glb", pos=(6+4.2, 6, 0), rot_z=-math.pi/2, name="court_credenza")
+court_cred = [o for o in bpy.data.objects if o.name == "court_credenza"]
+if court_cred:
+    ccred_z = top_z(court_cred[0]) + 0.01
+    imp("books.glb", pos=(6+4.2, 6, ccred_z), name="court_cred_books")
+# Water cooler stand (sideTable + plantSmall as pitcher substitute)
+imp("sideTable.glb", pos=(6+4.0, 6-2.5, 0), name="court_water")
+court_water = [o for o in bpy.data.objects if o.name == "court_water"]
+if court_water:
+    cw_z = top_z(court_water[0]) + 0.01
+    imp("plantSmall3.glb", pos=(6+4.0, 6-2.5, cw_z), name="court_water_plant")
+# Extra observer bench for back wall (symmetry)
+imp("benchCushion.glb", pos=(6, 6-4.5, 0), name="court_bench_center")
+# Second paneling on east wall as "motto board"
+imp("paneling.glb", pos=(6+4.2, 6+3, 0), sc=S*1.0, rot_z=-math.pi/2, name="court_motto")
+
+# ─── LOUNGE: Complete kitchen corner + cozy nook ──────────
+# Extended bar area
 imp("kitchenBar.glb", pos=(6+2.2, -6+3.5, 0), rot_z=-math.pi/2, name="lg_bar")
 imp("kitchenBarEnd.glb", pos=(6+2.2, -6+4.5, 0), rot_z=-math.pi/2, name="lg_barend")
 imp("stoolBarSquare.glb", pos=(6+1.0, -6+3.5, 0), rot_z=math.pi/2, name="lg_bstool1")
 imp("stoolBarSquare.glb", pos=(6+1.0, -6+4.5, 0), rot_z=math.pi/2, name="lg_bstool2")
-
-# ── GATE 7b: Final zone identity push ─────────────────────
-print("\n🏷 Final zone identity push...")
-
-# Hub: reception counter (kitchenBar as counter) + large directional rug
-imp("kitchenBar.glb", pos=(-1.5, 1.0, 0), name="hub_counter1")
-imp("kitchenBarEnd.glb", pos=(1.5, 1.0, 0), name="hub_counter2")
-imp("rugRectangle.glb", pos=(0, 0, 0.003), sc=S*2.0, name="hub_main_rug")
-
-# Forge: large distinctive rug (already has rugRectangle, add rugDoormat markers at entrance)
-imp("rugDoormat.glb", pos=(-6, -1.5, 0.01), name="forge_entrance_mat")
-
-# Tower: add rugRounded as layered texture over existing rugs
-imp("rugRounded.glb", pos=(-6, 6, 0.003), sc=S*2.0, name="tower_rug_rounded")
-
-# Court: entrance mat + extra chair for authority
-imp("rugDoormat.glb", pos=(6, 1.5, 0.01), name="court_entrance_mat")
-imp("chairModernFrameCushion.glb", pos=(6, 6+3.5, 0), rot_z=math.pi, name="court_head_chair")
-
-# Lounge: extra cozy elements
+# Kitchen upper cabinets (wall-mounted visual)
+imp("kitchenCabinetUpper.glb", pos=(6+4.2, -6+2.5, 0.8*S), rot_z=-math.pi/2, name="lg_upper_cab1")
+imp("kitchenCabinetUpperDouble.glb", pos=(6+4.2, -6+4.0, 0.8*S), rot_z=-math.pi/2, name="lg_upper_cab2")
+# Large fridge (upgrade from small)
+imp("kitchenFridgeLarge.glb", pos=(6+4.2, -6+4.8, 0), rot_z=-math.pi/2, name="lg_fridge_big")
+# Sink counter
+imp("kitchenSink.glb", pos=(6+3.5, -6+1.0, 0), rot_z=-math.pi/2, name="lg_sink")
+# Extra cozy: rounded rug + extra pillow
 imp("rugRounded.glb", pos=(6, -6, 0.003), sc=S*1.8, name="lg_rug_rounded")
 imp("pillowLong.glb", pos=(6-2, -6-1.5, 0.35*S), name="lg_pillow3")
+# Vintage TV as entertainment in lounge
+imp("televisionAntenna.glb", pos=(6-3.5, -6+4.0, 0), name="lg_retro_tv")
+# Board games / books on coffee table
+lg_ct_obj = [o for o in bpy.data.objects if o.name == "lg_ctable"]
+if lg_ct_obj:
+    lct_z2 = top_z(lg_ct_obj[0]) + 0.01
+    imp("books.glb", pos=(6, -6, lct_z2), name="lg_games")
+# Extra lamp for cozy atmosphere
+imp("lampSquareTable.glb", pos=(6-4.0, -6+3, 0.38*S), name="lg_tablelamp")
 
-# Extra greenery in under-decorated areas
-imp("pottedPlant.glb", pos=(-6, 10, 0), sc=S*1.1, name="extra_g_nw2")
-imp("pottedPlant.glb", pos=(6, 10, 0), sc=S*1.1, name="extra_g_ne2")
-imp("plantSmall2.glb", pos=(-6, -10, 0), name="extra_g_sw2")
-imp("plantSmall3.glb", pos=(6, -10, 0), name="extra_g_se2")
-imp("pottedPlant.glb", pos=(-10, 6, 0), name="extra_g_w_upper")
-imp("pottedPlant.glb", pos=(-10, -6, 0), name="extra_g_w_lower")
-imp("pottedPlant.glb", pos=(10, 6, 0), name="extra_g_e_upper")
-imp("pottedPlant.glb", pos=(10, -6, 0), name="extra_g_e_lower")
+# ─── CORRIDOR RHYTHM: Visual markers + wayfinding ────────
+print("\n🛤 Corridor rhythm...")
 
-# More greenery to fill bare areas (reviewer: 绿植严重不足)
-imp("pottedPlant.glb", pos=(-3, 10.5, 0), sc=S*1.0, name="extra_g_n1")
-imp("pottedPlant.glb", pos=(3, 10.5, 0), sc=S*1.0, name="extra_g_n2")
-imp("plantSmall1.glb", pos=(-3, -10.5, 0), name="extra_g_s1")
-imp("plantSmall2.glb", pos=(3, -10.5, 0), name="extra_g_s2")
-imp("pottedPlant.glb", pos=(-10.5, 0, 0), sc=S*1.0, name="extra_g_w_mid")
-imp("pottedPlant.glb", pos=(10.5, 0, 0), sc=S*1.0, name="extra_g_e_mid")
+# Corridor greenery — dense planting at regular intervals
+for i, (gx, gy, gn) in enumerate([
+    (-6, 10.5, "cg_n1"), (-3, 10.5, "cg_n2"), (3, 10.5, "cg_n3"), (6, 10.5, "cg_n4"),
+    (-6, -10.5, "cg_s1"), (-3, -10.5, "cg_s2"), (3, -10.5, "cg_s3"), (6, -10.5, "cg_s4"),
+    (-10.5, -6, "cg_w1"), (-10.5, -3, "cg_w2"), (-10.5, 3, "cg_w3"), (-10.5, 6, "cg_w4"),
+    (10.5, -6, "cg_e1"), (10.5, -3, "cg_e2"), (10.5, 3, "cg_e3"), (10.5, 6, "cg_e4"),
+    (-10.5, 0, "cg_w_mid"), (10.5, 0, "cg_e_mid"),
+]):
+    plant_type = ["pottedPlant.glb", "plantSmall1.glb", "plantSmall2.glb", "plantSmall3.glb"][i % 4]
+    plant_sc = S*1.1 if "potted" in plant_type else None
+    imp(plant_type, pos=(gx, gy, 0), sc=plant_sc, name=gn)
 
-# Corridor accent decorations — wall art substitute (stacked paneling)
+# Wall art paneling (rhythm)
 imp("paneling.glb", pos=(-10.5, 5, 0), sc=S*0.8, rot_z=math.pi/2, name="corr_w_art1")
 imp("paneling.glb", pos=(-10.5, -5, 0), sc=S*0.8, rot_z=math.pi/2, name="corr_w_art2")
 imp("paneling.glb", pos=(0, 10.5, 0), sc=S*0.8, name="corr_n_art1")
 imp("paneling.glb", pos=(0, -10.5, 0), sc=S*0.8, name="corr_s_art1")
+imp("paneling.glb", pos=(-3, 10.5, 0), sc=S*0.7, name="corr_n_art2")
+imp("paneling.glb", pos=(3, -10.5, 0), sc=S*0.7, name="corr_s_art2")
 
-# Side tables in corridor corners for visual rhythm
-imp("sideTable.glb", pos=(-5, 10, 0), name="corr_n_st")
-imp("sideTable.glb", pos=(5, -10, 0), name="corr_s_st")
+# Side tables with lamps at corridor intersections (visual rhythm)
+for (stx, sty, stn) in [(-5, 10, "corr_n_st"), (5, -10, "corr_s_st"), (-10, 0, "corr_w_st"), (10, 3, "corr_e_st")]:
+    st_obj = imp("sideTable.glb", pos=(stx, sty, 0), name=stn)
+    if st_obj:
+        st_z = top_z(st_obj) + 0.01
+        imp("plantSmall1.glb", pos=(stx, sty, st_z), name=f"{stn}_plant")
+
+# ─── MASSIVE GREENERY BOOST ──────────────────────────────
+print("\n🌿 Extra greenery everywhere...")
+
+# Large corner plants (one per corner, large scale for visual anchor)
+imp("pottedPlant.glb", pos=(-9.5, 9.5, 0), sc=S*1.4, name="corner_plant_nw")
+imp("pottedPlant.glb", pos=(9.5, 9.5, 0), sc=S*1.4, name="corner_plant_ne")
+imp("pottedPlant.glb", pos=(-9.5, -9.5, 0), sc=S*1.4, name="corner_plant_sw")
+imp("pottedPlant.glb", pos=(9.5, -9.5, 0), sc=S*1.4, name="corner_plant_se")
+
+# Partition junction plants (where partitions meet outer walls)
+imp("pottedPlant.glb", pos=(0, 10.2, 0), sc=S*1.2, name="part_plant_n")
+imp("pottedPlant.glb", pos=(0, -10.2, 0), sc=S*1.2, name="part_plant_s")
+imp("pottedPlant.glb", pos=(-10.2, 0, 0), sc=S*1.2, name="part_plant_w")
+imp("pottedPlant.glb", pos=(10.2, 0, 0), sc=S*1.2, name="part_plant_e")
+
+# Mid-corridor plants (between zones)
+imp("plantSmall3.glb", pos=(-3, 0.5, 0), name="mid_plant_w")
+imp("plantSmall2.glb", pos=(3, 0.5, 0), name="mid_plant_e")
+imp("plantSmall1.glb", pos=(0.5, -3, 0), name="mid_plant_s")
+imp("plantSmall3.glb", pos=(0.5, 3, 0), name="mid_plant_n")
+
+# Extra zone-edge plants (visible from corridors)
+imp("pottedPlant.glb", pos=(-2, 5, 0), sc=S*1.0, name="zedge_plant_tower")
+imp("pottedPlant.glb", pos=(-2, -5, 0), sc=S*1.0, name="zedge_plant_forge")
+imp("pottedPlant.glb", pos=(2, 5, 0), sc=S*1.0, name="zedge_plant_court")
+imp("pottedPlant.glb", pos=(2, -5, 0), sc=S*1.0, name="zedge_plant_lounge")
 
 # ── GATE 6: Zone Area Lights ──────────────────────────────
 print("\n💡 Lights...")
@@ -586,18 +721,18 @@ fill2.rotation_euler = (math.radians(85), 0, 0)
 fill2.data.color = (0.9, 0.9, 0.95)
 fill2.name = "Fill2"
 
-# Zone area lights with boosted energy
-for (zn, zx, zy, zcol) in [
-    ("hub", 0, 0, (0.9, 0.95, 1.0)),
-    ("tower", -6, 6, (0.6, 0.7, 1.0)),
-    ("forge", -6, -6, (1.0, 0.85, 0.6)),
-    ("court", 6, 6, (0.5, 1.0, 0.65)),
-    ("lounge", 6, -6, (1.0, 0.92, 0.75)),
+# Zone area lights with boosted energy — strong color coding per zone
+for (zn, zx, zy, zcol, zenergy) in [
+    ("hub", 0, 0, (0.9, 0.95, 1.0), 120),
+    ("tower", -6, 6, (0.5, 0.6, 1.0), 150),
+    ("forge", -6, -6, (1.0, 0.8, 0.5), 150),
+    ("court", 6, 6, (0.4, 1.0, 0.55), 150),
+    ("lounge", 6, -6, (1.0, 0.88, 0.65), 150),
 ]:
     bpy.ops.object.light_add(type='AREA', location=(zx, zy, 1.29*S - 0.1))
     al = bpy.context.active_object
-    al.data.energy = 80
-    al.data.size = 6
+    al.data.energy = zenergy
+    al.data.size = 8
     al.data.color = zcol
     al.name = f"al_{zn}"
 
@@ -658,6 +793,22 @@ bpy.context.scene.render.filepath = out_hub
 bpy.ops.render.render(write_still=True)
 print(f"  ✅ Hub close-up: {out_hub}")
 
+# Close-up of Forge area (-6, -6)
+out_forge = os.path.join(PREVIEW_DIR, "v2-forge.png")
+cam.location = (-6+14, -6-14, 14)
+cam.data.ortho_scale = 18
+bpy.context.scene.render.filepath = out_forge
+bpy.ops.render.render(write_still=True)
+print(f"  ✅ Forge close-up: {out_forge}")
+
+# Close-up of Lounge area (6, -6)
+out_lounge = os.path.join(PREVIEW_DIR, "v2-lounge.png")
+cam.location = (6+14, -6-14, 14)
+cam.data.ortho_scale = 18
+bpy.context.scene.render.filepath = out_lounge
+bpy.ops.render.render(write_still=True)
+print(f"  ✅ Lounge close-up: {out_lounge}")
+
 # Restore full view
 cam.location = (28, -28, 26)
 cam.data.ortho_scale = 34
@@ -692,7 +843,7 @@ for obj in bpy.data.objects:
         name = obj.name
 
         if "f_" not in name and z_min > FLOOR_Z + TOLERANCE:
-            is_tabletop = any(k in name.lower() for k in ['mon', 'kb', 'ms', 'lamp', 'coffee', 'micro', 'toaster', 'blender', 'books', 'splant', 'radio', 'spk', 'tplant', 'dplant', 'pillow', 'lap_', 'lap1', 'lap2', 'lap3', 'lap_extra', 'speaker', '_tv', 'wl_', 'cf_', 'pillowblue', 'pillowlong', 'court_screen', 'disp_plant', 'shelf_plant', 'tablelamp'])
+            is_tabletop = any(k in name.lower() for k in ['mon', 'kb', 'ms', 'lamp', 'coffee', 'micro', 'toaster', 'blender', 'books', 'splant', 'radio', 'spk', 'tplant', 'dplant', 'pillow', 'lap_', 'lap1', 'lap2', 'lap3', 'lap_extra', 'speaker', '_tv', 'wl_', 'cf_', 'pillowblue', 'pillowlong', 'court_screen', 'disp_plant', 'shelf_plant', 'tablelamp', 'magazines', 'sketchbooks', 'cred_books', 'water_plant', 'lg_games', 'upper_cab', 'info_tv', 'hub_info', 'su_laptop', 'mon_extra', '_st_plant', 'portfolio', 'visitor_lap'])
             if is_tabletop:
                 print(f"  📎 {name:30s} z_min={z_min:.3f} (tabletop OK)")
             else:

@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -215,6 +216,10 @@ type SharedStdin = Arc<Mutex<ChildStdin>>;
 
 type SharedStderrBuf = Arc<Mutex<Vec<String>>>;
 
+const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const LOG_KEEP_FILES: usize = 3;
+static AGENT_LOG_LOCK: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
+
 struct AgentProcess {
     child: Child,
     stdin: SharedStdin,
@@ -279,6 +284,55 @@ fn find_sidecar_binary() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn agent_log_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("logs"))
+}
+
+fn rotate_log(log_path: &Path) {
+    for i in (1..LOG_KEEP_FILES).rev() {
+        let from = if i == 1 {
+            log_path.to_path_buf()
+        } else {
+            log_path.with_extension(format!("log.{}", i - 1))
+        };
+        let to = log_path.with_extension(format!("log.{}", i));
+        if from.exists() {
+            let _ = fs::rename(&from, &to);
+        }
+    }
+}
+
+fn append_log_line(app: &AppHandle, source: &str, line: &str) {
+    let _guard = match AGENT_LOG_LOCK.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+
+    let Some(log_dir) = agent_log_dir(app) else { return };
+    let _ = fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("agent.log");
+
+    if let Ok(meta) = fs::metadata(&log_path) {
+        if meta.len() >= LOG_MAX_BYTES {
+            rotate_log(&log_path);
+        }
+    }
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!("[{}] [{}] {}\n", ts, source, line);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        let _ = file.write_all(entry.as_bytes());
+    }
+}
+
+fn handle_agent_line(app: &AppHandle, line: &str, source: &str) -> bool {
+    append_log_line(app, source, line);
+    emit_json_or_log(app, line, source)
 }
 
 fn emit_json_or_log(app: &AppHandle, line: &str, source: &str) -> bool {
@@ -583,6 +637,7 @@ pub async fn start_agent(
                 format!("Failed to spawn agent: {}", e)
             })?;
         eprintln!("[sidecar] spawned pid={}", child.id());
+        append_log_line(&app, "sidecar", &format!("spawned pid={}", child.id()));
 
         let stdin = child
             .stdin
@@ -611,7 +666,7 @@ pub async fn start_agent(
                 {
                     signal_ready(&ready_tx_stdout);
                 }
-                if emit_json_or_log(&app_stdout, trimmed, "stdout") {
+                if handle_agent_line(&app_stdout, trimmed, "stdout") {
                     signal_ready(&ready_tx_stdout);
                 }
             }
@@ -642,7 +697,7 @@ pub async fn start_agent(
                     }
                     buf.push(trimmed.to_string());
                 }
-                let _ = emit_json_or_log(&app_stderr, trimmed, "stderr");
+                let _ = handle_agent_line(&app_stderr, trimmed, "stderr");
             }
         });
 
@@ -690,11 +745,13 @@ pub async fn start_agent(
                 format!("Agent exited during startup{}: {}", exit_info, stderr_tail)
             };
             eprintln!("[sidecar] {}", detail);
+            append_log_line(&app, "sidecar", &detail);
             return Err(detail);
         }
 
         if Instant::now() >= deadline {
             eprintln!("[sidecar] ready handshake timed out after 10s");
+            append_log_line(&app, "sidecar", "ready handshake timed out after 10s");
             if let Some(existing) = proc.as_mut() {
                 kill_process_tree(&mut existing.child);
             }
@@ -846,4 +903,42 @@ pub fn agent_status() -> AgentStatus {
         running: false,
         transport: "rpc-stdio".to_string(),
     }
+}
+
+#[derive(Serialize)]
+pub struct FeedbackContext {
+    pub app_version: String,
+    pub os_info: String,
+    pub log_tail: Vec<String>,
+}
+
+#[tauri::command]
+pub fn get_feedback_context(app: AppHandle, tail_lines: Option<usize>) -> Result<FeedbackContext, String> {
+    let n = tail_lines.unwrap_or(50);
+    let mut all_lines: Vec<String> = Vec::new();
+
+    if let Some(log_dir) = agent_log_dir(&app) {
+        for i in (1..LOG_KEEP_FILES).rev() {
+            let path = log_dir.join(format!("agent.log.{}", i));
+            if let Ok(content) = fs::read_to_string(&path) {
+                all_lines.extend(content.lines().map(String::from));
+            }
+        }
+        let main_log = log_dir.join("agent.log");
+        if let Ok(content) = fs::read_to_string(&main_log) {
+            all_lines.extend(content.lines().map(String::from));
+        }
+    }
+
+    let start = if all_lines.len() > n { all_lines.len() - n } else { 0 };
+    let log_tail = all_lines[start..].to_vec();
+
+    let version = app.package_info().version.to_string();
+    let os_info = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+
+    Ok(FeedbackContext {
+        app_version: version,
+        os_info,
+        log_tail,
+    })
 }

@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDragDrop } from "../hooks/use-drag-drop";
 import { useClickOutside } from "../hooks/use-click-outside";
-import { DEFAULT_MODEL, MODEL_OPTIONS, getSettings } from "../lib/config";
+import { getEffectiveDefaultModel, getModelOptions, getSettings } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
@@ -36,7 +36,7 @@ export default function NewSessionPanel({
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [readingCount, setReadingCount] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [model, setModel] = useState(() => getSettings().defaultModel || DEFAULT_MODEL);
+  const [model, setModel] = useState(() => getEffectiveDefaultModel(getSettings()));
   const [workspacePath, setWorkspacePath] = useState("");
   const [anonymous, setAnonymous] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -337,7 +337,7 @@ export default function NewSessionPanel({
 
           <div className="ns-toolbar-right">
             <CustomSelect
-              options={MODEL_OPTIONS}
+              options={getModelOptions()}
               value={model}
               onChange={setModel}
               disabled={loading}

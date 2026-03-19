@@ -2648,3 +2648,166 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   .leader-composer-input { font-size: 11px; min-height: 24px; }
   .speech-bubble { max-width: 180px; font-size: 11px; }
 }
+
+/* ── Digital City ──────────────────────────────── */
+.digital-city {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.digital-city-map {
+  width: 100%;
+  height: 100%;
+}
+.digital-city-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 14px;
+  z-index: 10;
+}
+.digital-city-hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.digital-city-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+}
+.digital-city-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.85);
+  text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.legend-dot--esports { background: #00ffcc; box-shadow: 0 0 6px #00ffcc; }
+.legend-dot--active { background: #3b82f6; box-shadow: 0 0 6px #3b82f6; }
+.legend-dot--idle { background: #6b7280; }
+
+/* City markers */
+.city-marker {
+  position: relative;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.city-marker--esports {
+  width: 20px;
+  height: 20px;
+  background: #00ffcc;
+  border-radius: 50%;
+  box-shadow: 0 0 12px #00ffcc, 0 0 24px rgba(0,255,204,0.4);
+}
+.city-marker--node {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.city-marker--active {
+  background: #3b82f6;
+  box-shadow: 0 0 8px #3b82f6;
+}
+.city-marker--idle {
+  background: #6b7280;
+  box-shadow: 0 0 4px rgba(107,114,128,0.5);
+}
+.city-marker-pulse {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  animation: city-pulse 2s ease-out infinite;
+}
+.city-marker--esports .city-marker-pulse {
+  color: #00ffcc;
+  inset: -6px;
+}
+.city-marker--active .city-marker-pulse {
+  color: #3b82f6;
+}
+.city-marker--idle .city-marker-pulse {
+  display: none;
+}
+.city-marker-label {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: #00ffcc;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+  pointer-events: none;
+}
+@keyframes city-pulse {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+/* City popup */
+.city-popup .mapboxgl-popup-content {
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 0;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+.city-popup .mapboxgl-popup-tip {
+  border-top-color: rgba(15, 23, 42, 0.92);
+}
+.city-popup-content {
+  padding: 12px 16px;
+  color: #e2e8f0;
+  font-size: 13px;
+}
+.city-popup-content h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+.city-popup-content p {
+  margin: 0 0 4px;
+  opacity: 0.8;
+  font-size: 12px;
+}
+.city-popup-tag {
+  margin-top: 8px;
+  padding: 3px 8px;
+  background: rgba(0,255,204,0.15);
+  border: 1px solid rgba(0,255,204,0.3);
+  border-radius: 4px;
+  font-size: 11px;
+  color: #00ffcc;
+  display: inline-block;
+}

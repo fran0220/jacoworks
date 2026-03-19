@@ -913,6 +913,7 @@ pub fn run() {
             sidecar::get_user_skills_dir,
             sidecar::delete_user_skill,
             sidecar::reveal_user_skill,
+            sidecar::get_feedback_context,
             ensure_default_workspace,
             ensure_session_sync_dir,
             reveal_in_finder,

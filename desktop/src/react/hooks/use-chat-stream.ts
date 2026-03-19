@@ -18,6 +18,7 @@ import type {
 } from "../types";
 import { formatSize } from "../lib/file-utils";
 import { assistantPartsToText, sanitizePartsForPersistence } from "../lib/assistant-parts";
+import { reportError } from "../lib/feedback";
 import { syncMemory } from "../lib/memory-sync";
 import {
   clearParts,
@@ -425,6 +426,15 @@ export function useChatStream({
                       }
                     }
                   }
+                  if (event.isError) {
+                    reportError({
+                      kind: "tool",
+                      title: `${block.name} 执行失败`,
+                      message: block.result || String(event.reason || "工具执行失败"),
+                      toolName: block.name,
+                      sessionId: streamCtx.id,
+                    });
+                  }
                   // Extract filePath for file card rendering
                   if (!event.isError) {
                     const toolName = block.name;
@@ -535,6 +545,12 @@ export function useChatStream({
           if (!entry.runtime.aborted) {
             const msg = error instanceof Error ? error.message : "请求失败";
             patchSnapshot(streamCtx.id, { errorText: msg });
+            reportError({
+              kind: "agent",
+              title: "请求失败",
+              message: msg,
+              sessionId: streamCtx.id,
+            });
             const errorMessages = [...entry.runtime.streamBaseMessages, {
               role: "assistant" as const,
               content: `⚠️ ${msg}`,

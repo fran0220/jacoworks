@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { fetchAgentSummary, fetchFeedLogs } from "../lib/feed";
 import type { AgentSummary, FeedLog } from "../lib/feed";
 import { getRoleConfig, setThemeRoleOverrides, setThemeZoneLabels } from "../observatory/types";
+import type { WorldAgent } from "../observatory/types";
 import { setRoleLabels } from "../lib/feed-translate";
 import { fetchTeams } from "../lib/teams";
 import type { TeamsResponse, TemplateTheme } from "../lib/teams";
@@ -44,6 +45,13 @@ interface SceneRefs {
   env: { update(time: number): void };
   zones: InstanceType<typeof import("../observatory/world/ZoneManager").ZoneManager>;
   pool: InstanceType<typeof import("../observatory/avatar/AvatarPool").AvatarPool>;
+  factory: InstanceType<typeof import("../observatory/avatar/AvatarFactory").AvatarFactory>;
+  waypointGraph: InstanceType<typeof import("../observatory/world/WaypointGraph").WaypointGraph>;
+  stateManager: InstanceType<typeof import("../observatory/bridge/AgentStateManager").AgentStateManager>;
+  eventBridge: InstanceType<typeof import("../observatory/bridge/EventBridge").EventBridge>;
+  worldAgents: Map<string, WorldAgent>;
+  navigators: Map<string, InstanceType<typeof import("../observatory/avatar/AvatarNavigator").AvatarNavigator>>;
+  animators: Map<string, InstanceType<typeof import("../observatory/avatar/AvatarAnimator").AvatarAnimator>>;
 }
 
 interface AgentObservatoryProps {
@@ -151,11 +159,21 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         { ZoneManager },
         { WaypointGraph },
         { AvatarPool },
+        { AvatarFactory },
+        { AvatarNavigator },
+        { AvatarAnimator },
+        { EventBridge },
+        { AgentStateManager },
       ] = await Promise.all([
         import("../observatory/world/ObservatoryScene"),
         import("../observatory/world/ZoneManager"),
         import("../observatory/world/WaypointGraph"),
         import("../observatory/avatar/AvatarPool"),
+        import("../observatory/avatar/AvatarFactory"),
+        import("../observatory/avatar/AvatarNavigator"),
+        import("../observatory/avatar/AvatarAnimator"),
+        import("../observatory/bridge/EventBridge"),
+        import("../observatory/bridge/AgentStateManager"),
       ]);
 
       const scene = new ObservatoryScene();
@@ -165,20 +183,63 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
       const env = new IslandEnvironment(threeScene);
 
       const zones = new ZoneManager(threeScene);
-      new WaypointGraph();
+      const waypointGraph = new WaypointGraph();
       const pool = new AvatarPool();
 
-      pool.loadBaseModels().catch(() => {});
+      await pool.loadBaseModels();
+
+      const factory = new AvatarFactory(pool, threeScene);
+      const worldAgents = new Map<string, WorldAgent>();
+      const navigators = new Map<string, InstanceType<typeof AvatarNavigator>>();
+      const animators = new Map<string, InstanceType<typeof AvatarAnimator>>();
+
+      const stateManager = new AgentStateManager(worldAgents, zones, waypointGraph);
+
+      const eventBridge = new EventBridge((event) => {
+        stateManager.handleEvent(event);
+      });
 
       let elapsed = 0;
       scene.setOnUpdate((delta) => {
         elapsed += delta;
         env.update(elapsed);
         zones.update(elapsed);
+        stateManager.update(delta);
+
+        // Move agents along their walk paths
+        for (const [id, nav] of navigators) {
+          const agent = worldAgents.get(id);
+          if (!agent) continue;
+
+          // Feed pending walkPath from state manager to navigator
+          if (agent.walkPath.length > 0 && !nav.isMoving()) {
+            nav.setDestination(agent.walkPath);
+            agent.walkPath = [];
+            agent.state = "walking";
+          }
+
+          const moving = nav.update(delta);
+          if (!moving && agent.state === "walking") {
+            agent.state = "idle";
+          }
+        }
+
+        // Update agent animators + sync root position
+        for (const [id, animator] of animators) {
+          const agent = worldAgents.get(id);
+          if (!agent) continue;
+          animator.setState(agent.state);
+          animator.update(delta);
+          // Sync 3D root position for non-VRM fallback agents
+          // (VRM agents are synced by AvatarNavigator via vrm.scene)
+          if (!agent.vrm) {
+            agent.root.position.copy(agent.position);
+          }
+        }
       });
 
       scene.mount(containerRef.current);
-      sceneRef.current = { scene, env, zones, pool };
+      sceneRef.current = { scene, env, zones, pool, factory, waypointGraph, stateManager, eventBridge, worldAgents, navigators, animators };
       setLoading(false);
     } catch (err) {
       console.error("Observatory init failed:", err);
@@ -206,13 +267,44 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
     return () => ro.disconnect();
   }, []);
 
-  // Poll agent summary every 5s
+  // Poll agent summary every 5s — sync 3D agents
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
       try {
         const data = await fetchAgentSummary();
-        if (!cancelled) setAgents(data);
+        if (cancelled) return;
+        setAgents(data);
+
+        const refs = sceneRef.current;
+        if (!refs) return;
+
+        const { factory, worldAgents, navigators, animators } = refs;
+        const summaries = data.map((a) => ({
+          id: a.id,
+          name: a.name,
+          role: a.role,
+          total_score: a.total_score,
+          current_sub_task: a.current_sub_task,
+        }));
+
+        const { added, removed } = await factory.syncAgents(summaries, worldAgents);
+
+        // Create navigators + animators for new agents
+        const [{ AvatarNavigator }, { AvatarAnimator }] = await Promise.all([
+          import("../observatory/avatar/AvatarNavigator"),
+          import("../observatory/avatar/AvatarAnimator"),
+        ]);
+        for (const agent of added) {
+          navigators.set(agent.id, new AvatarNavigator(agent));
+          animators.set(agent.id, new AvatarAnimator(agent.vrm, agent.root));
+        }
+
+        // Cleanup removed
+        for (const agent of removed) {
+          navigators.delete(agent.id);
+          animators.delete(agent.id);
+        }
       } catch {
         // silent
       }
@@ -232,6 +324,9 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         lastLogIdRef.current = logs[logs.length - 1].id;
         const newItems = logs.map(feedLogToActivity);
         setActivities((prev) => [...newItems, ...prev].slice(0, 50));
+
+        // Feed events to the 3D world bridge
+        sceneRef.current?.eventBridge.feedNewLogs(logs);
       } catch {
         // silent
       }

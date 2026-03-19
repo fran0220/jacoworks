@@ -4,7 +4,7 @@ import { WSClient, type WSFrame } from "./lib/ws-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "./lib/event-parser";
 import { extractText, streamBlocksToContent, toContentItems } from "./lib/message-extract";
 import { listSessions, createSession, getSession, updateSession, deleteSession, generateTitle } from "./lib/sessions";
-import { DEFAULT_OPENCLAW_SESSION_KEY, getOpenClawToken } from "./lib/config";
+import { DEFAULT_OPENCLAW_SESSION_KEY, getOpenClawToken, MAPBOX_TOKEN } from "./lib/config";
 import { posthog } from "./lib/posthog";
 import NavRail from "./components/NavRail";
 import Sidebar from "./components/Sidebar";
@@ -18,8 +18,9 @@ import TeamPanel from "./components/TeamPanel";
 import SetupGate from "./components/SetupGate";
 
 const AgentObservatory = lazy(() => import("./components/AgentObservatory"));
+const DigitalCityPanel = lazy(() => import("./components/DigitalCityPanel"));
 
-export type ActiveTab = "chat" | "teams" | "cron" | "container" | "desktop" | "feed" | "observatory";
+export type ActiveTab = "chat" | "teams" | "cron" | "container" | "desktop" | "feed" | "observatory" | "city";
 
 const ACTIVE_TEAM_STORAGE_KEY = "jacoworks.webchat.active-team.v1";
 
@@ -420,6 +421,11 @@ export default function App() {
               streaming={streaming}
               connState={connState}
             />
+          </Suspense>
+        )}
+        {activeTab === "city" && (
+          <Suspense fallback={<div className="digital-city-loading"><span className="spinner" /><span>加载中…</span></div>}>
+            <DigitalCityPanel mapboxToken={MAPBOX_TOKEN} />
           </Suspense>
         )}
       </div>

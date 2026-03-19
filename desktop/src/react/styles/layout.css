@@ -157,3 +157,39 @@
     font-size: var(--text-sm);
   }
 }
+
+/* ─── Floating feedback button ─── */
+.floating-feedback-btn {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--danger, #e53e3e);
+  color: white;
+  border: none;
+  border-radius: 20px;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: opacity 0.2s;
+  animation: feedbackSlideIn 0.3s ease-out;
+}
+
+.floating-feedback-btn:hover {
+  opacity: 0.9;
+}
+
+@keyframes feedbackSlideIn {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}

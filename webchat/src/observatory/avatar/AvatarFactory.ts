@@ -52,6 +52,7 @@ export class AvatarFactory {
       role: summary.role,
       config,
       vrm,
+      root,
       state: "spawning",
       position: spawnPos,
       targetZone: null,
@@ -67,8 +68,7 @@ export class AvatarFactory {
   }
 
   removeAgent(agent: WorldAgent): void {
-    const root = agent.vrm ? agent.vrm.scene : this.scene.getObjectByProperty("uuid", agent.id);
-    if (root) this.scene.remove(root);
+    this.scene.remove(agent.root);
     this.pool.releaseInstance(agent.id);
   }
 

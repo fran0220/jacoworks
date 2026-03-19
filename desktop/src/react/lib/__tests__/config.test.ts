@@ -74,9 +74,47 @@ describe("config", () => {
     expect(config.getSettings()).toMatchObject({
       memoryEnabled: true,
       defaultWorkspace: "",
-      defaultModel: config.DEFAULT_MODEL,
+      defaultModelPinned: false,
+      defaultModel: "",
       thinkingLevel: "medium",
       debugLogEnabled: false,
     });
+    expect(config.getEffectiveDefaultModel(config.getSettings())).toBe(config.DEFAULT_MODEL);
+  });
+
+  test("legacy default model migrates to follow gateway mode", async () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: createStorage({
+        jacoworks_settings: JSON.stringify({
+          defaultModel: "proxy-claude/claude-opus-4-6",
+        }),
+      }),
+      writable: true,
+      configurable: true,
+    });
+
+    const config = await loadConfig();
+    const settings = config.getSettings();
+    expect(settings.defaultModelPinned).toBe(false);
+    expect(settings.defaultModel).toBe("");
+    expect(config.getEffectiveDefaultModel(settings)).toBe(config.DEFAULT_MODEL);
+  });
+
+  test("legacy custom default model migrates to pinned mode", async () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: createStorage({
+        jacoworks_settings: JSON.stringify({
+          defaultModel: "proxy-gpt/gpt-5.4",
+        }),
+      }),
+      writable: true,
+      configurable: true,
+    });
+
+    const config = await loadConfig();
+    const settings = config.getSettings();
+    expect(settings.defaultModelPinned).toBe(true);
+    expect(settings.defaultModel).toBe("proxy-gpt/gpt-5.4");
+    expect(config.getEffectiveDefaultModel(settings)).toBe("proxy-gpt/gpt-5.4");
   });
 });

@@ -30,6 +30,30 @@ export default function RpcLogPanel({ onClose }: { onClose: () => void }) {
   const nextId = useRef(1);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  // Load historical logs on mount
+  useEffect(() => {
+    if (!isTauri()) return;
+    import("@tauri-apps/api/core").then(({ invoke }) => {
+      invoke<{ log_tail: string[] }>("get_feedback_context", { tailLines: 200 })
+        .then((ctx) => {
+          if (ctx.log_tail.length > 0) {
+            const historicalEntries: RpcLogEntry[] = ctx.log_tail.map((line, i) => {
+              const match = line.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s+(.*)$/);
+              return {
+                id: -(ctx.log_tail.length - i),
+                source: match?.[2] ?? "log",
+                line: match?.[3] ?? line,
+                timestamp: match?.[1] ? new Date(match[1]).getTime() || Date.now() : Date.now(),
+              };
+            });
+            setLogs(historicalEntries);
+            nextId.current = 1;
+          }
+        })
+        .catch(() => {});
+    });
+  }, []);
+
   useEffect(() => {
     if (!isTauri()) return;
 

@@ -2,7 +2,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
 import type { AgentTransport } from "../lib/agent-transport";
-import { ensureDefaultWorkspace, getSettings } from "../lib/config";
+import { ensureDefaultWorkspace, getSettings, setServerModels } from "../lib/config";
 import { LocalSidecarTransport } from "../lib/local-sidecar-transport";
 import { setSkills } from "../lib/skills";
 
@@ -62,6 +62,9 @@ export function useAgentBootstrap(authenticated: boolean) {
       await ensureDefaultWorkspace();
 
       const agentConfig = await fetchAgentConfig();
+      if (agentConfig.models && agentConfig.models.length > 0) {
+        setServerModels(agentConfig.models, agentConfig.primary_model, agentConfig.primary_provider);
+      }
       const settings = getSettings();
       const envVars: Record<string, string> = {
         LLM_PROXY_URL: agentConfig.llm_proxy_url,
@@ -78,6 +81,18 @@ export function useAgentBootstrap(authenticated: boolean) {
       if (agentConfig.mineru_token) envVars.MINERU_TOKEN = agentConfig.mineru_token;
       if (agentConfig.jimeng_api_url) envVars.JIMENG_API_URL = agentConfig.jimeng_api_url;
       if (agentConfig.jimeng_api_key) envVars.JIMENG_API_KEY = agentConfig.jimeng_api_key;
+      if (agentConfig.primary_model) {
+        if (agentConfig.primary_model.includes("/")) {
+          const [provider, model] = agentConfig.primary_model.split("/", 2);
+          if (provider && model) {
+            envVars.PRIMARY_PROVIDER = provider;
+            envVars.PRIMARY_MODEL = model;
+          }
+        } else {
+          envVars.PRIMARY_MODEL = agentConfig.primary_model;
+        }
+      }
+      if (agentConfig.primary_provider) envVars.PRIMARY_PROVIDER = agentConfig.primary_provider;
 
       if (cancelled) return;
 

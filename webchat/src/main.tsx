@@ -16,6 +16,7 @@ declare global {
     __OPENCLAW_SESSION_KEY__?: string;
     __POSTHOG_KEY__?: string;
     __POSTHOG_HOST__?: string;
+    __MAPBOX_TOKEN__?: string;
   }
 }
 
