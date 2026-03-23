@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目简介
 
-JAcoworks 是企业 AI 协同办公平台。Tauri 桌面端内嵌本地 sidecar (vm-agent, stdin/stdout RPC) 直接读写本地文件，附带 bundled runtimes (Python via python-build-standalone, bash/node on Windows)；Go 网关提供认证、会话存储、WS/SSE 代理、容器管理；Rust 官网提供页面与管理后台；webchat 是 OpenClaw 专属 Web 前端。LLM 中转站统一接入 Claude/GPT/Gemini/Grok/GLM。
+JAcoworks 是企业 AI 协同办公平台。Tauri 桌面端内嵌本地 sidecar (vm-agent, stdin/stdout RPC) 直接读写本地文件，附带 bundled runtimes (Python via python-build-standalone, bash/node on Windows)；Go 网关提供认证、会话存储、WS/SSE 代理、容器管理；OC Gateway 管理 OpenClaw Incus VM；Rust 官网提供页面与管理后台；webchat 是 OpenClaw 专属 Web 前端（含 Capacitor 移动端壳）。LLM 中转站统一接入 Claude/GPT/Gemini/Grok/GLM。
 
 ## 常用命令
 
 ```bash
 # 开发 (各模块在独立终端启动)
 make dev-gateway          # Go 网关 → localhost:8847
+make dev-oc-gateway       # OC Gateway → localhost:18700
 make dev-website          # Rust 官网 → localhost:9527
 make dev-desktop          # Tauri 桌面端 (Vite HMR + 本地 sidecar)
 make dev-agent            # vm-agent 热重载
@@ -21,7 +22,7 @@ make check                # 全量 lint + typecheck + test
 make check-gateway        # go vet + go test
 make check-website        # cargo check + cargo test
 make check-agent          # typecheck + 单元测试
-make check-desktop        # npm run check (typecheck)
+make check-desktop        # npm run check (typecheck) + npm test
 make check-webchat        # tsc --noEmit
 
 # 单模块测试
@@ -31,14 +32,21 @@ cd vm-agent && npm test                          # bun test
 cd vm-agent && npm run test:gateway-e2e          # E2E (需真实网关)
 cd website && cargo test                         # Rust 测试
 
+# E2E
+make check-gateway-e2e    # Gateway API E2E (需真实网关)
+make check-journeys       # 全链路 E2E (需完整基础设施)
+make check-all            # hermetic + E2E
+
 # 构建
 make build                # 构建 gateway + website + agent
+make build-oc-gateway     # 构建 OC Gateway → dist/oc-gateway
 make build-webchat        # 构建 webchat → website/static/chat/
-make compile-agent        # 编译 vm-agent 二进制 (容器用)
+make compile-agent        # 编译 vm-agent 二进制 (sidecar + doc-packages)
 make build-desktop        # 完整桌面安装包
 
 # 部署
 make deploy               # 部署 gateway + website + push-skills 到 jingao
+make deploy-oc-gateway    # 部署 OC Gateway 到 local (交叉编译 amd64)
 make deploy-agent         # 构建 ARM64 镜像 → oracle
 make release V=1.5.0      # 完整发布 (构建 macOS + 上传 COS + 注册 DB)
 ```
@@ -59,11 +67,12 @@ make release V=1.5.0      # 完整发布 (构建 macOS + 上传 COS + 注册 DB)
   ├─ PreviewDrawer 文件预览, chat-stream-store/session-store 状态管理
   └─ 备用: SSE/HTTP bridge → Gateway /api/oc/stream + /api/oc/send (云端容器)
 
-Web 聊天 (webchat React SPA, OpenClaw 专属)
+Web 聊天 (webchat React SPA + Capacitor 移动端, OpenClaw 专属)
   └─ ticket auth → Gateway /ws/oc → ChannelPool → OpenClaw 容器 (OpenClaw 帧协议)
   └─ 5 Tab 布局: 对话 | 团队 | 任务 | 动态 | 容器
+  └─ Capacitor: android/ + ios/ 原生壳
 
-Go 网关 (Gateway)
+Go 网关 (Gateway, cmd/gateway)
   ├─ 认证 (飞书 SSO / bcrypt / 激活码)
   ├─ 会话 CRUD + LLM 配置下发
   ├─ 统一 WS 代理 (UpstreamDialer + ChannelPool, 事件缓冲 + 断点续传)
@@ -73,6 +82,18 @@ Go 网关 (Gateway)
   ├─ 容器/VM 管理 (Docker → oracle, Incus VM → local)
   ├─ 技能存储与分发 (system + user skills → 容器 provision 时推送)
   └─ 云端定时任务调度
+
+OC Gateway (cmd/oc-gateway, 独立二进制)
+  ├─ OpenClaw 容器专用网关 → local 节点
+  ├─ Incus VM 运行时管理
+  └─ JMOS 代理 (/api/jamoss/*)
+
+OpenClaw 生态 (openclaw/)
+  ├─ templates/ — 团队模板 (agents + prompts + skills + workspace)
+  ├─ profiles/ — Agent profiles 多智能体选择
+  ├─ skills/ — OpenClaw AgentSkill 包
+  ├─ jmos/ — JaMOSS 协作网关 (Go 重写)
+  └─ openmoss/ — OpenMOSS 多智能体框架 (Python)
 
 Rust 官网 (Website, Axum + Askama)
   ├─ 公开页面 + /chat (嵌入 webchat SPA)
@@ -84,6 +105,8 @@ Rust 官网 (Website, Axum + Askama)
 
 **双容器后端**: vm-agent (Docker, oracle ARM64) / OpenClaw (Incus VM, local x86_64)，通过 `containers.container_type` 区分。
 
+**双网关**: `cmd/gateway` (主网关, jingao, port 8847) + `cmd/oc-gateway` (OpenClaw 专用, local, port 18700)。
+
 **统一 WS 连接管理**: Webchat WS 连接走 `/ws/oc` ticket 端点 → `ChannelPool` 持久上游连接。`UpstreamDialer` 接口抽象 vm-agent/OpenClaw 协议差异。`RingBuffer` 事件缓冲支持 `lastSeq` 断点续传。
 
 ## 网络
@@ -94,7 +117,7 @@ Rust 官网 (Website, Axum + Askama)
 |------|-------------|---------|------|
 | jingao | 100.103.6.91 | 82.156.239.212 | 网关 + 官网 + PostgreSQL |
 | oracle | 100.94.98.106 | — | vm-agent Docker (ARM64) |
-| local | 100.97.254.31 | — | OpenClaw Incus VM (x86_64) + win-build KVM |
+| local | 100.97.254.31 | — | OC Gateway + OpenClaw Incus VM (x86_64) + win-build KVM |
 
 SSH 访问统一走 Tailscale IP。Oracle 公网被墙时 Tailscale 自动 DERP 中继，无需手动干预。
 
@@ -104,15 +127,32 @@ SSH 访问统一走 Tailscale IP。Oracle 公网被墙时 Tailscale 自动 DERP 
 |------|------|---------|
 | `desktop/` | Tauri 2 + React 18 + Vite | `src-tauri/src/lib.rs`, `src-tauri/src/db.rs`, `src/App.tsx` |
 | `vm-agent/` | Bun + TypeScript + Pi SDK | `src/index.ts` (RPC sidecar), `src/server.ts` (WS server), `src/agent.ts` (会话池) |
-| `gateway/` | Go 1.25 + pgx/v5 + gorilla/websocket | `cmd/gateway/main.go` |
+| `gateway/` | Go 1.25 + pgx/v5 + gorilla/websocket | `cmd/gateway/main.go` (主网关), `cmd/oc-gateway/` (OC Gateway) |
 | `website/` | Rust Axum + Askama + SQLx | `src/main.rs` |
-| `webchat/` | React 18 + Vite | `src/App.tsx` |
-| `deploy/` | SQL 迁移 + Shell 脚本 | `sql/001~014*.sql` |
+| `webchat/` | React 18 + Vite + Capacitor | `src/App.tsx`, `capacitor.config.ts` |
+| `openclaw/` | 团队模板 + JaMOSS (Go) + OpenMOSS (Python) | `templates/`, `jmos/cmd/`, `openmoss/` |
+| `deploy/` | SQL 迁移 + Shell 脚本 + Incus | `sql/001~016*.sql` |
+
+## CI/CD
+
+GitHub Actions (`.github/workflows/`):
+
+| Workflow | 触发条件 | 说明 |
+|----------|---------|------|
+| `ci.yml` | PR/push to main | 模块变更检测 → 仅构建改动模块 (gateway/website/vm-agent/desktop) |
+| `release-desktop.yml` | — | Desktop 安装包构建 |
+| `release-preflight.yml` | — | 发布前检查 |
+| `distribute-desktop.yml` | — | Desktop 安装包分发 |
+| `test-cos-upload.yml` | — | COS 上传测试 |
+| `issue-autofix.yml` | — | Issue 自动修复 |
+
+CI 使用 `dorny/paths-filter` 做模块级变更检测，只跑改动模块的检查。
 
 ## 关键约束
 
 - **本地优先 Agent**: 桌面端对话走本地 sidecar RPC (stdin/stdout)，不经网关/容器；bundled runtimes (Python/bash) 无需用户安装
 - **vm-agent 双入口**: `src/index.ts` (RPC main loop, sidecar 模式) + `src/server.ts` (Bun.serve WS server, 容器/server 模式)
+- **双网关架构**: `cmd/gateway` (主网关, vm-agent + OpenClaw) + `cmd/oc-gateway` (OpenClaw 专用, Incus 运行时)
 - **tauri-plugin-updater 已集成**: `use-updater.ts` 运行时自动检查更新
 - **Design Token 强制**: 禁止硬编码颜色/间距/圆角，必须用 CSS 变量 (`--space-*`, `--text-*`, `--radius-*`)；风格为暖色奶油基调 (`#F5F0EB`)
 - **React 纯 CSS 变量**: 无 Tailwind、无 CSS-in-JS，样式在 `desktop/src/react/styles/` 按组件拆分
@@ -120,11 +160,16 @@ SSH 访问统一走 Tailscale IP。Oracle 公网被墙时 Tailscale 自动 DERP 
 - **新增 system_settings 四层联动**: ① SQL 迁移 ② 网关 Go ③ 网站 Rust 表单 ④ 线上 DB 执行迁移
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session
 - **Database as Single Source of Truth**: 本地 SQLite 只做缓存，PostgreSQL 为权威数据源
-- **Conventional Commits**: 提交信息规范
+- **Conventional Commits**: 提交信息规范 (feat/fix/chore/refactor/docs + scope)
+- **AGENTS.md gitignored**: 各模块 AGENTS.md 不入版本控制，仅本地存在
 
 ## 数据库
 
-PostgreSQL，Schema 在 `deploy/sql/`。核心表: `users`, `chat_sessions`, `containers` (user_id + container_type UNIQUE), `system_settings`, `cron_jobs`, `llm_providers`, `llm_models`。
+PostgreSQL，Schema 在 `deploy/sql/`（001~016）。核心表: `users`, `chat_sessions`, `containers` (user_id + container_type UNIQUE), `system_settings`, `cron_jobs`, `llm_providers`, `llm_models`, `bot_config`。
+
+近期迁移:
+- `015_mineru_token.sql` — MinerU token 设置
+- `016_vnc_port.sql` — VNC 端口
 
 桌面端本地: SQLite (`db.rs`) 缓存会话和流状态。
 
@@ -135,10 +180,36 @@ PostgreSQL，Schema 在 `deploy/sql/`。核心表: `users`, `chat_sessions`, `co
 | 文件 | 来源 |
 |------|------|
 | `gateway/gateway.yaml` | `gateway.yaml.example` |
+| `gateway/oc-gateway.yaml` | — |
 | `website/website.toml` | `website.toml.example` |
 | `vm-agent/.env` | `.env.template` |
 | `desktop/.env` | `.env.example` |
+| `openclaw/jmos/config.yaml` | `config.example.yaml` |
+| `openclaw/openmoss/config.yaml` | `config.example.yaml` |
+
+## 目录结构
+
+```
+jacoworks/
+  desktop/          # Tauri 2 桌面端 (React + Rust)
+  vm-agent/         # AI Agent (Bun/TypeScript, 双模式)
+  gateway/          # Go 网关 (cmd/gateway + cmd/oc-gateway)
+  website/          # Rust 官网 (Axum)
+  webchat/          # OpenClaw Web SPA + Capacitor 移动端
+  openclaw/         # OpenClaw 生态
+    templates/        # 团队模板
+    profiles/         # Agent profiles
+    skills/           # AgentSkill 包
+    jmos/             # JaMOSS 协作网关 (Go)
+    openmoss/         # OpenMOSS 多智能体 (Python)
+  deploy/           # 部署脚本 + SQL 迁移 + Incus 配置
+  docs/             # 项目文档 (设计系统、架构分析等)
+  tasks/            # 任务规划文档
+  scripts/          # 辅助脚本
+  .agents/          # Agent skills 和 tasks
+  .github/          # GitHub Actions CI/CD
+```
 
 ## 分层 AGENTS.md
 
-每个模块有独立 AGENTS.md 包含模块级细节（API 端点、RPC 协议、组件规范等），修改特定模块前先阅读对应 AGENTS.md。
+`desktop/` 和 `vm-agent/` 有独立 AGENTS.md（已 gitignore，仅本地），包含模块级细节（API 端点、RPC 协议、组件规范等）。修改特定模块前先阅读对应 AGENTS.md（如果存在）。
