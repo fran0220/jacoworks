@@ -5,7 +5,7 @@ mod stream;
 use base64::Engine as _;
 use flate2::read::GzDecoder;
 use serde_json::json;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tar::Archive as TarArchive;
@@ -871,6 +871,259 @@ fn import_files_by_paths(paths: Vec<String>, workspace: String) -> Result<Import
     Ok(copy_files_to_attachments(sources, &workspace))
 }
 
+// ── OAuth callback server ────────────────────────────────────────────
+
+#[derive(Clone, serde::Serialize)]
+struct OAuthCallbackPayload {
+    token: Option<String>,
+    error: Option<String>,
+}
+
+/// HTML page served on the first hit (reads `location.hash` and redirects as query param).
+const OAUTH_FRAGMENT_HTML: &str = r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head><body>
+<script>
+var h = location.hash.substring(1);
+var p = new URLSearchParams(h);
+var token = p.get("token") || "";
+var error = p.get("error") || "";
+// Also check query params directly (in case gateway sends ?token=)
+var q = new URLSearchParams(location.search);
+if (!token) token = q.get("token") || "";
+if (!error) error = q.get("error") || "";
+location.replace("/callback?token=" + encodeURIComponent(token) + "&error=" + encodeURIComponent(error));
+</script>
+</body></html>"#;
+
+fn oauth_success_html() -> &'static str {
+    r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>body{font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;color:#333}
+.card{text-align:center;padding:40px;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+.icon{font-size:48px;margin-bottom:16px}
+h2{margin:0 0 8px;font-size:20px}
+p{margin:0;color:#888;font-size:14px}</style></head>
+<body><div class="card"><div class="icon">✅</div><h2>授权成功</h2><p>正在返回应用，您可以关闭此页面…</p></div></body></html>"#
+}
+
+fn oauth_error_html(msg: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>body{{font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;color:#333}}
+.card{{text-align:center;padding:40px;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08)}}
+.icon{{font-size:48px;margin-bottom:16px}}
+h2{{margin:0 0 8px;font-size:20px;color:#e53e3e}}
+p{{margin:0;color:#888;font-size:14px}}</style></head>
+<body><div class="card"><div class="icon">❌</div><h2>授权失败</h2><p>{}</p></div></body></html>"#,
+        msg
+    )
+}
+
+fn http_response(status: &str, content_type: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {}\r\nContent-Type: {}; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status,
+        content_type,
+        body.len(),
+        body,
+    )
+}
+
+fn parse_query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|pair| {
+        let mut kv = pair.splitn(2, '=');
+        let k = kv.next()?;
+        let v = kv.next().unwrap_or("");
+        if k == key { Some(v) } else { None }
+    })
+}
+
+/// Start a temporary localhost HTTP server for OAuth callback.
+/// Returns the port number. The server handles one OAuth round-trip then shuts down.
+#[tauri::command]
+fn start_oauth_callback_server(app: tauri::AppHandle) -> Result<u16, String> {
+    use tauri::Emitter;
+
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Bind failed: {}", e))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Cannot get port: {}", e))?
+        .port();
+
+    // Non-blocking mode so we can poll with a timeout
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("Set non-blocking failed: {}", e))?;
+
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+
+        let emit_result = |app: &tauri::AppHandle, payload: OAuthCallbackPayload| {
+            let _ = app.emit("oauth-callback", payload);
+        };
+
+        // Loop accepting connections until we get /callback or timeout.
+        loop {
+            if std::time::Instant::now() >= deadline {
+                emit_result(
+                    &app,
+                    OAuthCallbackPayload {
+                        token: None,
+                        error: Some("OAuth callback timeout (5 minutes)".into()),
+                    },
+                );
+                return;
+            }
+
+            let stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+                Err(_) => {
+                    emit_result(
+                        &app,
+                        OAuthCallbackPayload {
+                            token: None,
+                            error: Some("OAuth callback server error".into()),
+                        },
+                    );
+                    return;
+                }
+            };
+
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut buf = [0u8; 4096];
+            let n = match (&stream).read(&mut buf) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            let request = String::from_utf8_lossy(&buf[..n]);
+
+            // Parse the request line: "GET /path?query HTTP/1.1"
+            let request_line = request.lines().next().unwrap_or("");
+            let path_and_query = request_line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("/");
+
+            if path_and_query.starts_with("/callback") {
+                // Phase 2: extract token from query params
+                let query = path_and_query.splitn(2, '?').nth(1).unwrap_or("");
+                let token_raw = parse_query_param(query, "token").unwrap_or("");
+                let error_raw = parse_query_param(query, "error").unwrap_or("");
+
+                // URL-decode (basic: just handle %XX)
+                let token = urldecode(token_raw);
+                let error = urldecode(error_raw);
+
+                let (response_body, payload) = if !token.is_empty() {
+                    (
+                        http_response("200 OK", "text/html", oauth_success_html()),
+                        OAuthCallbackPayload {
+                            token: Some(token),
+                            error: None,
+                        },
+                    )
+                } else {
+                    let err_msg = if error.is_empty() {
+                        "未收到授权令牌".to_string()
+                    } else {
+                        error.clone()
+                    };
+                    (
+                        http_response("200 OK", "text/html", &oauth_error_html(&err_msg)),
+                        OAuthCallbackPayload {
+                            token: None,
+                            error: Some(err_msg),
+                        },
+                    )
+                };
+
+                let mut stream = stream;
+                let _ = stream.write_all(response_body.as_bytes());
+                let _ = stream.flush();
+                emit_result(&app, payload);
+                return;
+            } else if path_and_query.starts_with("/favicon") {
+                // Ignore favicon requests
+                let mut stream = stream;
+                let _ = stream.write_all(
+                    http_response("204 No Content", "text/plain", "").as_bytes(),
+                );
+                let _ = stream.flush();
+                continue;
+            } else {
+                // Phase 1: serve the fragment-reading HTML
+                // Also check if ?token= is already in the query (direct query param mode)
+                let query = path_and_query.splitn(2, '?').nth(1).unwrap_or("");
+                let direct_token = parse_query_param(query, "token").unwrap_or("");
+                if !direct_token.is_empty() {
+                    // Token was passed as query param directly — skip phase 2
+                    let token = urldecode(direct_token);
+                    let response_body =
+                        http_response("200 OK", "text/html", oauth_success_html());
+                    let mut stream = stream;
+                    let _ = stream.write_all(response_body.as_bytes());
+                    let _ = stream.flush();
+                    emit_result(
+                        &app,
+                        OAuthCallbackPayload {
+                            token: Some(token),
+                            error: None,
+                        },
+                    );
+                    return;
+                }
+
+                let response_body =
+                    http_response("200 OK", "text/html", OAUTH_FRAGMENT_HTML);
+                let mut stream = stream;
+                let _ = stream.write_all(response_body.as_bytes());
+                let _ = stream.flush();
+                // Continue loop — wait for the /callback redirect
+            }
+        }
+    });
+
+    Ok(port)
+}
+
+/// Minimal percent-decoding for OAuth query params.
+fn urldecode(input: &str) -> String {
+    let mut out = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(
+                &String::from_utf8_lossy(&bytes[i + 1..i + 3]),
+                16,
+            ) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// Open a URL in the system default browser.
+#[tauri::command]
+fn open_url_in_browser(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| format!("Failed to open browser: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -925,6 +1178,8 @@ pub fn run() {
             list_directory,
             import_files_native,
             import_files_by_paths,
+            start_oauth_callback_server,
+            open_url_in_browser,
             db::db_init,
             db::db_list_sessions,
             db::db_get_session,

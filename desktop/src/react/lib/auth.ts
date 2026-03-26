@@ -119,8 +119,55 @@ export async function activateWithCode(code: string, username: string, secret: s
 }
 
 export async function loginWithFeishu() {
-  const frontendUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost:1420";
-  window.location.href = `${GATEWAY_URL}/api/auth/feishu?redirect=${encodeURIComponent(frontendUrl)}`;
+  const { isTauri } = await import("@tauri-apps/api/core");
+
+  if (!isTauri()) {
+    const frontendUrl = window.location.origin;
+    window.location.href = `${GATEWAY_URL}/api/auth/feishu?redirect=${encodeURIComponent(frontendUrl)}`;
+    return;
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const { listen } = await import("@tauri-apps/api/event");
+
+  const port = await invoke<number>("start_oauth_callback_server");
+  const redirectUrl = `http://localhost:${port}`;
+  const authUrl = `${GATEWAY_URL}/api/auth/feishu?redirect=${encodeURIComponent(redirectUrl)}`;
+
+  const callbackPromise = new Promise<string>((resolve, reject) => {
+    let cleanup: (() => void) | null = null;
+
+    listen<{ token?: string; error?: string }>("oauth-callback", (event) => {
+      cleanup?.();
+      const { token: callbackToken, error } = event.payload;
+      if (error) {
+        reject(new Error(`飞书登录失败: ${error}`));
+      } else if (callbackToken) {
+        resolve(callbackToken);
+      } else {
+        reject(new Error("未收到登录凭证"));
+      }
+    }).then(unlisten => { cleanup = unlisten; });
+  });
+
+  await invoke("open_url_in_browser", { url: authUrl });
+
+  const callbackToken = await callbackPromise;
+
+  token = callbackToken;
+  const response = await authFetch("/api/users/me", { method: "GET" });
+  if (response.status !== 200) {
+    clearSession();
+    throw new Error("Session 验证失败");
+  }
+
+  const data = JSON.parse(response.body);
+  saveSession(callbackToken, {
+    id: data.id || "",
+    name: data.name || "",
+    email: data.email || "",
+    role: data.role || "user",
+  });
 }
 
 export async function handleOAuthCallback(): Promise<boolean> {
