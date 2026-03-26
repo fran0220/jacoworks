@@ -567,6 +567,32 @@ pub async fn start_agent(
                 cmd.env("LC_ALL", "C.UTF-8");
             }
 
+            // macOS/Linux: Tauri .app bundles inherit a minimal PATH that often
+            // lacks the user's shell-profile paths (nvm, Homebrew, etc.).
+            // Probe the user's default shell to recover the full PATH.
+            #[cfg(not(windows))]
+            {
+                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+                if let Ok(output) = Command::new(&shell)
+                    .args(["-l", "-i", "-c", "echo __PATH_PROBE__\"$PATH\""])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .output()
+                {
+                    if let Ok(stdout) = String::from_utf8(output.stdout) {
+                        if let Some(line) = stdout
+                            .lines()
+                            .find(|l| l.starts_with("__PATH_PROBE__"))
+                        {
+                            let shell_path = &line["__PATH_PROBE__".len()..];
+                            for p in std::env::split_paths(shell_path) {
+                                extra_paths.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+
             let current_path = std::env::var("PATH").unwrap_or_default();
             let existing: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
             let mut all_paths = extra_paths;
