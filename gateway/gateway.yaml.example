@@ -46,3 +46,5 @@ chat_agent:
 posthog:
   api_key: ""                # PostHog project API key (phc_...)
   endpoint: "https://us.i.posthog.com"  # PostHog endpoint
+
+oc_gateway_url: "https://gw.local.jingao.club"  # oc-gateway URL for feishu bot proxy

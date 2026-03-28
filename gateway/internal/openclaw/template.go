@@ -50,6 +50,7 @@ type openclawTemplateManifest struct {
 	Version     string                        `json:"version"`
 	Agents      []openclawTemplateAgent       `json:"agents"`
 	Workspace   openclawTemplateWorkspaceSpec `json:"workspace"`
+	Middleware  openclawTemplateMiddleware    `json:"middleware"`
 	Theme       json.RawMessage               `json:"theme,omitempty"`
 }
 
@@ -69,6 +70,12 @@ type openclawTemplateWorkspaceSpec struct {
 	Files      map[string]string `json:"files"`
 }
 
+type openclawTemplateMiddleware struct {
+	Type     string `json:"type"`
+	Port     int    `json:"port"`
+	Database string `json:"database"`
+}
+
 func (m *openclawTemplateManifest) teamID() string {
 	if m.Name != "" {
 		return m.Name
@@ -82,6 +89,14 @@ func (m *openclawTemplateManifest) workspaceRoot() string {
 		root = "/data/teams/{team_id}"
 	}
 	return strings.ReplaceAll(root, "{team_id}", m.teamID())
+}
+
+func (m *openclawTemplateManifest) middlewareDatabasePath() string {
+	raw := strings.TrimSpace(m.Middleware.Database)
+	if raw == "" {
+		return ""
+	}
+	return strings.ReplaceAll(raw, "{team_id}", m.teamID())
 }
 
 // ── Template resolution ──────────────────────────────────────
@@ -294,6 +309,7 @@ type TemplateDetail struct {
 	Version     string                        `json:"version"`
 	Agents      []openclawTemplateAgent       `json:"agents"`
 	Workspace   openclawTemplateWorkspaceSpec `json:"workspace"`
+	Middleware  openclawTemplateMiddleware    `json:"middleware"`
 	Files       map[string]string             `json:"files,omitempty"`
 	Theme       json.RawMessage               `json:"theme,omitempty"`
 }
@@ -344,6 +360,7 @@ func (c *Client) GetTemplateDetail(name string) (*TemplateDetail, error) {
 		Version:     manifest.Version,
 		Agents:      manifest.Agents,
 		Workspace:   manifest.Workspace,
+		Middleware:  manifest.Middleware,
 		Files:       files,
 		Theme:       manifest.Theme,
 	}, nil
@@ -382,6 +399,7 @@ func (c *Client) SaveTemplate(detail *TemplateDetail) error {
 		Version:     detail.Version,
 		Agents:      detail.Agents,
 		Workspace:   detail.Workspace,
+		Middleware:  detail.Middleware,
 		Theme:       detail.Theme,
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
@@ -609,6 +627,16 @@ func (c *Client) InstallTemplate(ctx context.Context, info *store.ContainerInfo,
 		return nil, fmt.Errorf("sync config with template: %w", err)
 	}
 
+	jmosConfigChanged, err := c.SyncJMOSConfig(info.ContainerName, info.UserID, info.ContainerToken)
+	if err != nil {
+		return nil, fmt.Errorf("sync jmos config with template: %w", err)
+	}
+	if jmosConfigChanged {
+		if err := c.RestartJMOS(info.ContainerName); err != nil {
+			return nil, fmt.Errorf("restart jmos after template install: %w", err)
+		}
+	}
+
 	log.Info().Str("container", info.ContainerName).Str("template", manifest.Name).Int("files", filesCopied).Msg("openclaw template installed")
 
 	return &TemplateInstallResult{
@@ -617,6 +645,6 @@ func (c *Client) InstallTemplate(ctx context.Context, info *store.ContainerInfo,
 		Workspace:     workspaceRoot,
 		Agents:        len(buildTemplateAgents(manifest)),
 		FilesCopied:   filesCopied,
-		ConfigChanged: configChanged,
+		ConfigChanged: configChanged || jmosConfigChanged,
 	}, nil
 }

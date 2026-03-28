@@ -90,9 +90,10 @@ func (c *Client) ContainerEnvVars() map[string]string {
 	return envs
 }
 
-// Provision creates and starts a new OpenClaw container for a user.
+// Provision creates and starts a new OpenClaw VM for a user.
+// Returns the VM's bridge IP address (e.g. 10.193.112.x).
 func (c *Client) Provision(name, userID, token string, hostPort, vncPort int) (string, error) {
-	log.Info().Str("name", name).Str("user_id", userID).Int("host_port", hostPort).Int("vnc_port", vncPort).Msg("provisioning openclaw container")
+	log.Info().Str("name", name).Str("user_id", userID).Msg("provisioning openclaw VM")
 
 	ctx := context.Background()
 	userDir := fmt.Sprintf("%s/%s", c.dataRoot, userID)
@@ -108,15 +109,6 @@ func (c *Client) Provision(name, userID, token string, hostPort, vncPort int) (s
 	envVars["OPENCLAW_GATEWAY_TOKEN"] = token
 	envVars["HOME"] = "/home/node"
 
-	gatewayPort := c.resolveGatewayPort(hostPort)
-
-	var extraPorts []container.PortMapping
-	if vncPort > 0 {
-		extraPorts = append(extraPorts, container.PortMapping{
-			HostPort: vncPort, ContainerPort: 6080, // noVNC websockify
-		})
-	}
-
 	spec := container.InstanceSpec{
 		Name:  name,
 		Image: c.image,
@@ -131,36 +123,42 @@ func (c *Client) Provision(name, userID, token string, hostPort, vncPort int) (s
 			{Source: fmt.Sprintf("%s/.openclaw", userDir), Target: "/home/node/.openclaw"},
 			{Source: fmt.Sprintf("%s/workspace", userDir), Target: "/data/workspace"},
 		},
-		HostPort:      hostPort,
 		ContainerPort: defaultGatewayPort,
-		ExtraPorts:    extraPorts,
-		HealthCmd:     fmt.Sprintf("curl -fsS http://127.0.0.1:%d/healthz || exit 1", gatewayPort),
+		MemoryMB:      4096, // 4 GiB for XFCE + OpenClaw + VNC
+		CPUs:          4,
 	}
 
-	// 1. Create and start instance
+	// 1. Create and start VM (waits for VM agent to be ready)
 	if err := c.rt.Create(ctx, spec); err != nil {
 		return "", fmt.Errorf("create instance %s: %w", name, err)
 	}
 
-	// 2. Write config into running instance
-	if err := c.WriteConfig(name, userID, token, gatewayPort); err != nil {
+	// 2. Get VM's bridge IP
+	vmIP, err := c.waitForVMIP(ctx, name, 60*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("get VM IP for %s: %w", name, err)
+	}
+	log.Info().Str("name", name).Str("vm_ip", vmIP).Msg("VM bridge IP acquired")
+
+	// 3. Write config into running VM
+	if err := c.WriteConfig(name, userID, token, defaultGatewayPort); err != nil {
 		return "", fmt.Errorf("write config: %w", err)
 	}
 
-	// 3. Restart so OpenClaw picks up the config
+	// 4. Restart so OpenClaw picks up the config
 	if err := c.rt.Restart(ctx, name); err != nil {
 		log.Warn().Err(err).Str("name", name).Msg("openclaw provision: restart after config write failed")
 	}
 
-	// 4. Wait for health
-	time.Sleep(3 * time.Second)
-	healthURL := fmt.Sprintf("http://%s:%d/healthz", c.hostIP, hostPort)
-	if err := httpHealthPoll(healthURL, 60*time.Second); err != nil {
-		log.Warn().Err(err).Str("name", name).Msg("openclaw container started but health check failed")
+	// 5. Wait for VM agent again after restart, then health check on VM's bridge IP
+	time.Sleep(5 * time.Second)
+	healthURL := fmt.Sprintf("http://%s:%d/healthz", vmIP, defaultGatewayPort)
+	if err := httpHealthPoll(healthURL, 90*time.Second); err != nil {
+		log.Warn().Err(err).Str("name", name).Str("url", healthURL).Msg("openclaw VM started but health check failed")
 	}
 
-	// 5. Write JMOS config and start service
-	if err := c.WriteJMOSConfig(name, userID, token); err != nil {
+	// 6. Write JMOS config and start service
+	if _, err := c.SyncJMOSConfig(name, userID, token); err != nil {
 		log.Warn().Err(err).Str("container", name).Msg("jmos config write failed during provision")
 	} else {
 		if err := c.StartJMOS(name); err != nil {
@@ -168,8 +166,24 @@ func (c *Client) Provision(name, userID, token string, hostPort, vncPort int) (s
 		}
 	}
 
-	log.Info().Str("name", name).Str("host_ip", c.hostIP).Int("host_port", hostPort).Msg("openclaw container provisioned")
-	return c.hostIP, nil
+	log.Info().Str("name", name).Str("vm_ip", vmIP).Msg("openclaw VM provisioned")
+	return vmIP, nil
+}
+
+// waitForVMIP polls until the VM has a bridge IP assigned.
+func (c *Client) waitForVMIP(ctx context.Context, name string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		info, err := c.rt.Status(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		if info.IP != "" {
+			return info.IP, nil
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return "", fmt.Errorf("VM %s did not get an IP within %s", name, timeout)
 }
 
 // WriteConfig generates and writes openclaw.json into a running container.
@@ -255,15 +269,20 @@ func (c *Client) SyncConfig(ctx context.Context, info *store.ContainerInfo) (boo
 	return true, nil
 }
 
-// EnsureRunning checks the container status and brings it to a running state.
-// After the container is healthy, it syncs config if needed.
+// EnsureRunning checks the VM status and brings it to a running state.
+// After the VM is healthy, it syncs config if needed.
 func (c *Client) EnsureRunning(ctx context.Context, info *store.ContainerInfo) error {
 	status, err := c.rt.Status(ctx, info.ContainerName)
 	if err != nil {
 		return fmt.Errorf("check status: %w", err)
 	}
 
-	healthURL := fmt.Sprintf("http://%s:%d/healthz", c.resolveHost(info.ContainerIP), info.HostPort)
+	// Use VM's actual bridge IP for health checks (port is always defaultGatewayPort inside the VM)
+	vmIP := c.resolveHost(info.ContainerIP)
+	if status.IP != "" {
+		vmIP = status.IP
+	}
+	healthURL := fmt.Sprintf("http://%s:%d/healthz", vmIP, defaultGatewayPort)
 
 	var healthErr error
 	switch status.Status {
@@ -301,20 +320,25 @@ func (c *Client) EnsureRunning(ctx context.Context, info *store.ContainerInfo) e
 		log.Info().Str("name", info.ContainerName).Msg("config synced on ensure running")
 	}
 
+	if changed, err := c.SyncJMOSConfig(info.ContainerName, info.UserID, info.ContainerToken); err != nil {
+		log.Warn().Err(err).Str("name", info.ContainerName).Msg("jmos config sync failed after ensure running")
+	} else if changed {
+		if err := c.RestartJMOS(info.ContainerName); err != nil {
+			log.Warn().Err(err).Str("name", info.ContainerName).Msg("jmos restart failed after config sync")
+		}
+	}
+
 	// Ensure JMOS is running (binary is pre-installed in golden image)
 	c.EnsureJMOSRunning(info.ContainerName)
 
 	return nil
 }
 
-// UpstreamAddr returns the WebSocket upstream address for an OpenClaw container.
+// UpstreamAddr returns the WebSocket upstream address for an OpenClaw VM.
+// Uses the VM's bridge IP and the fixed OpenClaw gateway port (18789).
 func (c *Client) UpstreamAddr(info *store.ContainerInfo) string {
 	host := c.resolveHost(info.ContainerIP)
-	port := info.HostPort
-	if port == 0 {
-		port = defaultGatewayPort
-	}
-	return fmt.Sprintf("ws://%s:%d", host, port)
+	return fmt.Sprintf("ws://%s:%d", host, defaultGatewayPort)
 }
 
 // resolveHost returns containerIP if non-empty, otherwise falls back to c.hostIP.

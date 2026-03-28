@@ -73,6 +73,7 @@ llm:
 
 	t.Setenv("GATEWAY_SERVER_HOST", "127.0.0.1")
 	t.Setenv("GATEWAY_SERVER_PORT", "9999")
+	t.Setenv("GATEWAY_SERVER_STATIC_DIR", "/tmp/jacoworks-static")
 	t.Setenv("GATEWAY_DATABASE_URL", "postgresql://env-value")
 	t.Setenv("GATEWAY_LLM_PROXY_URL", "http://env-proxy")
 
@@ -86,6 +87,9 @@ llm:
 	}
 	if cfg.Server.Port != 9999 {
 		t.Fatalf("server port = %d, want %d", cfg.Server.Port, 9999)
+	}
+	if cfg.Server.StaticDir != "/tmp/jacoworks-static" {
+		t.Fatalf("server static dir = %q, want %q", cfg.Server.StaticDir, "/tmp/jacoworks-static")
 	}
 	if cfg.Database.URL != "postgresql://env-value" {
 		t.Fatalf("database url = %q, want %q", cfg.Database.URL, "postgresql://env-value")

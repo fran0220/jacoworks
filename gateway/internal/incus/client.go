@@ -18,9 +18,10 @@ import (
 )
 
 // Client implements container.Runtime using the Incus daemon.
+// VMs get bridge IPs automatically and expose ports directly — no proxy devices needed.
 type Client struct {
 	server incusclient.InstanceServer
-	hostIP string // IP where proxy devices are bound (default "127.0.0.1")
+	hostIP string // legacy; VMs use bridge IPs directly
 }
 
 // NewClient connects to the local Incus daemon.
@@ -75,32 +76,9 @@ func (c *Client) Create(ctx context.Context, spec container.InstanceSpec) error 
 		}
 	}
 
-	// Port mapping → proxy device.
-	containerPort := spec.ContainerPort
-	if containerPort == 0 {
-		containerPort = spec.HostPort
-	}
-	if spec.HostPort > 0 && containerPort > 0 {
-		devices["proxy0"] = map[string]string{
-			"type":    "proxy",
-			"listen":  fmt.Sprintf("tcp:%s:%d", c.hostIP, spec.HostPort),
-			"connect": fmt.Sprintf("tcp:0.0.0.0:%d", containerPort),
-			"bind":    "host",
-		}
-	}
-
-	// Extra port mappings → additional proxy devices (e.g., VNC).
-	for i, pm := range spec.ExtraPorts {
-		if pm.HostPort > 0 && pm.ContainerPort > 0 {
-			devName := fmt.Sprintf("proxy%d", i+1)
-			devices[devName] = map[string]string{
-				"type":    "proxy",
-				"listen":  fmt.Sprintf("tcp:%s:%d", c.hostIP, pm.HostPort),
-				"connect": fmt.Sprintf("tcp:0.0.0.0:%d", pm.ContainerPort),
-				"bind":    "host",
-			}
-		}
-	}
+	// VMs get bridge IPs and expose ports directly — no proxy devices needed.
+	// Port mappings (HostPort, ExtraPorts) are recorded in DB for reference
+	// but not translated to Incus proxy devices.
 
 	req := api.InstancesPost{
 		Name: spec.Name,
@@ -123,7 +101,13 @@ func (c *Client) Create(ctx context.Context, spec container.InstanceSpec) error 
 		return fmt.Errorf("incus create %s wait: %w", spec.Name, err)
 	}
 
-	return c.Start(ctx, spec.Name)
+	if err := c.Start(ctx, spec.Name); err != nil {
+		return err
+	}
+
+	// Wait for the VM agent to be ready (VMs need time to boot the kernel
+	// and start the incus-agent before file/exec operations work).
+	return c.waitForAgent(spec.Name, 90*time.Second)
 }
 
 // Start starts a stopped instance.
@@ -386,6 +370,22 @@ func (c *Client) WaitForHealth(ctx context.Context, name, healthURL string, time
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("health check %s not ready after %s", healthURL, timeout)
+}
+
+// waitForAgent polls until the incus agent inside the VM is ready.
+func (c *Client) waitForAgent(name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	log.Info().Str("name", name).Dur("timeout", timeout).Msg("incus: waiting for VM agent")
+
+	for time.Now().Before(deadline) {
+		_, err := c.Exec(context.Background(), name, "true")
+		if err == nil {
+			log.Info().Str("name", name).Msg("incus: VM agent ready")
+			return nil
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return fmt.Errorf("VM agent not ready after %s for %s", timeout, name)
 }
 
 // ─── Helpers ───────────────────────────────────────

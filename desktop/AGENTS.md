@@ -1,6 +1,6 @@
 # Desktop — Tauri v2 + React 18 桌面客户端
 
-> 本地优先: vm-agent 作为 sidecar 进程运行 (stdin/stdout JSON lines RPC)，对话、文件操作、记忆全部本地执行。会话数据持久化到本地 SQLite。捆绑 Python/bash/node 运行时，开箱即用无需用户安装。LLM 密钥由 Gateway 下发。无需云端 Docker 容器。支持运行时自动更新 (tauri-plugin-updater)。
+> 本地优先: vm-agent 作为 sidecar 进程运行 (stdin/stdout JSON lines RPC)，对话、文件操作、记忆全部本地执行。会话数据持久化到本地 SQLite。捆绑 Python/bash/node 运行时，开箱即用无需用户安装。LLM 密钥由 Gateway 下发。Desktop 仅连接 `jacoapi.jingao.club`（jingao gateway），与 `chat.jingao.club`（oc-gateway）完全解耦。支持运行时自动更新 (tauri-plugin-updater)。
 
 ## 代码结构
 
@@ -58,6 +58,13 @@ src/
 - `VITE_GATEWAY_URL` = `https://jacoapi.jingao.club` (本地: `http://localhost:8847`)
 - `DEFAULT_MODEL` = `proxy-claude/claude-opus-4-6`
 
+## 三域边界
+
+- **桌面端 API**: 仅访问 jingao 网关 (`jacoapi.jingao.club`)，不直连 `chat.jingao.club`
+- **Agent 运行链路**: 本地 sidecar 通过 stdin/stdout RPC 直接运行，不经 oc-gateway
+- **WebChat 解耦**: WebChat 独立由 oc-gateway 提供，桌面端与其部署和运行时互不依赖
+- **部署影响面**: `make deploy-jingao` 更新桌面端后端；`make deploy-local` 仅影响 webchat/openclaw
+
 ## 测试
 
 ```bash
@@ -106,6 +113,7 @@ Agent 可通过 `render_visual` 工具在对话中内联渲染交互式 HTML wid
 - **三色模式体系**: 默认 (陶土 `--accent`)、隐私 (紫灰 `--accent-anonymous`)、云端 (蓝 `--accent-cloud`)。通过 composer/input-card 的 `inset box-shadow` + 发送按钮色 + chat-view 背景微调区分
 - **记忆同步**: `memorySyncEnabled` 设置 (默认关)，开启后 syncMemory() 在登录和对话结束后自动执行 (30s 防抖)
 - 开发: `make dev-desktop` (Vite HMR + Tauri)
+- 部署: `make deploy-jingao` (更新 Desktop 使用的 gateway/website 管控面)
 
 ## 技能架构
 

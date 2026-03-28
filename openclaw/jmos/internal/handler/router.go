@@ -33,7 +33,8 @@ func NewRouter(
 	r.Use(RequestLogger(log))
 
 	agentAuth := AgentAuth(db.Conn())
-	adminAuth := AdminAuth(cfg.Admin.Password)
+	adminSessions := NewAdminSessionStore()
+	adminAuth := AdminAuth(adminSessions)
 
 	// Handler instances
 	healthH := NewHealthHandler(cfg)
@@ -49,7 +50,7 @@ func NewRouter(
 	logH := NewLogHandler(db)
 	feedH := NewFeedHandler(db, cfg)
 	patrolH := NewPatrolHandler(patrolSvc)
-	adminH := NewAdminHandler(cfg, db, agentSvc, taskSvc, subTaskSvc, rewardSvc)
+	adminH := NewAdminHandler(cfg, db, agentSvc, taskSvc, subTaskSvc, rewardSvc, adminSessions)
 
 	apiRoutes := func(r chi.Router) {
 		// Health
@@ -104,6 +105,12 @@ func NewRouter(
 
 		// Review routes
 		r.Route("/reviews", func(r chi.Router) {
+			r.Use(agentAuth)
+			r.With(RequireRole("reviewer")).Post("/", reviewH.Create)
+			r.Get("/", reviewH.List)
+			r.Get("/{id}", reviewH.Get)
+		})
+		r.Route("/review-records", func(r chi.Router) {
 			r.Use(agentAuth)
 			r.With(RequireRole("reviewer")).Post("/", reviewH.Create)
 			r.Get("/", reviewH.List)

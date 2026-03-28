@@ -11,12 +11,13 @@ import (
 )
 
 type AdminHandler struct {
-	cfg     *config.Config
-	db      *store.DB
-	agent   *service.AgentService
-	task    *service.TaskService
-	subTask *service.SubTaskService
-	reward  *service.RewardService
+	cfg      *config.Config
+	db       *store.DB
+	agent    *service.AgentService
+	task     *service.TaskService
+	subTask  *service.SubTaskService
+	reward   *service.RewardService
+	sessions *AdminSessionStore
 }
 
 func NewAdminHandler(
@@ -26,10 +27,11 @@ func NewAdminHandler(
 	task *service.TaskService,
 	subTask *service.SubTaskService,
 	reward *service.RewardService,
+	sessions *AdminSessionStore,
 ) *AdminHandler {
 	return &AdminHandler{
 		cfg: cfg, db: db,
-		agent: agent, task: task, subTask: subTask, reward: reward,
+		agent: agent, task: task, subTask: subTask, reward: reward, sessions: sessions,
 	}
 }
 
@@ -41,12 +43,19 @@ func (h *AdminHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.Password != h.cfg.Admin.Password {
+	if !adminPasswordMatches(h.cfg.Admin.Password, req.Password) {
 		writeError(w, http.StatusUnauthorized, "invalid password")
 		return
 	}
+
+	token, err := h.sessions.Create()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create admin session")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{
-		"token":   h.cfg.Admin.Password,
+		"token":   token,
 		"message": "login successful",
 	})
 }

@@ -20,7 +20,9 @@ AGENTS.md
 !.env.test.example
 gateway/gateway.yaml
 gateway/gateway-prod.yaml
-gateway/data/
+gateway/data/*
+!gateway/data/chat.html
+!gateway/data/login.html
 website/website.toml
 
 # === Go ===

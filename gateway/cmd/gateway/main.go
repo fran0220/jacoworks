@@ -112,6 +112,8 @@ func main() {
 				cfg.PostHog.APIKey = setting.Value
 			case "posthog_endpoint":
 				cfg.PostHog.Endpoint = setting.Value
+			case "oc_gateway_url":
+				cfg.OcGatewayURL = setting.Value
 			}
 		}
 		cfg.UpdateLLM(llm)
@@ -158,6 +160,10 @@ func main() {
 	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
 	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, channelPool)
+	if cfg.OcGatewayURL != "" {
+		feishuBotHandler.SetOcGatewayURL(cfg.OcGatewayURL)
+		log.Info().Str("url", cfg.OcGatewayURL).Msg("feishu bot: proxying to oc-gateway")
+	}
 	gamesHandler := games.NewHandler(s)
 	ghClient := github.NewClient(cfg.GitHub.Token, cfg.GitHub.Repo)
 

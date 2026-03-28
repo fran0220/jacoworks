@@ -177,12 +177,7 @@ func (c *Client) GenerateConfig(token string, llm config.LLMConfig, hostPort int
 			Bind: "lan",
 			Auth: openclawAuth{Mode: "token", Token: token},
 			ControlUI: openclawControlUI{
-				AllowedOrigins: []string{
-					fmt.Sprintf("http://localhost:%d", gatewayPort),
-					fmt.Sprintf("http://127.0.0.1:%d", gatewayPort),
-					fmt.Sprintf("http://%s:%d", c.hostIP, gatewayPort),
-					"https://jaco.jingao.club",
-				},
+				AllowedOrigins:               []string{"*"},
 				DangerouslyDisableDeviceAuth: true,
 			},
 			TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
@@ -320,12 +315,7 @@ func (c *Client) GenerateConfigFromDB(ctx context.Context, userID, token string,
 			Bind: "lan",
 			Auth: openclawAuth{Mode: "token", Token: token},
 			ControlUI: openclawControlUI{
-				AllowedOrigins: []string{
-					fmt.Sprintf("http://localhost:%d", gatewayPort),
-					fmt.Sprintf("http://127.0.0.1:%d", gatewayPort),
-					fmt.Sprintf("http://%s:%d", c.hostIP, gatewayPort),
-					"https://jaco.jingao.club",
-				},
+				AllowedOrigins:               []string{"*"},
 				DangerouslyDisableDeviceAuth: true,
 			},
 			TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},

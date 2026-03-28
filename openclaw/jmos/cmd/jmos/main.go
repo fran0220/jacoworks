@@ -38,6 +38,12 @@ func main() {
 	defer db.Close()
 	log.Info().Str("path", cfg.Database.Path).Msg("database ready")
 
+	if deleted, err := db.CleanupOldLogs(context.Background(), cfg.WebUI.FeedRetentionDays); err != nil {
+		log.Warn().Err(err).Int("days", cfg.WebUI.FeedRetentionDays).Msg("cleanup old request logs failed")
+	} else if deleted > 0 {
+		log.Info().Int64("deleted", deleted).Int("days", cfg.WebUI.FeedRetentionDays).Msg("cleaned old request logs")
+	}
+
 	// Create service instances
 	eventSvc := service.NewEventService(db)
 	agentSvc := service.NewAgentService(db)

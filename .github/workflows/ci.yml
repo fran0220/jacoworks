@@ -6,18 +6,19 @@ on:
   push:
     branches: [main]
 
-# 只在同分支上保留最新一次 CI
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ── 变更检测：只构建有改动的模块 ──
+  # ── 变更检测 ──
   changes:
     runs-on: ubuntu-latest
     outputs:
       gateway: ${{ steps.filter.outputs.gateway }}
+      webchat: ${{ steps.filter.outputs.webchat }}
       website: ${{ steps.filter.outputs.website }}
+      openclaw: ${{ steps.filter.outputs.openclaw }}
       vm-agent: ${{ steps.filter.outputs.vm-agent }}
       desktop: ${{ steps.filter.outputs.desktop }}
     steps:
@@ -28,16 +29,23 @@ jobs:
           filters: |
             gateway:
               - 'gateway/**'
+            webchat:
+              - 'webchat/**'
             website:
               - 'website/**'
+            openclaw:
+              - 'openclaw/**'
             vm-agent:
               - 'vm-agent/**'
             desktop:
               - 'desktop/**'
               - 'vm-agent/**'
 
-  # ── Gateway (Go) ──
-  gateway:
+  # ═══════════════════════════════════════════
+  #  Layer 1 — Go 平台核心 (gateway/** 变更时触发)
+  # ═══════════════════════════════════════════
+
+  go-core:
     needs: changes
     if: needs.changes.outputs.gateway == 'true'
     runs-on: ubuntu-latest
@@ -51,16 +59,31 @@ jobs:
           go-version-file: gateway/go.mod
       - run: go vet ./...
       - run: go test ./...
-      - name: Build linux binary
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../artifacts/gateway ./cmd/gateway
+
+  # ═══════════════════════════════════════════
+  #  Layer 2A — 桌面端管控面 (jingao)
+  # ═══════════════════════════════════════════
+
+  build-gateway:
+    needs: go-core
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+      - name: Build gateway (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o ../artifacts/gateway ./cmd/gateway
       - uses: actions/upload-artifact@v4
         with:
           name: gateway-binary
           path: artifacts/gateway
           retention-days: 7
 
-  # ── Website (Rust) ──
-  website:
+  build-website:
     needs: changes
     if: needs.changes.outputs.website == 'true'
     runs-on: ubuntu-latest
@@ -89,24 +112,6 @@ jobs:
           path: artifacts/www
           retention-days: 7
 
-  # ── vm-agent (TypeScript) ──
-  vm-agent:
-    needs: changes
-    if: needs.changes.outputs.vm-agent == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: vm-agent
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run build
-
-  # ── Desktop (Tauri) — 仅 typecheck，Release 时才构建安装包 ──
   desktop-check:
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
@@ -124,3 +129,69 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+
+  # ═══════════════════════════════════════════
+  #  Layer 2B — WebChat + OpenClaw (local)
+  # ═══════════════════════════════════════════
+
+  build-oc-gateway:
+    needs: go-core
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+      - name: Build oc-gateway (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o ../artifacts/oc-gateway ./cmd/oc-gateway
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oc-gateway-binary
+          path: artifacts/oc-gateway
+          retention-days: 7
+
+  build-webchat:
+    needs: changes
+    if: needs.changes.outputs.webchat == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webchat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webchat/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webchat-bundle
+          path: website/static/chat
+          retention-days: 7
+
+  # ═══════════════════════════════════════════
+  #  Layer 2C — vm-agent (oracle)
+  # ═══════════════════════════════════════════
+
+  vm-agent:
+    needs: changes
+    if: needs.changes.outputs.vm-agent == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vm-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build

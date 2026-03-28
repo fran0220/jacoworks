@@ -1,6 +1,7 @@
 package feishubot
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -45,6 +46,12 @@ type Handler struct {
 	store       *store.Store
 	channelPool *agent.ChannelPool
 
+	// ocGatewayURL is the base URL of oc-gateway for proxying chat messages.
+	// When set, messages are forwarded to oc-gateway's /api/feishu/chat instead
+	// of routing through the local ChannelPool (which has no OpenClaw dialer on gateway).
+	ocGatewayURL string
+	httpClient   *http.Client
+
 	chatLocks       sync.Map // userID → *sync.Mutex (single-flight per user)
 	processedEvents sync.Map // event_id → time.Time (webhook dedup)
 }
@@ -54,9 +61,15 @@ func NewHandler(client *Client, s *store.Store, channelPool *agent.ChannelPool) 
 		client:      client,
 		store:       s,
 		channelPool: channelPool,
+		httpClient:  &http.Client{Timeout: responseTimeout},
 	}
 	go h.cleanupLoop()
 	return h
+}
+
+// SetOcGatewayURL configures the oc-gateway URL for proxying feishu chat messages.
+func (h *Handler) SetOcGatewayURL(url string) {
+	h.ocGatewayURL = strings.TrimRight(url, "/")
 }
 
 // --- Feishu event structures ---
@@ -131,6 +144,67 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 	default:
 		log.Info().Str("event_type", event.Header.EventType).Msg("feishu webhook: unhandled event type")
 	}
+}
+
+// ChatProxyRequest is sent by the gateway to proxy feishu messages to oc-gateway.
+type ChatProxyRequest struct {
+	UserID     string `json:"user_id"`
+	OpenID     string `json:"open_id"`
+	MessageID  string `json:"message_id"`
+	Text       string `json:"text"`
+	SessionKey string `json:"session_key,omitempty"`
+}
+
+// ChatProxyResponse is returned to the gateway.
+type ChatProxyResponse struct {
+	Response string `json:"response"`
+	Error    string `json:"error,omitempty"`
+}
+
+// HandleChatProxy accepts a message from the gateway's feishu webhook and routes it
+// through the local ChannelPool to the OpenClaw container. This enables the gateway
+// (on jingao) to proxy feishu messages to oc-gateway (on local) which has the
+// OpenClaw dialers.
+func (h *Handler) HandleChatProxy(w http.ResponseWriter, r *http.Request) {
+	var req ChatProxyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ChatProxyResponse{Error: "invalid json"})
+		return
+	}
+
+	if req.UserID == "" || req.Text == "" {
+		writeJSON(w, http.StatusBadRequest, ChatProxyResponse{Error: "user_id and text are required"})
+		return
+	}
+
+	log.Info().
+		Str("user_id", req.UserID).
+		Str("open_id", req.OpenID).
+		Str("message_id", req.MessageID).
+		Msg("feishu chat proxy: received message")
+
+	// Single-flight: one chat at a time per user
+	lock := h.getChatLock(req.UserID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Route message via agent channel
+	response, err := h.routeViaChannel(r.Context(), req.UserID, req.Text, nil)
+	if err != nil {
+		log.Error().Err(err).Str("user_id", req.UserID).Msg("feishu chat proxy: route failed")
+		writeJSON(w, http.StatusInternalServerError, ChatProxyResponse{Error: err.Error()})
+		return
+	}
+
+	// Save to DB session
+	h.syncSessionMessages(r.Context(), req.UserID, req.Text, response)
+
+	log.Info().
+		Str("user_id", req.UserID).
+		Int("response_len", len(response)).
+		Msg("feishu chat proxy: success")
+
+	writeJSON(w, http.StatusOK, ChatProxyResponse{Response: response})
 }
 
 // --- Message processing (runs async in goroutine) ---
@@ -219,16 +293,35 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	// Route message via agent channel (shared with desktop)
-	response, err := h.routeViaChannel(ctx, user.ID, text, attachments)
+	// Build the full message text (with image labels if any)
+	actualMessage := text
+	if len(attachments) > 0 {
+		var sb strings.Builder
+		sb.WriteString(text)
+		for _, att := range attachments {
+			sb.WriteString(fmt.Sprintf("\n[图片: %s]", att.URL))
+		}
+		actualMessage = sb.String()
+	}
+
+	var response string
+
+	// Route: proxy to oc-gateway if configured, otherwise use local ChannelPool
+	if h.ocGatewayURL != "" {
+		response, err = h.routeViaOcGateway(user.ID, openID, messageID, actualMessage)
+	} else {
+		response, err = h.routeViaChannel(ctx, user.ID, text, attachments)
+	}
 	if err != nil {
-		log.Error().Err(err).Str("user_id", user.ID).Msg("feishu bot: route via channel failed")
+		log.Error().Err(err).Str("user_id", user.ID).Bool("proxied", h.ocGatewayURL != "").Msg("feishu bot: route failed")
 		h.client.ReplyText(messageID, "AI 处理消息时出错，请稍后重试。")
 		return
 	}
 
-	// Save to DB session for desktop visibility
-	h.syncSessionMessages(ctx, user.ID, text, response)
+	// Save to DB session for desktop visibility (skip if proxied — oc-gateway already saved)
+	if h.ocGatewayURL == "" {
+		h.syncSessionMessages(ctx, user.ID, text, response)
+	}
 
 	// Truncate if too long
 	if len(response) > maxReplyLength {
@@ -248,6 +341,45 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 		Str("open_id", openID).
 		Int("response_len", len(response)).
 		Msg("feishu bot: replied")
+}
+
+// --- OC-Gateway proxy routing ---
+
+// routeViaOcGateway forwards the feishu message to oc-gateway's /api/feishu/chat
+// endpoint, which has the OpenClaw ChannelPool and dialers.
+func (h *Handler) routeViaOcGateway(userID, openID, messageID, text string) (string, error) {
+	proxyReq := ChatProxyRequest{
+		UserID:    userID,
+		OpenID:    openID,
+		MessageID: messageID,
+		Text:      text,
+	}
+
+	body, _ := json.Marshal(proxyReq)
+	url := h.ocGatewayURL + "/api/feishu/chat"
+
+	log.Info().Str("url", url).Str("user_id", userID).Msg("feishu bot: proxying to oc-gateway")
+
+	resp, err := h.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("proxy to oc-gateway: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var proxyResp ChatProxyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&proxyResp); err != nil {
+		return "", fmt.Errorf("decode oc-gateway response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK || proxyResp.Error != "" {
+		errMsg := proxyResp.Error
+		if errMsg == "" {
+			errMsg = fmt.Sprintf("oc-gateway returned %d", resp.StatusCode)
+		}
+		return "", fmt.Errorf("oc-gateway error: %s", errMsg)
+	}
+
+	return proxyResp.Response, nil
 }
 
 // --- Channel routing (replaces HTTP routeToContainer) ---

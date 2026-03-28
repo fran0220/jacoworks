@@ -53,9 +53,9 @@ func (d *OpenClawDialer) EnsureRunning(ctx context.Context, info *store.Containe
 func (d *OpenClawDialer) Dial(info *store.ContainerInfo) (*websocket.Conn, error) {
 	upstreamURL := d.UpstreamURL(info)
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	// Set Origin to match OpenClaw's allowedOrigins for control-ui mode.
-	originURL := "http://127.0.0.1:" + fmt.Sprintf("%d", info.HostPort)
-	if info.HostPort == 0 {
+	// Origin must match the VM's listen address for OpenClaw's controlUi.allowedOrigins.
+	originURL := fmt.Sprintf("http://%s:18789", info.ContainerIP)
+	if info.ContainerIP == "" {
 		originURL = "http://127.0.0.1:18789"
 	}
 	headers := http.Header{"Origin": []string{originURL}}

@@ -329,6 +329,16 @@ func (h *Handlers) FeishuCallback(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Str("user_id", user.ID).Str("feishu_id", gothUser.UserID).Msg("feishu user logged in")
 
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		MaxAge:   86400 * 30,
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+	})
+
 	redirectURL := appendAuthResult(stateData.Redirect, stateData.RedirectUseQuery, "token", token)
 	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
@@ -418,11 +428,12 @@ func isAllowedRedirectHost(host string) bool {
 func loadRedirectAllowlist() map[string]struct{} {
 	redirectAllowlistOnce.Do(func() {
 		redirectAllowlist = map[string]struct{}{
-			"localhost":        {},
-			"127.0.0.1":        {},
-			"::1":              {},
-			"tauri.localhost":  {},
-			"jaco.jingao.club": {},
+			"localhost":         {},
+			"127.0.0.1":         {},
+			"::1":               {},
+			"tauri.localhost":   {},
+			"jaco.jingao.club":  {},
+			"chat.jingao.club":  {},
 		}
 		extra := strings.TrimSpace(os.Getenv("GATEWAY_OAUTH_REDIRECT_ALLOWLIST"))
 		if extra == "" {

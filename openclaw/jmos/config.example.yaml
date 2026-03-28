@@ -7,7 +7,7 @@ project:
 
 # 管理员配置
 admin:
-  password: "admin123" # 首次启动后自动替换为 MD5 加密
+  password: "admin123" # 管理端登录密码；实际部署时建议由 Gateway 注入独立随机值
 
 # Agent 注册
 agent:

@@ -133,6 +133,20 @@ func adminHeader(pwd string) map[string]string {
 	return map[string]string{"X-Admin-Token": pwd}
 }
 
+func adminLogin(t *testing.T, env *testEnv) map[string]string {
+	t.Helper()
+	code, body := env.doJSON(t, "POST", "/api/v1/admin/login",
+		map[string]string{"password": env.adminPwd}, nil)
+	if code != 200 {
+		t.Fatalf("admin login failed: %d %v", code, body)
+	}
+	token, _ := body["token"].(string)
+	if token == "" {
+		t.Fatal("expected admin session token")
+	}
+	return adminHeader(token)
+}
+
 // --- Tests ---
 
 func TestHealthCheck(t *testing.T) {
@@ -190,13 +204,16 @@ func TestAgentRegistration(t *testing.T) {
 		t.Fatal("expected api_key in response")
 	}
 
-	// Duplicate name → 400
-	code, _ = env.doJSON(t, "POST", "/api/v1/agents/register",
+	// Duplicate name → 201 idempotent
+	code, body = env.doJSON(t, "POST", "/api/v1/agents/register",
 		map[string]string{"name": "planner-1", "role": "planner"},
 		map[string]string{"X-Registration-Token": env.regToken},
 	)
-	if code != 400 {
-		t.Fatalf("expected 400 for duplicate, got %d", code)
+	if code != 201 {
+		t.Fatalf("expected 201 for duplicate registration, got %d", code)
+	}
+	if body["id"] == nil || body["api_key"] == nil {
+		t.Fatalf("expected existing agent payload, got %v", body)
 	}
 }
 
@@ -257,10 +274,10 @@ func TestFullWorkflow(t *testing.T) {
 
 	code, subTask := env.doJSON(t, "POST", "/api/v1/sub-tasks",
 		map[string]any{
-			"task_id":       taskID,
-			"name":          "实现登录接口",
-			"description":   "POST /api/auth/login",
-			"priority":      "high",
+			"task_id":        taskID,
+			"name":           "实现登录接口",
+			"description":    "POST /api/auth/login",
+			"priority":       "high",
 			"assigned_agent": executorID,
 		},
 		bearerHeader(plannerKey),
@@ -516,11 +533,18 @@ func TestAdminLogin(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("expected 200, got %d: %v", code, body)
 	}
+	token, _ := body["token"].(string)
+	if token == "" {
+		t.Fatal("expected session token")
+	}
+	if token == env.adminPwd {
+		t.Fatal("expected session token to differ from admin password")
+	}
 }
 
 func TestAdminAgentCRUD(t *testing.T) {
 	env := newTestEnv(t)
-	admin := adminHeader(env.adminPwd)
+	admin := adminLogin(t, env)
 
 	// Admin creates agent
 	code, agent := env.doJSON(t, "POST", "/api/v1/agents",
@@ -546,6 +570,52 @@ func TestAdminAgentCRUD(t *testing.T) {
 	}
 	if newKey["api_key"] == nil {
 		t.Fatal("expected new api_key")
+	}
+}
+
+func TestReviewRecordsLegacyRoute(t *testing.T) {
+	env := newTestEnv(t)
+
+	plannerKey := registerAgent(t, env, "planner", "planner")
+	executorKey := registerAgent(t, env, "executor", "executor")
+	reviewerKey := registerAgent(t, env, "reviewer", "reviewer")
+
+	_, task := env.doJSON(t, "POST", "/api/v1/tasks",
+		map[string]string{"name": "兼容审查接口", "description": "验证 review-records 别名"},
+		bearerHeader(plannerKey),
+	)
+	taskID := task["id"].(string)
+
+	_, subTask := env.doJSON(t, "POST", "/api/v1/sub-tasks",
+		map[string]string{"task_id": taskID, "name": "实现兼容接口", "description": "补 review-records"},
+		bearerHeader(plannerKey),
+	)
+	subTaskID := subTask["id"].(string)
+
+	env.doJSON(t, "POST", fmt.Sprintf("/api/v1/sub-tasks/%s/claim", subTaskID), nil, bearerHeader(executorKey))
+	env.doJSON(t, "POST", fmt.Sprintf("/api/v1/sub-tasks/%s/start", subTaskID), nil, bearerHeader(executorKey))
+	env.doJSON(t, "POST", fmt.Sprintf("/api/v1/sub-tasks/%s/submit", subTaskID), nil, bearerHeader(executorKey))
+
+	code, review := env.doJSON(t, "POST", "/api/v1/review-records",
+		map[string]any{
+			"sub_task_id": subTaskID,
+			"result":      "approved",
+			"score":       5,
+			"comment":     "legacy route works",
+		},
+		bearerHeader(reviewerKey),
+	)
+	if code != 201 {
+		t.Fatalf("legacy review create: %d %v", code, review)
+	}
+
+	code, list := env.doJSON(t, "GET", "/api/v1/review-records?sub_task_id="+subTaskID, nil, bearerHeader(reviewerKey))
+	if code != 200 {
+		t.Fatalf("legacy review list: %d %v", code, list)
+	}
+	items, ok := list["items"].([]any)
+	if !ok || len(items) == 0 {
+		t.Fatalf("expected legacy review list items, got %v", list)
 	}
 }
 

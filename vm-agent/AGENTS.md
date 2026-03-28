@@ -1,6 +1,12 @@
 # vm-agent — 本地 Sidecar / 云端 Agent 内核
 
-> Pi SDK + RPC。可运行于桌面端本地 sidecar (stdin/stdout) 或 Docker 容器 (server 模式)。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。
+> Pi SDK + RPC。可运行于桌面端本地 sidecar (stdin/stdout) 或 Docker 容器 (server 模式)。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。生产部署位于 oracle (`100.94.98.106`, ARM64)，当前仅供桌面端链路使用，webchat/oc-gateway 不接入 vm-agent。
+
+## 架构边界
+
+- **部署域**: vm-agent Docker 运行在 oracle，发布命令为 `make deploy-oracle`
+- **桌面端使用**: Desktop 本地 sidecar 与 oracle 容器链路均属于桌面体系
+- **WebChat 边界**: webchat 由 oc-gateway 提供完整后端，不依赖 vm-agent
 
 ## 代码结构
 
@@ -178,6 +184,6 @@ Pi SDK 在对话接近 context window 上限时自动触发压缩。通过环境
 
 - **TS strict ES2022 NodeNext**
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session 和记忆
-- **云端 Agent**: 运行于 Docker 容器，桌面端通过 Gateway WS 代理通信
+- **云端 Agent**: 运行于 oracle Docker 容器，服务桌面端链路；webchat 不接入
 - 开发: `make dev-agent` (热重载)
-- 部署: `make deploy-agent` 构建 ARM64 镜像 → oracle
+- 部署: `make deploy-oracle` (等价 `make deploy-agent`) 构建 ARM64 镜像 → oracle

@@ -19,15 +19,16 @@ type Config struct {
 	Database  DatabaseConfig  `yaml:"database"`
 	GitHub    GitHubConfig    `yaml:"github"`
 	ChatAgent ChatAgentConfig `yaml:"chat_agent"`
-	PostHog   PostHogConfig   `yaml:"posthog"`
+	PostHog       PostHogConfig   `yaml:"posthog"`
+	OcGatewayURL  string          `yaml:"oc_gateway_url"`
 }
 
 type OpenClawConfig struct {
-	Image      string `yaml:"image"`
-	Port       int    `yaml:"port"`
-	HostIP     string `yaml:"host_ip"`
-	BasePort   int    `yaml:"base_port"`
-	DataRoot   string `yaml:"data_root"`
+	Image    string `yaml:"image"`
+	Port     int    `yaml:"port"`
+	HostIP   string `yaml:"host_ip"`
+	BasePort int    `yaml:"base_port"`
+	DataRoot string `yaml:"data_root"`
 }
 
 type GitHubConfig struct {
@@ -65,6 +66,7 @@ type ServerConfig struct {
 	Port      int    `yaml:"port"`
 	Host      string `yaml:"host"`
 	PublicURL string `yaml:"public_url"`
+	StaticDir string `yaml:"static_dir"`
 }
 
 type AuthConfig struct {
@@ -141,6 +143,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_SERVER_PUBLIC_URL"); v != "" {
 		cfg.Server.PublicURL = v
+	}
+	if v := os.Getenv("GATEWAY_SERVER_STATIC_DIR"); v != "" {
+		cfg.Server.StaticDir = v
 	}
 	if v := os.Getenv("GATEWAY_AUTH_ADMIN_TOKEN"); v != "" {
 		cfg.Auth.AdminToken = v
@@ -228,6 +233,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_POSTHOG_ENDPOINT"); v != "" {
 		cfg.PostHog.Endpoint = v
+	}
+	if v := os.Getenv("GATEWAY_OC_GATEWAY_URL"); v != "" {
+		cfg.OcGatewayURL = v
 	}
 }
 

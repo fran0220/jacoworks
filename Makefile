@@ -5,7 +5,8 @@
 .PHONY: help dev dev-gateway dev-oc-gateway dev-website dev-webchat dev-agent dev-desktop \
         build build-gateway build-oc-gateway build-website build-webchat build-agent build-desktop \
         compile-agent prepare-win-deps \
-        deploy deploy-gateway deploy-oc-gateway deploy-website deploy-agent push-skills \
+        deploy deploy-jingao deploy-local deploy-oracle \
+        deploy-gateway deploy-oc-gateway deploy-website deploy-webchat deploy-webchat-static deploy-agent push-skills \
         check check-gateway check-website check-webchat check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
         db-reset db-migrate clean \
@@ -103,13 +104,22 @@ build-desktop: compile-agent ## 构建 Desktop 安装包 (Windows 需先 make pr
 	@echo "✅ Desktop 安装包在 desktop/src-tauri/target/release/bundle/"
 
 # ═══════════════════════════════════════════
-#  部署 (SSH 到 jingao, 远程 git pull + 编译)
+#  部署 — 三域分离
+#  deploy-jingao : 桌面端管控面 (gateway + website)
+#  deploy-local  : WebChat + OpenClaw (oc-gateway + webchat + openclaw)
+#  deploy-oracle : vm-agent Docker
 # ═══════════════════════════════════════════
+
+deploy: deploy-jingao deploy-local push-skills ## 部署所有服务
+
+deploy-jingao: deploy-gateway deploy-website ## 部署桌面端管控面到 jingao
+
+deploy-local: deploy-oc-gateway ## 部署 WebChat + OpenClaw 到 local
+
+deploy-oracle: deploy-agent ## 部署 vm-agent 到 oracle
 
 push-skills: ## 推送 vm-agent/skills/ 到网关 (system skills)
 	./deploy/push-skills.sh
-
-deploy: deploy-gateway deploy-website push-skills ## 部署所有服务到 jingao
 
 deploy-sync: ## 同步代码到 jingao (git pull + submodule)
 	@echo "📥 同步代码到 jingao..."
@@ -133,16 +143,27 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		curl -sf http://localhost:8847/health"
 	@echo "✅ Gateway 已部署"
 
-deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64 + 同步 openclaw/)
+deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64 + 同步 openclaw/ + webchat + data)
 	@echo "📦 部署 OC Gateway → $(LOCAL_HOST)..."
 	cd gateway && CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags='-s -w' -o /tmp/oc-gateway ./cmd/oc-gateway
 	scp /tmp/oc-gateway $(LOCAL_HOST):/opt/jacoworks/oc-gateway.new
 	@echo "📂 同步 openclaw/ 目录..."
-	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/openclaw"
+	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/openclaw /opt/jacoworks/data /opt/jacoworks/www/static"
 	rsync -a --delete openclaw/templates/ $(LOCAL_HOST):/opt/jacoworks/openclaw/templates/
 	rsync -a --delete openclaw/skills/ $(LOCAL_HOST):/opt/jacoworks/openclaw/skills/
-	ssh $(LOCAL_HOST) "mv /opt/jacoworks/oc-gateway.new /opt/jacoworks/oc-gateway && chmod +x /opt/jacoworks/oc-gateway && systemctl restart jacoworks-oc-gateway && sleep 2 && curl -sf http://localhost:18700/health"
+	@echo "📂 同步 HTML 模板..."
+	scp gateway/data/chat.html gateway/data/login.html $(LOCAL_HOST):/opt/jacoworks/data/
+	@echo "📂 同步 webchat 静态文件..."
+	rsync -a --delete website/static/chat/ $(LOCAL_HOST):/opt/jacoworks/www/static/chat/
+	ssh $(LOCAL_HOST) "mv /opt/jacoworks/oc-gateway.new /opt/jacoworks/oc-gateway && chmod +x /opt/jacoworks/oc-gateway && systemctl restart jacoworks-oc-gateway && sleep 5 && curl -sf http://localhost:18700/health"
 	@echo "✅ OC Gateway 已部署"
+
+deploy-webchat: build-webchat deploy-webchat-static ## 构建并部署 webchat 到 local + jingao
+
+deploy-webchat-static: ## 仅同步 webchat 静态文件到 local (无需重启 oc-gateway)
+	@echo "📂 同步 webchat → local..."
+	rsync -a --delete website/static/chat/ $(LOCAL_HOST):/opt/jacoworks/www/static/chat/
+	@echo "✅ webchat 静态文件已同步到 local"
 
 deploy-website: deploy-sync ## 部署 Website 到 jingao (远程编译)
 	@echo "📦 部署 Website → $(JINGAO_HOST) (远程编译)..."

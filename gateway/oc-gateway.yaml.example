@@ -1,6 +1,8 @@
 server:
   port: 18700
   host: "0.0.0.0"
+  public_url: "http://localhost:18700"
+  static_dir: "../website/static"
 
 auth:
   admin_token: ""

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -13,7 +14,15 @@ import (
 
 type contextKey string
 
-const UserContextKey contextKey = "user"
+const (
+	UserContextKey  contextKey = "user"
+	TokenContextKey contextKey = "auth_token"
+)
+
+var (
+	errMissingAuth    = errors.New("missing auth")
+	errInvalidSession = errors.New("invalid session")
+)
 
 type UserInfo struct {
 	ID    string `json:"id"`
@@ -45,46 +54,31 @@ func NewMiddlewareWithStore(s middlewareStore, adminToken string) *Middleware {
 
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := extractBearerToken(r)
-		if token == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing auth"})
-			return
-		}
-
-		// Admin token passthrough
-		if m.adminToken != "" && token == m.adminToken {
-			ctx := context.WithValue(r.Context(), UserContextKey, &UserInfo{
-				ID: "admin", Name: "admin", Email: "admin@jacoworks.local", Role: "admin",
-			})
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-
-		if m.store == nil {
+		user, token, err := m.authenticateRequest(r)
+		if err != nil {
+			if errors.Is(err, errMissingAuth) {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing auth"})
+				return
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
 			return
 		}
 
-		// Validate session token via store
-		user, err := m.store.ValidateAuthSession(r.Context(), token)
+		next.ServeHTTP(w, r.WithContext(withAuthContext(r.Context(), user, token)))
+	})
+}
+
+// AuthenticateWithRedirect authenticates like Authenticate, but redirects on failure.
+// This is intended for browser page routes such as /chat.
+func (m *Middleware) AuthenticateWithRedirect(redirectPath string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, token, err := m.authenticateRequest(r)
 		if err != nil {
-			// Fallback: try container token (for container-initiated API calls)
-			cUser, cerr := m.store.GetUserByContainerToken(r.Context(), token)
-			if cerr != nil {
-				log.Debug().Err(err).Msg("session validation failed")
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
-				return
-			}
-			user = cUser
+			http.Redirect(w, r, redirectPath, http.StatusFound)
+			return
 		}
 
-		ctx := context.WithValue(r.Context(), UserContextKey, &UserInfo{
-			ID:    user.ID,
-			Name:  user.Name,
-			Email: user.Email,
-			Role:  user.Role,
-		})
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(withAuthContext(r.Context(), user, token)))
 	})
 }
 
@@ -104,10 +98,60 @@ func GetUser(ctx context.Context) *UserInfo {
 	return info
 }
 
+func GetToken(ctx context.Context) string {
+	token, _ := ctx.Value(TokenContextKey).(string)
+	return token
+}
+
+func withAuthContext(ctx context.Context, user *UserInfo, token string) context.Context {
+	ctx = context.WithValue(ctx, UserContextKey, user)
+	return context.WithValue(ctx, TokenContextKey, token)
+}
+
+func (m *Middleware) authenticateRequest(r *http.Request) (*UserInfo, string, error) {
+	token := extractBearerToken(r)
+	if token == "" {
+		return nil, "", errMissingAuth
+	}
+
+	if m.adminToken != "" && token == m.adminToken {
+		return &UserInfo{
+			ID: "admin", Name: "admin", Email: "admin@jacoworks.local", Role: "admin",
+		}, token, nil
+	}
+
+	if m.store == nil {
+		return nil, "", errInvalidSession
+	}
+
+	user, err := m.store.ValidateAuthSession(r.Context(), token)
+	if err != nil {
+		cUser, cerr := m.store.GetUserByContainerToken(r.Context(), token)
+		if cerr != nil {
+			log.Debug().Err(err).Msg("session validation failed")
+			return nil, "", errInvalidSession
+		}
+		user = cUser
+	}
+
+	return &UserInfo{
+		ID:    user.ID,
+		Name:  user.Name,
+		Email: user.Email,
+		Role:  user.Role,
+	}, token, nil
+}
+
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	if cookie, err := r.Cookie("auth_token"); err == nil {
+		token := strings.TrimSpace(cookie.Value)
+		if token != "" {
+			return token
+		}
 	}
 
 	// Fallback: query token only for WebSocket upgrade requests under /ws/*.

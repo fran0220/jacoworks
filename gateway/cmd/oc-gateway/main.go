@@ -8,24 +8,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/markbates/goth"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/fran0220/jacoworks/gateway/internal/agent"
+	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/audit"
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
+	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	containerpkg "github.com/fran0220/jacoworks/gateway/internal/container"
 	incuspkg "github.com/fran0220/jacoworks/gateway/internal/incus"
 	"github.com/fran0220/jacoworks/gateway/internal/middleware"
@@ -98,12 +103,31 @@ func main() {
 				llm.PrimaryProvider = setting.Value
 			case "admin_token":
 				cfg.Auth.AdminToken = setting.Value
+			case "posthog_api_key":
+				cfg.PostHog.APIKey = setting.Value
+			case "posthog_endpoint":
+				cfg.PostHog.Endpoint = setting.Value
+			case "feishu_client_id":
+				cfg.Auth.FeishuClientID = setting.Value
+			case "feishu_client_secret":
+				cfg.Auth.FeishuClientSecret = setting.Value
 			}
 		}
 		cfg.UpdateLLM(llm)
 		log.Info().Msg("loaded settings from database")
 	} else {
 		log.Warn().Err(err).Msg("load settings from database failed")
+	}
+
+	// Initialize Goth providers (Feishu SSO)
+	if cfg.Auth.FeishuClientID != "" {
+		baseURL := cfg.Server.PublicURL
+		if baseURL == "" {
+			baseURL = fmt.Sprintf("http://%s", cfg.Addr())
+		}
+		callbackURL := baseURL + "/api/auth/feishu/callback"
+		goth.UseProviders(feishu.New(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret, callbackURL))
+		log.Info().Str("callback", callbackURL).Msg("feishu SSO provider registered")
 	}
 
 	auditLogger := audit.NewLogger(s.Pool())
@@ -129,6 +153,15 @@ func main() {
 		Msg("openclaw backend initialized (incus)")
 
 	authMiddleware := auth.NewMiddleware(s, cfg.Auth.AdminToken)
+	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
+	chatTemplate, err := loadHTMLTemplate("chat", "data/chat.html", "gateway/data/chat.html")
+	if err != nil {
+		log.Fatal().Err(err).Msg("load chat template")
+	}
+	loginTemplate, err := loadHTMLTemplate("login", "data/login.html", "gateway/data/login.html")
+	if err != nil {
+		log.Fatal().Err(err).Msg("load login template")
+	}
 
 	ocDialer := agent.NewOpenClawDialer(s, ocClient, ocFreezer)
 	ocDialer.SetAutoPairEnabled(true)
@@ -139,6 +172,10 @@ func main() {
 	channelPool := agent.NewChannelPool(s, dialers, 5*time.Minute, 1024)
 	defer channelPool.Close()
 
+	// Initialize Feishu Bot handler (shares ChannelPool with webchat for conversation sync)
+	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
+	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, channelPool)
+
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
 	defer wsTicketStore.Close()
 
@@ -146,6 +183,37 @@ func main() {
 	sseHandler := agent.NewSSEHandler(channelPool)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/chat", http.StatusFound)
+	})
+	mux.Handle("GET /login", http.HandlerFunc(loginPageHandler(loginTemplate)))
+	mux.Handle("GET /chat", authMiddleware.AuthenticateWithRedirect("/login", http.HandlerFunc(chatPageHandler(s, cfg, chatTemplate))))
+
+	if staticDir := strings.TrimSpace(cfg.Server.StaticDir); staticDir != "" {
+		staticRoot := filepath.Clean(staticDir)
+		log.Info().Str("path", staticRoot).Msg("serving static assets")
+		mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticRoot))))
+	} else {
+		log.Warn().Msg("server.static_dir is empty; /static/* will return 503")
+		mux.HandleFunc("GET /static/", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "static assets not configured", http.StatusServiceUnavailable)
+		})
+	}
+
+	mux.HandleFunc("POST /api/auth/login", authHandlers.Login)
+	mux.HandleFunc("POST /api/auth/activate", authHandlers.Activate)
+	mux.HandleFunc("GET /api/auth/feishu", authHandlers.FeishuBegin)
+	mux.HandleFunc("GET /api/auth/feishu/callback", authHandlers.FeishuCallback)
+	mux.Handle("POST /api/auth/logout", authMiddleware.Authenticate(http.HandlerFunc(authHandlers.Logout)))
+	mux.Handle("GET /api/users/me", authMiddleware.Authenticate(http.HandlerFunc(meHandler)))
+	mux.Handle("GET /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(listSessionsHandler(s))))
+	mux.Handle("POST /api/sessions", authMiddleware.Authenticate(http.HandlerFunc(createSessionHandler(s))))
+	mux.Handle("GET /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(getSessionHandler(s))))
+	mux.Handle("PUT /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(updateSessionHandler(s))))
+	mux.Handle("DELETE /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteSessionHandler(s))))
+	mux.Handle("POST /api/cron/jobs", authMiddleware.Authenticate(http.HandlerFunc(createCronJobHandler(s))))
+	mux.Handle("GET /api/cron/jobs", authMiddleware.Authenticate(http.HandlerFunc(listCronJobsHandler(s))))
+	mux.Handle("DELETE /api/cron/jobs/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteCronJobHandler(s))))
 
 	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wsTicketStore.IssueTicket(w, r)
@@ -178,6 +246,7 @@ func main() {
 	// VNC reverse proxy (authenticated, per-user)
 	vncHandler := authMiddleware.Authenticate(http.HandlerFunc(vncProxyHandler(s, cfg.OpenClaw.HostIP)))
 	mux.Handle("GET /vnc/", vncHandler)
+	mux.Handle("GET /websockify", authMiddleware.Authenticate(http.HandlerFunc(vncWebsockifyHandler(s))))
 
 	mux.Handle("POST /api/admin/containers/{id}/sync-config", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(syncContainerConfigHandler(s, ocClient, auditLogger)))))
 	mux.Handle("POST /api/admin/containers/{id}/install-template", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(installTemplateHandler(s, ocClient, auditLogger)))))
@@ -196,6 +265,12 @@ func main() {
 	mux.Handle("POST /api/admin/templates", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(createTemplateHandler(s, ocClient, auditLogger)))))
 	mux.Handle("PUT /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateTemplateHandler(s, ocClient, auditLogger)))))
 	mux.Handle("DELETE /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(deleteTemplateHandler(s, ocClient, auditLogger)))))
+
+	// Feishu bot chat proxy endpoint (called by gateway's feishu webhook handler)
+	mux.HandleFunc("POST /api/feishu/chat", feishuBotHandler.HandleChatProxy)
+
+	// Feishu webhook (can also be called directly if configured)
+	mux.HandleFunc("POST /api/feishu/webhook", feishuBotHandler.HandleWebhook)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -242,6 +317,7 @@ var allowedOrigins = map[string]bool{
 	"tauri://localhost":           true,
 	"https://tauri.localhost":     true,
 	"https://jaco.jingao.club":    true,
+	"https://chat.jingao.club":    true,
 	"https://jacoapi.jingao.club": true,
 }
 
@@ -278,6 +354,305 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+type chatPageData struct {
+	GatewayURL     string
+	UserName       string
+	AuthToken      string
+	OpenClawToken  string
+	OpenClawWSPort int
+	OpenClawVncURL string
+	PostHogKey     string
+	PostHogHost    string
+}
+
+func loginPageHandler(tpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tpl.Execute(w, nil); err != nil {
+			log.Error().Err(err).Msg("render login page")
+			http.Error(w, "failed to render login page", http.StatusInternalServerError)
+		}
+	}
+}
+
+func chatPageHandler(s *store.Store, cfg *config.Config, tpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
+		authToken := auth.GetToken(r.Context())
+		if authToken == "" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
+		openclawToken := ""
+		openclawWSPort := 0
+		vncPort := 0
+		if info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw); err == nil {
+			openclawToken = info.ContainerToken
+			openclawWSPort = info.HostPort
+			vncPort = info.VncPort
+		}
+
+		gatewayURL := resolveGatewayURL(cfg, r)
+		openclawVncURL := ""
+		if vncPort > 0 {
+			openclawVncURL = gatewayURL + "/vnc/vnc.html"
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tpl.Execute(w, chatPageData{
+			GatewayURL:     gatewayURL,
+			UserName:       user.Name,
+			AuthToken:      authToken,
+			OpenClawToken:  openclawToken,
+			OpenClawWSPort: openclawWSPort,
+			OpenClawVncURL: openclawVncURL,
+			PostHogKey:     cfg.PostHog.APIKey,
+			PostHogHost:    cfg.PostHog.Endpoint,
+		}); err != nil {
+			log.Error().Err(err).Str("user_id", user.ID).Msg("render chat page")
+			http.Error(w, "failed to render chat page", http.StatusInternalServerError)
+		}
+	}
+}
+
+func resolveGatewayURL(cfg *config.Config, r *http.Request) string {
+	if u := strings.TrimRight(strings.TrimSpace(cfg.Server.PublicURL), "/"); u != "" {
+		return u
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if xfProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); xfProto != "" {
+		scheme = strings.TrimSpace(strings.Split(xfProto, ",")[0])
+	}
+	return strings.TrimRight(fmt.Sprintf("%s://%s", scheme, r.Host), "/")
+}
+
+func loadHTMLTemplate(name string, candidates ...string) (*template.Template, error) {
+	var lastErr error
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		tpl, err := template.ParseFiles(candidate)
+		if err == nil {
+			return tpl, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no template paths provided")
+	}
+	return nil, fmt.Errorf("load %s template: %w", name, lastErr)
+}
+
+func meHandler(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r.Context())
+	if user == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":    user.ID,
+		"name":  user.Name,
+		"email": user.Email,
+		"role":  user.Role,
+	})
+}
+
+func listSessionsHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		sessions, err := s.ListSessions(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list sessions"})
+			return
+		}
+		if sessions == nil {
+			sessions = []store.SessionSummary{}
+		}
+		writeJSON(w, http.StatusOK, sessions)
+	}
+}
+
+func getSessionHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		sess, err := s.GetSession(r.Context(), user.ID, r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, sess)
+	}
+}
+
+func createSessionHandler(s *store.Store) http.HandlerFunc {
+	type createSessionRequest struct {
+		Type          string `json:"type"`
+		WorkspacePath string `json:"workspace_path"`
+		Model         string `json:"model"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req createSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		sess, err := s.CreateSession(r.Context(), user.ID, req.Type, req.WorkspacePath, req.Model)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create session"})
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, sess)
+	}
+}
+
+func updateSessionHandler(s *store.Store) http.HandlerFunc {
+	type updateRequest struct {
+		Title         *string `json:"title"`
+		Messages      *string `json:"messages"`
+		Model         *string `json:"model"`
+		WorkspacePath *string `json:"workspace_path"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		var req updateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		sess, err := s.UpdateSession(r.Context(), user.ID, r.PathValue("id"), store.SessionUpdate{
+			Title:         req.Title,
+			Messages:      req.Messages,
+			Model:         req.Model,
+			WorkspacePath: req.WorkspacePath,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, sess)
+	}
+}
+
+func deleteSessionHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if err := s.DeleteSession(r.Context(), user.ID, r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func createCronJobHandler(s *store.Store) http.HandlerFunc {
+	type createRequest struct {
+		ScheduleKind   string  `json:"schedule_kind"`
+		ScheduleExpr   string  `json:"schedule_expr"`
+		Prompt         string  `json:"prompt"`
+		Name           *string `json:"name"`
+		SessionTarget  string  `json:"session_target"`
+		DeleteAfterRun bool    `json:"delete_after_run"`
+		DeliveryMode   *string `json:"delivery_mode"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req createRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		if req.ScheduleKind == "" || req.ScheduleExpr == "" || req.Prompt == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "schedule_kind, schedule_expr, and prompt are required"})
+			return
+		}
+
+		job, err := s.CreateCronJob(r.Context(), user.ID, req.ScheduleKind, req.ScheduleExpr, req.Prompt, req.Name, req.SessionTarget, req.DeleteAfterRun, req.DeliveryMode)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create cron job"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, job)
+	}
+}
+
+func listCronJobsHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		jobs, err := s.ListCronJobs(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list cron jobs"})
+			return
+		}
+		if jobs == nil {
+			jobs = []store.CronJob{}
+		}
+		writeJSON(w, http.StatusOK, jobs)
+	}
+}
+
+func deleteCronJobHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if err := s.DeleteCronJob(r.Context(), user.ID, r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "cron job not found"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func containerStatusHandler(s *store.Store) http.HandlerFunc {
@@ -416,10 +791,10 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 
 func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
 	type response struct {
-		Installed        string                    `json:"installed"`
-		ActiveSessionKey string                    `json:"activeSessionKey"`
-		Available        []ocpkg.TemplateSummary   `json:"available"`
-		Profiles         []ocpkg.ProfileSummary    `json:"profiles"`
+		Installed        string                  `json:"installed"`
+		ActiveSessionKey string                  `json:"activeSessionKey"`
+		Available        []ocpkg.TemplateSummary `json:"available"`
+		Profiles         []ocpkg.ProfileSummary  `json:"profiles"`
 	}
 
 	leaderSessionKey := func(tmpl *ocpkg.TemplateSummary) string {
@@ -1199,6 +1574,7 @@ func allocateVncPort(ocPort int) int {
 // ── VNC reverse proxy ────────────────────────────────────────
 
 func vncProxyHandler(s *store.Store, hostIP string) http.HandlerFunc {
+	const vncPort = 6080 // noVNC websockify port inside the VM
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1207,10 +1583,13 @@ func vncProxyHandler(s *store.Store, hostIP string) http.HandlerFunc {
 		}
 
 		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
-		if err != nil || info.VncPort == 0 {
+		if err != nil || info.ContainerIP == "" {
 			http.Error(w, "VNC not available", http.StatusServiceUnavailable)
 			return
 		}
+
+		// Use the VM's bridge IP directly (port 6080 is noVNC inside the VM)
+		vmIP := info.ContainerIP
 
 		targetPath := strings.TrimPrefix(r.URL.Path, "/vnc")
 		if targetPath == "" {
@@ -1219,12 +1598,12 @@ func vncProxyHandler(s *store.Store, hostIP string) http.HandlerFunc {
 
 		// WebSocket upgrade for VNC stream (noVNC → websockify)
 		if isWebSocketUpgrade(r) {
-			proxyVncWebSocket(w, r, hostIP, info.VncPort, targetPath)
+			proxyVncWebSocket(w, r, vmIP, vncPort, targetPath)
 			return
 		}
 
 		// Regular HTTP reverse proxy for noVNC static files
-		targetURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", hostIP, info.VncPort))
+		targetURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", vmIP, vncPort))
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
 		originalDirector := proxy.Director
 		proxy.Director = func(req *http.Request) {
@@ -1233,6 +1612,24 @@ func vncProxyHandler(s *store.Store, hostIP string) http.HandlerFunc {
 			req.URL.RawQuery = r.URL.RawQuery
 		}
 		proxy.ServeHTTP(w, r)
+	}
+}
+
+// vncWebsockifyHandler proxies the /websockify WebSocket path that noVNC uses internally.
+func vncWebsockifyHandler(s *store.Store) http.HandlerFunc {
+	const vncPort = 6080
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		if err != nil || info.ContainerIP == "" {
+			http.Error(w, "VNC not available", http.StatusServiceUnavailable)
+			return
+		}
+		proxyVncWebSocket(w, r, info.ContainerIP, vncPort, "/websockify")
 	}
 }
 
