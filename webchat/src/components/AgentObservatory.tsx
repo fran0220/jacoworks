@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { fetchAgentSummary, fetchFeedLogs } from "../lib/feed";
 import type { AgentSummary, FeedLog } from "../lib/feed";
-import { getRoleConfig, setThemeRoleOverrides, setThemeZoneLabels } from "../observatory/types";
 import type { WorldAgent } from "../observatory/types";
 import { setRoleLabels } from "../lib/feed-translate";
 import { fetchTeams } from "../lib/teams";
@@ -9,6 +8,9 @@ import type { TeamsResponse, TemplateTheme } from "../lib/teams";
 import { buildTeamOptions, resolveLeaderInfo } from "../lib/team-utils";
 import LeaderAssistant from "../observatory/hud/LeaderAssistant";
 import type { LeaderAssistantHandle } from "../observatory/hud/LeaderAssistant";
+
+const ROLE_OVERRIDES_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ROLE_OVERRIDES__";
+const ZONE_LABELS_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ZONE_LABELS__";
 
 interface ActivityItem {
   id: string;
@@ -35,9 +37,65 @@ function feedLogToActivity(log: FeedLog): ActivityItem {
   };
 }
 
-function roleColor(role: string): string {
-  const config = getRoleConfig(role);
-  return `#${config.color.toString(16).padStart(6, "0")}`;
+const DEFAULT_ROLE_COLORS: Record<string, string> = {
+  planner: "#3b82f6",
+  executor: "#f97316",
+  reviewer: "#22c55e",
+  patrol: "#a855f7",
+};
+
+function hashStringToHue(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  return ((hash % 360) + 360) % 360;
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (h < 60) {
+    r = c;
+    g = x;
+  } else if (h < 120) {
+    r = x;
+    g = c;
+  } else if (h < 180) {
+    g = c;
+    b = x;
+  } else if (h < 240) {
+    g = x;
+    b = c;
+  } else if (h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+
+  const toHex = (value: number) => Math.round((value + m) * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function roleColor(role: string, theme?: TemplateTheme): string {
+  const themedColor = theme?.roles?.[role]?.color;
+  if (themedColor) return themedColor;
+  return DEFAULT_ROLE_COLORS[role] ?? hslToHex(hashStringToHue(role), 0.7, 0.55);
+}
+
+function setObservatoryRoleOverrides(overrides: Record<string, { color: number; emissive: number; namePrefix: string }> | null): void {
+  const globalState = globalThis as Record<string, unknown>;
+  globalState[ROLE_OVERRIDES_GLOBAL_KEY] = overrides;
+}
+
+function setObservatoryZoneLabels(labels: Record<string, string> | null): void {
+  const globalState = globalThis as Record<string, unknown>;
+  globalState[ZONE_LABELS_GLOBAL_KEY] = labels;
 }
 
 interface SceneRefs {
@@ -91,7 +149,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
           const darkerHex = Math.floor(hex * 0.6);
           overrides[role] = { color: hex, emissive: darkerHex, namePrefix: cfg.displayName.slice(0, 1) };
         }
-        setThemeRoleOverrides(overrides);
+        setObservatoryRoleOverrides(overrides);
       }
       // Apply zone label overrides
       if (theme.zones) {
@@ -99,7 +157,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         for (const [zoneId, cfg] of Object.entries(theme.zones)) {
           labels[zoneId] = cfg.label;
         }
-        setThemeZoneLabels(labels);
+        setObservatoryZoneLabels(labels);
       }
       // Apply feed role labels
       if (theme.roles) {
@@ -110,8 +168,8 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         setRoleLabels(labels);
       }
     } else {
-      setThemeRoleOverrides(null as unknown as Record<string, never>);
-      setThemeZoneLabels(null as unknown as Record<string, string>);
+      setObservatoryRoleOverrides(null);
+      setObservatoryZoneLabels(null);
       setRoleLabels(null as unknown as Record<string, string>);
     }
   }, []);
@@ -365,7 +423,8 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
   }
 
   return (
-    <div className="observatory" ref={containerRef}>
+    <div className="observatory">
+      <div className="observatory-canvas" ref={containerRef} aria-hidden="true" />
       {loading && (
         <div className="observatory-loading">
           <span className="spinner" />
@@ -401,7 +460,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
             <div className="observatory-activity-item" key={item.id}>
               <span
                 className="dot"
-                style={{ width: 6, height: 6, borderRadius: "50%", background: roleColor(item.agentRole), flexShrink: 0 }}
+                style={{ width: 6, height: 6, borderRadius: "50%", background: roleColor(item.agentRole, teamsData?.theme), flexShrink: 0 }}
               />
               <span className="agent-name">{item.agentName}</span>
               <span>{item.action}</span>
@@ -413,7 +472,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         <div className="observatory-scorebar">
           {agents.map((a) => (
             <div className="observatory-score-chip" key={a.id}>
-              <span className="dot" style={{ background: roleColor(a.role) }} />
+              <span className="dot" style={{ background: roleColor(a.role, teamsData?.theme) }} />
               <span>{a.name}</span>
               <span className="score">{a.total_score}</span>
             </div>

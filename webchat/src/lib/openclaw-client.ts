@@ -185,24 +185,25 @@ export class OpenClawClient {
 
     ws.onmessage = (evt) => {
       try {
-        const parsed = JSON.parse(evt.data) as Record<string, unknown>;
+        const raw = evt.data as string;
+        // Filter out plain-text heartbeat frames from OpenClaw
+        if (raw === "HEARTBEAT_OK" || raw === "HEARTBEAT" || raw === "PONG") return;
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
         this.handleFrame(parsed as OpenClawFrame);
       } catch {
         // ignore malformed frames
       }
     };
 
-    ws.onclose = (ev) => {
+    ws.onclose = () => {
       this.connected = false;
       this.ws = null;
       this.stopHeartbeat();
       this.rejectPending(new Error("connection closed"));
 
-      if (ev.code === 1006 && !this.connected && this.reconnectAttempt >= 3) {
-        this.opts.onStateChange("disconnected", "容器未就绪，正在刷新页面...");
-        setTimeout(() => location.reload(), 1500);
-        return;
-      }
+      // Never auto-reload the page — just keep reconnecting.
+      // Previously this reloaded after 3 failed attempts, which caused
+      // disruptive page flashes during normal operation.
 
       this.opts.onStateChange("disconnected", "连接断开");
       if (!this.disposed) this.scheduleReconnect();
@@ -238,7 +239,7 @@ export class OpenClawClient {
       return;
     }
 
-    if (frameType === "pong") return; // heartbeat pong, ignore
+    if (frameType === "pong" || frameType === "heartbeat" || frameType === "ping") return;
 
     // Response frames → resolve pending requests
     if (frameType === "res") {

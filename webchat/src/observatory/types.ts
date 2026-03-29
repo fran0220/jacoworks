@@ -1,6 +1,40 @@
 import type * as THREE from "three";
 import type { VRM } from "@pixiv/three-vrm";
 
+const ROLE_OVERRIDES_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ROLE_OVERRIDES__";
+const ZONE_LABELS_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ZONE_LABELS__";
+
+type ThemeRoleOverride = Pick<RoleConfig, "color" | "emissive" | "namePrefix"> & {
+  homeZone?: string;
+  idleZone?: string;
+};
+
+function getThemeRoleOverride(role: string): ThemeRoleOverride | undefined {
+  const globalState = globalThis as Record<string, unknown>;
+  const overrides = globalState[ROLE_OVERRIDES_GLOBAL_KEY];
+  if (!overrides || typeof overrides !== "object") return undefined;
+  const record = overrides as Record<string, ThemeRoleOverride>;
+  return record[role];
+}
+
+function getThemeZoneLabel(zoneId: string): string | undefined {
+  const globalState = globalThis as Record<string, unknown>;
+  const labels = globalState[ZONE_LABELS_GLOBAL_KEY];
+  if (!labels || typeof labels !== "object") return undefined;
+  const record = labels as Record<string, string>;
+  return record[zoneId];
+}
+
+export function setThemeRoleOverrides(overrides: Record<string, Partial<RoleConfig>> | null): void {
+  const globalState = globalThis as Record<string, unknown>;
+  globalState[ROLE_OVERRIDES_GLOBAL_KEY] = overrides;
+}
+
+export function setThemeZoneLabels(labels: Record<string, string> | null): void {
+  const globalState = globalThis as Record<string, unknown>;
+  globalState[ZONE_LABELS_GLOBAL_KEY] = labels;
+}
+
 // ── Role System ──────────────────────────────────────────
 
 export interface RoleConfig {
@@ -19,26 +53,20 @@ export const ROLE_CONFIGS: Record<string, RoleConfig> = {
   patrol:   { role: "patrol",   color: 0xa855f7, emissive: 0x7e22ce, homeZone: "patrol_path",  idleZone: "lounge", namePrefix: "夜" },
 };
 
-let _themeRoleOverrides: Record<string, Partial<RoleConfig>> | null = null;
-
-export function setThemeRoleOverrides(overrides: Record<string, Partial<RoleConfig>>): void {
-  _themeRoleOverrides = overrides;
-}
-
 export function getRoleConfig(role: string): RoleConfig {
-  if (_themeRoleOverrides?.[role]) {
-    const override = _themeRoleOverrides[role];
+  const override = getThemeRoleOverride(role);
+  if (override) {
     const base = ROLE_CONFIGS[role];
     if (base) {
-      return { ...base, ...override };
+      return { ...base, ...override } as RoleConfig;
     }
     const hue = hashStringToHue(role);
     return {
       role,
       color: override.color ?? hslToHex(hue, 0.7, 0.55),
       emissive: override.emissive ?? hslToHex(hue, 0.8, 0.35),
-      homeZone: override.homeZone ?? "lounge",
-      idleZone: override.idleZone ?? "lounge",
+      homeZone: (override.homeZone as ZoneId | undefined) ?? "lounge",
+      idleZone: (override.idleZone as ZoneId | undefined) ?? "lounge",
       namePrefix: override.namePrefix ?? role.slice(0, 1).toUpperCase(),
     };
   }
@@ -69,16 +97,8 @@ function hslToHex(h: number, s: number, l: number): number {
   return (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255);
 }
 
-// ── Zone Labels ──────────────────────────────────────────
-
-let _themeZoneLabels: Record<string, string> | null = null;
-
-export function setThemeZoneLabels(labels: Record<string, string>): void {
-  _themeZoneLabels = labels;
-}
-
 export function getZoneLabel(zoneId: ZoneId): string {
-  return _themeZoneLabels?.[zoneId] ?? zoneId;
+  return getThemeZoneLabel(zoneId) ?? zoneId;
 }
 
 // ── Zones ────────────────────────────────────────────────

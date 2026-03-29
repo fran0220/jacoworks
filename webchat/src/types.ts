@@ -5,15 +5,33 @@ export interface User {
   role: string;
 }
 
+export type View = "workbench" | "tasks" | "team" | "observe";
+
+export type OpsLens = "overview" | "timeline" | "board";
+
 export type MessageContentItem =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
   | { type: "toolcall" | "tool_call"; name: string; arguments?: unknown }
   | { type: "toolresult" | "tool_result"; name?: string; text?: string; output?: unknown };
 
+export interface ChatSender {
+  agentId: string;
+  agentName: string;
+  role: string;
+}
+
+export interface ChatOrchestration {
+  action: string;
+  detail: string;
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string | MessageContentItem[];
+  type?: "text" | "orchestration";
+  sender?: ChatSender;
+  orchestration?: ChatOrchestration;
   blocks?: StreamBlock[];
   timestamp?: number;
 }

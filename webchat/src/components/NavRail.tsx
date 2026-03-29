@@ -1,70 +1,86 @@
-import { MessageSquare, Users, ListTodo, Box, Activity, Orbit, Globe, UserRound } from "lucide-react";
-import type { ActiveTab } from "../App";
-import { USER_NAME } from "../lib/config";
+import { Command, ListTodo, Orbit, Users, X, type LucideIcon } from "lucide-react";
+import UserMenu from "./UserMenu";
+import type { View } from "../types";
 
-const DESKTOP_TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
-  { key: "chat", label: "对话", Icon: MessageSquare },
-  { key: "teams", label: "团队", Icon: Users },
-  { key: "cron", label: "任务", Icon: ListTodo },
-  { key: "container", label: "容器", Icon: Box },
-  { key: "feed", label: "动态", Icon: Activity },
-  { key: "me", label: "我的", Icon: UserRound },
-  { key: "observatory", label: "观测站", Icon: Orbit },
-  { key: "city", label: "数字之城", Icon: Globe },
-];
-
-const MOBILE_TABS: { key: ActiveTab; label: string; Icon: typeof MessageSquare }[] = [
-  { key: "chat", label: "对话", Icon: MessageSquare },
-  { key: "teams", label: "团队", Icon: Users },
-  { key: "cron", label: "任务", Icon: ListTodo },
-  { key: "feed", label: "动态", Icon: Activity },
-  { key: "me", label: "我的", Icon: UserRound },
+const TABS: { key: View; label: string; Icon: LucideIcon }[] = [
+  { key: "workbench", label: "指挥台", Icon: Command },
+  { key: "tasks", label: "任务", Icon: ListTodo },
+  { key: "team", label: "团队", Icon: Users },
+  { key: "observe", label: "观测", Icon: Orbit },
 ];
 
 export default function NavRail({
-  activeTab,
+  view,
   compact,
   connState,
-  onTabChange,
+  onViewChange,
+  mobileDrawerOpen,
+  onCloseMobileDrawer,
 }: {
-  activeTab: ActiveTab;
+  view: View;
   compact: boolean;
   connState: "disconnected" | "connecting" | "connected";
-  onTabChange: (tab: ActiveTab) => void;
+  onViewChange: (view: View) => void;
+  mobileDrawerOpen?: boolean;
+  onCloseMobileDrawer?: () => void;
 }) {
-  const initial = (USER_NAME || "U").charAt(0).toUpperCase();
-  const tabs = compact ? MOBILE_TABS : DESKTOP_TABS;
+  if (compact) {
+    return (
+      <>
+        {mobileDrawerOpen && <div className="nav-drawer-backdrop" onClick={onCloseMobileDrawer} />}
+        <nav className={`nav-drawer${mobileDrawerOpen ? " open" : ""}`}>
+          <div className="nav-drawer-head">
+            <span className="nav-drawer-brand">JAcoworks</span>
+            <button className="nav-drawer-close" onClick={onCloseMobileDrawer}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="nav-drawer-tabs">
+            {TABS.map(({ key, label, Icon }) => (
+              <button
+                key={key}
+                className={`nav-drawer-btn${view === key ? " active" : ""}`}
+                onClick={() => {
+                  onViewChange(key);
+                  onCloseMobileDrawer?.();
+                }}
+              >
+                <Icon size={18} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="nav-drawer-bottom">
+            <div className={`nav-rail-conn ${connState}`} />
+            <UserMenu compact={compact} />
+          </div>
+        </nav>
+      </>
+    );
+  }
 
   return (
-    <nav className={`nav-rail${compact ? " compact" : ""}`}>
+    <nav className="nav-rail">
       <div className="nav-rail-top">
         <span className="nav-rail-brand">J</span>
       </div>
       <div className="nav-rail-tabs">
-        {tabs.map(({ key, label, Icon }) => (
+        {TABS.map(({ key, label, Icon }) => (
           <button
             key={key}
-            className={`nav-rail-btn${activeTab === key ? " active" : ""}`}
-            onClick={() => onTabChange(key)}
+            className={`nav-rail-btn${view === key ? " active" : ""}`}
+            onClick={() => onViewChange(key)}
             title={label}
           >
             <Icon size={18} />
-            {compact && <span>{label}</span>}
           </button>
         ))}
       </div>
       <div className="nav-rail-bottom">
         <div className={`nav-rail-conn ${connState}`} />
-        <div className="nav-rail-avatar" title={USER_NAME || "用户"}>{initial}</div>
-        <form method="post" action="/logout" style={{ margin: 0 }}>
-          <button type="submit" className="nav-rail-logout" title="退出登录">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-          </button>
-        </form>
+        <div className="nav-rail-user-slot">
+          <UserMenu compact={compact} />
+        </div>
       </div>
     </nav>
   );

@@ -1,7 +1,55 @@
 import { forwardRef, useImperativeHandle, useState, useRef, useEffect, useCallback } from "react";
 import SpeechBubble from "./SpeechBubble";
 import type { LeaderBubble, LeaderWsState } from "./LeaderDriver";
-import { getRoleConfig } from "../types";
+
+const DEFAULT_ROLE_COLORS: Record<string, string> = {
+  planner: "#3b82f6",
+  executor: "#f97316",
+  reviewer: "#22c55e",
+  patrol: "#a855f7",
+};
+
+function hashStringToHue(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  return ((hash % 360) + 360) % 360;
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (h < 60) {
+    r = c;
+    g = x;
+  } else if (h < 120) {
+    r = x;
+    g = c;
+  } else if (h < 180) {
+    g = c;
+    b = x;
+  } else if (h < 240) {
+    g = x;
+    b = c;
+  } else if (h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+
+  const toHex = (value: number) => Math.round((value + m) * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function getLeaderRoleColor(role: string): string {
+  return DEFAULT_ROLE_COLORS[role] ?? hslToHex(hashStringToHue(role), 0.7, 0.55);
+}
 
 export interface LeaderAssistantHandle {
   onUserSend: () => void;
@@ -35,7 +83,7 @@ const LeaderAssistant = forwardRef<LeaderAssistantHandle, LeaderAssistantProps>(
     const [bubble, setBubble] = useState<LeaderBubble>({ text: "", type: "info" });
     const [, setWsState] = useState<LeaderWsState>("idle");
     const [draft, setDraft] = useState("");
-    const canvasRef = useRef<HTMLDivElement>(null);
+    const canvasHostRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const isComposingRef = useRef(false);
     const modulesRef = useRef<SceneModules | null>(null);
@@ -48,9 +96,9 @@ const LeaderAssistant = forwardRef<LeaderAssistantHandle, LeaderAssistantProps>(
     }, []);
 
     useEffect(() => {
-      if (collapsed || !canvasRef.current) return;
+      if (collapsed || !canvasHostRef.current) return;
       let disposed = false;
-      const el = canvasRef.current;
+      const el = canvasHostRef.current;
 
       (async () => {
         const [{ LeaderScene }, { LeaderDriver }, { AvatarPool }] = await Promise.all([
@@ -134,7 +182,7 @@ const LeaderAssistant = forwardRef<LeaderAssistantHandle, LeaderAssistantProps>(
       [streaming, handleSubmit],
     );
 
-    const roleColor = `#${getRoleConfig(leaderRole).color.toString(16).padStart(6, "0")}`;
+    const roleColor = getLeaderRoleColor(leaderRole);
 
     if (collapsed) {
       return (
@@ -155,7 +203,8 @@ const LeaderAssistant = forwardRef<LeaderAssistantHandle, LeaderAssistantProps>(
           leaderRole={leaderRole}
           visible={!!bubble.text}
         />
-        <div className="leader-canvas-wrap" ref={canvasRef}>
+        <div className="leader-canvas-wrap">
+          <div className="leader-canvas-host" ref={canvasHostRef} aria-hidden="true" />
           <button className="leader-collapse-btn" onClick={() => setCollapsed(true)} title="折叠">
             −
           </button>

@@ -23,6 +23,7 @@
   "dependencies": {
     "@capacitor/browser": "^8.0.2",
     "@capacitor/core": "^8.2.0",
+    "@chenglou/pretext": "^0.0.3",
     "@pixiv/three-vrm": "^3.5.1",
     "@pixiv/three-vrm-animation": "^3.5.1",
     "dompurify": "^3.2.4",

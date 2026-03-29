@@ -1,13 +1,13 @@
 import { useRef, useEffect, useCallback } from "react";
+import type { AgentSummary } from "../lib/feed";
 import type { ChatMessage, StreamBlock } from "../types";
-import { contentToBlocks, extractText } from "../lib/message-extract";
-import StreamingMarkdown from "./StreamingMarkdown";
 import StreamingCursor from "./StreamingCursor";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolStatus from "./ToolStatus";
 import Markdown from "./Markdown";
+import VirtualMessageList from "./VirtualMessageList";
 
-function Welcome() {
+function Welcome({ agentCount }: { agentCount: number }) {
   return (
     <div className="welcome">
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -18,16 +18,12 @@ function Welcome() {
           d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
         />
       </svg>
-      <h3>JAcoworks AI 助手</h3>
-      <p>输入消息开始对话</p>
-    </div>
-  );
-}
-
-function UserMessage({ content }: { content: string }) {
-  return (
-    <div className="bubble-row user">
-      <div className="user-bubble">{content}</div>
+      <h3>团队指挥台已就绪</h3>
+      <p>
+        {agentCount > 0
+          ? `当前有 ${agentCount} 位协作成员待命，直接发消息或 @ 某个角色开始编排。`
+          : "直接发消息或 @ 某个角色，开始一轮新的协作对话。"}
+      </p>
     </div>
   );
 }
@@ -37,7 +33,7 @@ function renderBlock(block: StreamBlock, idx: number, all: StreamBlock[], stream
     return (
       <div className="bubble-row" key={`block-text-${idx}`}>
         <div className="assistant-bubble">
-          {streaming ? <StreamingMarkdown content={block.content} /> : <Markdown content={block.content} />}
+          <Markdown content={block.content} />
           {streaming && idx === all.length - 1 && <StreamingCursor />}
         </div>
       </div>
@@ -68,11 +64,15 @@ export default function ChatView({
   blocks,
   streaming,
   error,
+  activeWorkspaceKey,
+  agentSummaries = [],
 }: {
   messages: ChatMessage[];
   blocks: StreamBlock[];
   streaming: boolean;
   error: string | null;
+  activeWorkspaceKey: string;
+  agentSummaries?: AgentSummary[];
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -89,34 +89,27 @@ export default function ChatView({
 
   return (
     <div className="messages-area" ref={scrollRef}>
-      {isEmpty && <Welcome />}
+      {isEmpty && <Welcome agentCount={agentSummaries.length} />}
 
-      {messages.map((msg, i) => {
-        if (msg.role === "user") {
-          return <UserMessage key={i} content={extractText(msg.content)} />;
-        }
+      {!isEmpty && (
+        <VirtualMessageList
+          messages={messages}
+          activeWorkspaceKey={activeWorkspaceKey}
+          agentSummaries={agentSummaries}
+          scrollRef={scrollRef}
+        />
+      )}
 
-        if (msg.role === "assistant") {
-          const msgBlocks = msg.blocks?.length ? msg.blocks : contentToBlocks(msg.content);
-          if (msgBlocks.length > 0) {
-            return <div key={i}>{msgBlocks.map((block, idx) => renderBlock(block, idx, msgBlocks, false))}</div>;
-          }
-
-          const content = extractText(msg.content);
-          if (!content) return null;
-          return (
-            <div className="bubble-row" key={i}>
-              <div className="assistant-bubble">
-                <Markdown content={content} />
-              </div>
+      {streaming && blocks.length === 0 && (
+        <div className="assistant-message-group">
+          <div className="bubble-row">
+            <div className="assistant-bubble thinking-indicator">
+              <span className="thinking-dots"><span>·</span><span>·</span><span>·</span></span>
             </div>
-          );
-        }
-
-        return null;
-      })}
-
-      {streaming && blocks.map((block, i) => renderBlock(block, i, blocks, true))}
+          </div>
+        </div>
+      )}
+      {streaming && blocks.length > 0 && blocks.map((block, i) => renderBlock(block, i, blocks, true))}
 
       {error && <div className="error-msg">错误: {error}</div>}
     </div>
