@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>AI 对话 — JAcoworks</title>
   <script type="module" crossorigin src="/static/chat/chat.js"></script>
   <link rel="stylesheet" crossorigin href="/static/chat/assets/index.css">
@@ -12,13 +12,13 @@
   <script>
     // Dev mode: inject from Vite env (see .env.local)
     // Production: Website Rust template overwrites these in chat.html
-    window.__GATEWAY_URL__ = window.__GATEWAY_URL__ || "%VITE_GATEWAY_URL%";
-    window.__AUTH_TOKEN__ = window.__AUTH_TOKEN__ || "%VITE_AUTH_TOKEN%";
-    window.__USER_NAME__ = window.__USER_NAME__ || "%VITE_USER_NAME%";
-    window.__OPENCLAW_TOKEN__ = window.__OPENCLAW_TOKEN__ || "%VITE_OPENCLAW_TOKEN%";
-    window.__OPENCLAW_WS_PORT__ = window.__OPENCLAW_WS_PORT__ || Number("%VITE_OPENCLAW_WS_PORT%") || 0;
-    window.__OPENCLAW_VNC_URL__ = window.__OPENCLAW_VNC_URL__ || "%VITE_OPENCLAW_VNC_URL%";
-    window.__MAPBOX_TOKEN__ = window.__MAPBOX_TOKEN__ || "%VITE_MAPBOX_TOKEN%";
+    window.__GATEWAY_URL__ = window.__GATEWAY_URL__ || "https://jacoapi.jingao.club";
+    window.__AUTH_TOKEN__ = window.__AUTH_TOKEN__ || "41612f911ed681917e3ade20d78026928375cabd59547b48d38910cc04d4586c";
+    window.__USER_NAME__ = window.__USER_NAME__ || "fan";
+    window.__OPENCLAW_TOKEN__ = window.__OPENCLAW_TOKEN__ || "8ebf044379909d036bea1386aab50750541d63a3cda0cd6f8411c2b898187dd9";
+    window.__OPENCLAW_WS_PORT__ = window.__OPENCLAW_WS_PORT__ || Number("18845") || 0;
+    window.__OPENCLAW_VNC_URL__ = window.__OPENCLAW_VNC_URL__ || "http://100.97.254.31:16080/vnc.html";
+    window.__MAPBOX_TOKEN__ = window.__MAPBOX_TOKEN__ || "";
   </script>
 </body>
 </html>
