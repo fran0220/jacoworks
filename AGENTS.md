@@ -10,7 +10,7 @@
 | `gateway/AGENTS.md` | 双网关说明: gateway(:8847) 桌面端管控面 + oc-gateway(:18700) WebChat 完整后端，含路由拆分、环境变量、测试 |
 | `vm-agent/AGENTS.md` | RPC 协议、模型、TS 环境变量、5 层测试、Cron 定时任务、server.ts WS 模式、python 工具 |
 | `desktop/AGENTS.md` | local-first sidecar 架构、bundled runtimes、本地 SQLite 持久化、组件结构、Design Token、React 规范 |
-| `webchat/AGENTS.md` | React SPA 聊天前端 (chat.jingao.club)、SetupGate、TeamPanel、七 Tab 布局、JaMOSS 集成、移动端适配、WS 协议 |
+| `webchat/AGENTS.md` | React SPA 聊天前端 (chat.jingao.club)、4-Tab 指挥台布局 (workbench/tasks/team/observe)、状态分域 hooks、群聊 (agent attribution + @mention + orchestration)、三栏 WorkbenchView、JaMOSS 集成、移动端适配、WS 协议 |
 | `website/AGENTS.md` | 路由、Askama 模板、Rust 规范 |
 | `deploy/AGENTS.md` | SQL schema、测试账号、基础设施、部署策略 |
 | `openclaw/AGENTS.md` | 团队模板体系、JMOS Go 协作网关、模板生命周期 |

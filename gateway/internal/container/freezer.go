@@ -141,7 +141,7 @@ func (f *Freezer) checkIdle() {
 				toFreeze = append(toFreeze, ct.Name)
 			}
 		case "paused":
-			if cs.paused && now.Sub(cs.pausedAt) > f.stopTimeout {
+			if f.stopTimeout > 0 && cs.paused && now.Sub(cs.pausedAt) > f.stopTimeout {
 				toStop = append(toStop, ct.Name)
 			}
 		}

@@ -313,23 +313,27 @@ func (c *Client) EnsureRunning(ctx context.Context, info *store.ContainerInfo) e
 		return healthErr
 	}
 
-	// Sync config after container is running and healthy
-	if changed, err := c.SyncConfig(ctx, info); err != nil {
-		log.Warn().Err(err).Str("name", info.ContainerName).Msg("config sync failed after ensure running")
-	} else if changed {
-		log.Info().Str("name", info.ContainerName).Msg("config synced on ensure running")
-	}
-
-	if changed, err := c.SyncJMOSConfig(info.ContainerName, info.UserID, info.ContainerToken); err != nil {
-		log.Warn().Err(err).Str("name", info.ContainerName).Msg("jmos config sync failed after ensure running")
-	} else if changed {
-		if err := c.RestartJMOS(info.ContainerName); err != nil {
-			log.Warn().Err(err).Str("name", info.ContainerName).Msg("jmos restart failed after config sync")
+	// Sync config in background — don't block the WS connection chain.
+	// Config is already persisted in the VM from last sync; this only
+	// applies incremental changes (model list, JMOS settings).
+	go func() {
+		bgCtx := context.Background()
+		if changed, err := c.SyncConfig(bgCtx, info); err != nil {
+			log.Warn().Err(err).Str("name", info.ContainerName).Msg("config sync failed after ensure running")
+		} else if changed {
+			log.Info().Str("name", info.ContainerName).Msg("config synced on ensure running")
 		}
-	}
 
-	// Ensure JMOS is running (binary is pre-installed in golden image)
-	c.EnsureJMOSRunning(info.ContainerName)
+		if changed, err := c.SyncJMOSConfig(info.ContainerName, info.UserID, info.ContainerToken); err != nil {
+			log.Warn().Err(err).Str("name", info.ContainerName).Msg("jmos config sync failed after ensure running")
+		} else if changed {
+			if err := c.RestartJMOS(info.ContainerName); err != nil {
+				log.Warn().Err(err).Str("name", info.ContainerName).Msg("jmos restart failed after config sync")
+			}
+		}
+
+		c.EnsureJMOSRunning(info.ContainerName)
+	}()
 
 	return nil
 }

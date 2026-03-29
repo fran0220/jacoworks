@@ -31,7 +31,6 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
-	containerpkg "github.com/fran0220/jacoworks/gateway/internal/container"
 	incuspkg "github.com/fran0220/jacoworks/gateway/internal/incus"
 	"github.com/fran0220/jacoworks/gateway/internal/middleware"
 	ocpkg "github.com/fran0220/jacoworks/gateway/internal/openclaw"
@@ -113,6 +112,20 @@ func main() {
 				cfg.Auth.FeishuClientSecret = setting.Value
 			}
 		}
+		// oc-gateway specific overrides: oc_primary_model / oc_primary_provider
+		// take precedence over the shared primary_model / primary_provider keys,
+		// allowing desktop and webchat to use different default models.
+		for _, setting := range dbSettings {
+			if setting.Value == "" {
+				continue
+			}
+			switch setting.Key {
+			case "oc_primary_model":
+				llm.PrimaryModel = setting.Value
+			case "oc_primary_provider":
+				llm.PrimaryProvider = setting.Value
+			}
+		}
 		cfg.UpdateLLM(llm)
 		log.Info().Msg("loaded settings from database")
 	} else {
@@ -138,14 +151,8 @@ func main() {
 	}
 	ocClient := ocpkg.NewClient(incusRT, cfg.OpenClaw.DataRoot, cfg.OpenClaw.HostIP, cfg.OpenClaw.Image, cfg.GetLLM, s)
 
-	ocFreezer := containerpkg.NewFreezerWithPrefix(incusRT, "oc-", 30*time.Minute, 2*time.Hour, 5*time.Minute)
-	ocFreezer.Start()
-	defer ocFreezer.Stop()
-	ocFreezer.SetOnAfterFreeze(func(containerName string) {
-		if err := s.UpdateContainerStatusByName(context.Background(), containerName, "stopped"); err != nil {
-			log.Error().Err(err).Str("container", containerName).Msg("openclaw idle stop: update status failed")
-		}
-	})
+	// Freeze disabled: VMs stay running permanently for instant WS connection.
+	// Previously: freeze after 1h idle → unpause + health poll added 5-30s to every reconnect.
 
 	log.Info().
 		Str("image", cfg.OpenClaw.Image).
@@ -163,7 +170,7 @@ func main() {
 		log.Fatal().Err(err).Msg("load login template")
 	}
 
-	ocDialer := agent.NewOpenClawDialer(s, ocClient, ocFreezer)
+	ocDialer := agent.NewOpenClawDialer(s, ocClient, nil)
 	ocDialer.SetAutoPairEnabled(true)
 	dialers := map[string]agent.UpstreamDialer{
 		store.ContainerTypeOpenClaw: ocDialer,
@@ -187,7 +194,11 @@ func main() {
 		http.Redirect(w, r, "/chat", http.StatusFound)
 	})
 	mux.Handle("GET /login", http.HandlerFunc(loginPageHandler(loginTemplate)))
-	mux.Handle("GET /chat", authMiddleware.AuthenticateWithRedirect("/login", http.HandlerFunc(chatPageHandler(s, cfg, chatTemplate))))
+	// Generate cache-bust token at startup so browser always loads fresh JS/CSS after deploy.
+	cacheBustBytes := make([]byte, 4)
+	_, _ = rand.Read(cacheBustBytes)
+	cacheBust := hex.EncodeToString(cacheBustBytes)
+	mux.Handle("GET /chat", authMiddleware.AuthenticateWithRedirect("/login", http.HandlerFunc(chatPageHandler(s, cfg, chatTemplate, cacheBust))))
 
 	if staticDir := strings.TrimSpace(cfg.Server.StaticDir); staticDir != "" {
 		staticRoot := filepath.Clean(staticDir)
@@ -365,6 +376,7 @@ type chatPageData struct {
 	OpenClawVncURL string
 	PostHogKey     string
 	PostHogHost    string
+	CacheBust      string
 }
 
 func loginPageHandler(tpl *template.Template) http.HandlerFunc {
@@ -377,7 +389,7 @@ func loginPageHandler(tpl *template.Template) http.HandlerFunc {
 	}
 }
 
-func chatPageHandler(s *store.Store, cfg *config.Config, tpl *template.Template) http.HandlerFunc {
+func chatPageHandler(s *store.Store, cfg *config.Config, tpl *template.Template, cacheBust string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -416,6 +428,7 @@ func chatPageHandler(s *store.Store, cfg *config.Config, tpl *template.Template)
 			OpenClawVncURL: openclawVncURL,
 			PostHogKey:     cfg.PostHog.APIKey,
 			PostHogHost:    cfg.PostHog.Endpoint,
+			CacheBust:      cacheBust,
 		}); err != nil {
 			log.Error().Err(err).Str("user_id", user.ID).Msg("render chat page")
 			http.Error(w, "failed to render chat page", http.StatusInternalServerError)

@@ -88,8 +88,23 @@ func (d *OpenClawDialer) UpstreamURL(info *store.ContainerInfo) string {
 	return d.oc.UpstreamAddr(info)
 }
 
-// MapUpstreamMessage passes through all OC frames as "message" events.
+// MapUpstreamMessage passes through OC frames as "message" events,
+// filtering out heartbeat and other non-protocol frames.
 func (d *OpenClawDialer) MapUpstreamMessage(msg []byte) (string, []byte, bool) {
+	// Filter out OpenClaw heartbeat frames (plain text or JSON).
+	if len(msg) < 256 {
+		s := string(msg)
+		if s == "HEARTBEAT_OK" || s == "HEARTBEAT" || s == "PONG" {
+			return "", nil, false
+		}
+	}
+	// Filter JSON heartbeat frames like {"type":"heartbeat",...}
+	var peek struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(msg, &peek) == nil && (peek.Type == "heartbeat" || peek.Type == "ping" || peek.Type == "pong") {
+		return "", nil, false
+	}
 	return "message", msg, true
 }
 
