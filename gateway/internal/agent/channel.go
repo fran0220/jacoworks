@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
+	filespkg "github.com/fran0220/jacoworks/gateway/internal/files"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -51,10 +52,12 @@ type channelKey struct {
 
 // ChannelPool manages persistent upstream channels keyed by (userID, containerType).
 type ChannelPool struct {
-	dialers    map[string]UpstreamDialer
-	store      *store.Store
-	idleTTL    time.Duration
-	bufferSize int
+	dialers            map[string]UpstreamDialer
+	store              *store.Store
+	idleTTL            time.Duration
+	bufferSize         int
+	artifactStore      *filespkg.ArtifactStore
+	artifactStatReader filespkg.StatReader
 
 	mu       sync.RWMutex
 	channels map[channelKey]*UserChannel
@@ -75,6 +78,13 @@ func NewChannelPool(s *store.Store, dialers map[string]UpstreamDialer, idleTTL t
 		bufferSize: bufferSize,
 		channels:   make(map[channelKey]*UserChannel),
 	}
+}
+
+func (p *ChannelPool) ConfigureArtifacts(store *filespkg.ArtifactStore, statReader filespkg.StatReader) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.artifactStore = store
+	p.artifactStatReader = statReader
 }
 
 func (p *ChannelPool) GetOrCreate(ctx context.Context, userID, containerType string) (*UserChannel, *store.ContainerInfo, error) {
@@ -157,6 +167,7 @@ type UserChannel struct {
 	nextSubscriber  uint64
 	idleCloseTimer  *time.Timer
 	upstreamWriteMu sync.Mutex
+	eventEnricher   *filespkg.EventEnricher
 
 	reconnecting atomic.Bool
 	closed       atomic.Bool
@@ -175,6 +186,9 @@ func newUserChannel(pool *ChannelPool, userID, containerType string, dialer Upst
 		subscribers:   make(map[uint64]chan Event),
 		stopCh:        make(chan struct{}),
 		doneCh:        make(chan struct{}),
+	}
+	if pool.artifactStore != nil && pool.artifactStatReader != nil {
+		ch.eventEnricher = filespkg.NewEventEnricher(pool.artifactStore, pool.artifactStatReader)
 	}
 
 	ch.reconnecting.Store(true)
@@ -428,6 +442,11 @@ func (c *UserChannel) readLoop(upstream *websocket.Conn, containerName string) e
 		eventType, data, ok := c.dialer.MapUpstreamMessage(msg)
 		if !ok {
 			continue
+		}
+		if eventType == "message" && c.eventEnricher != nil {
+			enrichCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			data = c.eventEnricher.Enrich(enrichCtx, c.userID, containerName, data)
+			cancel()
 		}
 
 		c.publish(eventType, data)

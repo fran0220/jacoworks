@@ -1,3 +1,4 @@
+import { extractFileArtifact } from "./file-artifacts";
 import type { StreamBlock } from "../types";
 
 export const TOOL_STREAM_THROTTLE_MS = 80;
@@ -50,6 +51,9 @@ export function applyToolEvent(blocks: StreamBlock[], event: ToolStreamEvent): T
 
   block.name = event.toolName || block.name;
   if (event.toolArgs !== undefined) block.args = event.toolArgs;
+
+  const artifact = block.name === "write" ? extractFileArtifact(event.toolOutput) : null;
+  if (artifact) block.artifact = artifact;
 
   if (event.kind === "tool_update") {
     const output = formatOutput(event.toolOutput);

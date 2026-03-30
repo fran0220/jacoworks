@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy search + asset-gateway skills to OpenClaw VMs
+# Deploy search + asset-gateway + word-docx + excel-xlsx skills to OpenClaw VMs
 set -euo pipefail
 
 HOST="root@100.97.254.31"
@@ -16,6 +16,10 @@ ASSET_URL="https://assets.xiaomao.chat"
 
 SEARCH_SCRIPTS="$HOME/.agents/skills/search/_repos/openclaw-search-skills/search-layer/scripts"
 ASSET_SKILL="$HOME/.config/amp/skills/asset-gateway/SKILL.md"
+
+# ClawHub skills (instruction-only, downloaded from clawhub.ai)
+WORD_DOCX_SKILL="/tmp/clawhub-skills/word-docx/SKILL.md"
+EXCEL_XLSX_SKILL="/tmp/clawhub-skills/excel-xlsx/SKILL.md"
 
 for VM in "${VMS[@]}"; do
   echo "━━━ Deploying to $VM ━━━"
@@ -97,8 +101,19 @@ SKILLEOF
   ssh "$HOST" "incus exec $VM -- su - node -c 'mkdir -p ~/.openclaw/skills/asset-gateway'"
   cat "$ASSET_SKILL" | ssh "$HOST" "incus exec $VM -- su - node -c 'cat > ~/.openclaw/skills/asset-gateway/SKILL.md'"
 
+  # 5b. Install word-docx + excel-xlsx skills (instruction-only from ClawHub)
+  echo "  [5b/8] Installing word-docx + excel-xlsx skills..."
+  ssh "$HOST" "incus exec $VM -- su - node -c 'mkdir -p ~/.openclaw/skills/word-docx'"
+  cat "$WORD_DOCX_SKILL" | ssh "$HOST" "incus exec $VM -- su - node -c 'cat > ~/.openclaw/skills/word-docx/SKILL.md'"
+  ssh "$HOST" "incus exec $VM -- su - node -c 'mkdir -p ~/.openclaw/skills/excel-xlsx'"
+  cat "$EXCEL_XLSX_SKILL" | ssh "$HOST" "incus exec $VM -- su - node -c 'cat > ~/.openclaw/skills/excel-xlsx/SKILL.md'"
+
+  # 5c. Install Python deps for Excel skill (openpyxl + pandas)
+  echo "  [5c/8] Installing openpyxl + pandas..."
+  ssh "$HOST" "incus exec $VM -- python3 -m pip install --break-system-packages -q openpyxl pandas" 2>&1 | tail -2
+
   # 6. Add env vars to openclaw.service and restart
-  echo "  [6/6] Injecting env vars & restarting OpenClaw..."
+  echo "  [6/8] Injecting env vars & restarting OpenClaw..."
   ssh "$HOST" "incus exec $VM -- mkdir -p /etc/systemd/system/openclaw.service.d"
   echo "[Service]
 Environment=TAVILY_API_KEY=$TAVILY_KEY

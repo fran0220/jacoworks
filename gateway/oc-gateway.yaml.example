@@ -18,4 +18,11 @@ openclaw:
   base_port: 18800
   data_root: "/srv/jacoworks/openclaw"
 
-llm: {}
+llm:
+  exa_api_key: ""
+  tavily_api_key: ""
+  grok_api_url: ""
+  grok_api_key: ""
+  grok_model: "grok-4.1-fast"
+  asset_gateway_token: ""
+  asset_gateway_url: "https://assets.xiaomao.chat"

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, type MutableRefObject } from "react";
 import type { ConnectionState } from "../lib/openclaw-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "../lib/event-parser";
-import { extractText, streamBlocksToContent, toContentItems } from "../lib/message-extract";
+import { contentToBlocks, extractText, streamBlocksToContent, toContentItems } from "../lib/message-extract";
+import { extractFileArtifact } from "../lib/file-artifacts";
 import { generateTitle } from "../lib/sessions";
 import { posthog } from "../lib/posthog";
 import { WSClient, type WSFrame } from "../lib/ws-client";
-import type { ChatMessage, StreamBlock } from "../types";
+import type { ChatMessage, FileArtifact, StreamBlock } from "../types";
 import type { UseWorkspaceResult } from "./useWorkspace";
 
 interface ConversationState {
@@ -74,7 +75,27 @@ function asContentSource(message: unknown): unknown {
   return message;
 }
 
-function extractFinalMessageMeta(message: unknown): Pick<ChatMessage, "sender" | "type" | "orchestration"> {
+function mergeArtifacts(...groups: Array<FileArtifact[] | undefined>): FileArtifact[] | undefined {
+  const merged: FileArtifact[] = [];
+  for (const group of groups) {
+    if (!group) continue;
+    for (const artifact of group) {
+      if (merged.some((item) => item.id === artifact.id)) continue;
+      merged.push(artifact);
+    }
+  }
+  return merged.length > 0 ? merged : undefined;
+}
+
+function collectArtifacts(blocks: StreamBlock[]): FileArtifact[] | undefined {
+  const artifacts = blocks
+    .filter((block): block is Extract<StreamBlock, { type: "tool" }> => block.type === "tool")
+    .map((block) => block.artifact || extractFileArtifact(block.output))
+    .filter((artifact): artifact is FileArtifact => Boolean(artifact));
+  return mergeArtifacts(artifacts);
+}
+
+function extractFinalMessageMeta(message: unknown): Pick<ChatMessage, "sender" | "type" | "orchestration" | "artifacts"> {
   if (!message || typeof message !== "object") return {};
 
   const rec = message as Record<string, unknown>;
@@ -89,11 +110,18 @@ function extractFinalMessageMeta(message: unknown): Pick<ChatMessage, "sender" |
   const senderRole = typeof senderRecord?.role === "string" ? senderRecord.role : "";
   const orchestrationAction = typeof orchestrationRecord?.action === "string" ? orchestrationRecord.action : "";
   const orchestrationDetail = typeof orchestrationRecord?.detail === "string" ? orchestrationRecord.detail : "";
+  const topLevelArtifacts = Array.isArray(rec.artifacts)
+    ? rec.artifacts
+        .map((artifact) => extractFileArtifact(artifact))
+        .filter((artifact): artifact is FileArtifact => Boolean(artifact))
+    : undefined;
+  const contentArtifacts = collectArtifacts(contentToBlocks(asContentSource(message)));
 
   return {
     sender: senderRecord ? { agentId: senderAgentId, agentName: senderAgentName, role: senderRole } : undefined,
     type: type === "orchestration" || type === "text" ? type : undefined,
     orchestration: orchestrationRecord ? { action: orchestrationAction, detail: orchestrationDetail } : undefined,
+    artifacts: mergeArtifacts(topLevelArtifacts, contentArtifacts),
   };
 }
 
@@ -174,16 +202,19 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
 
       const finalContent = toContentItems(asContentSource(finalMessage));
       const content = finalContent.length > 0 ? finalContent : streamBlocksToContent(streamedBlocks);
-      const hasAnyOutput = content.length > 0 || streamedBlocks.length > 0 || fallbackText.trim().length > 0;
+      const finalBlocks = finalContent.length > 0 ? contentToBlocks(finalContent) : streamedBlocks;
+      const hasAnyOutput = content.length > 0 || finalBlocks.length > 0 || fallbackText.trim().length > 0;
 
       if (hasAnyOutput) {
         const finalMeta = extractFinalMessageMeta(finalMessage);
+        const derivedArtifacts = collectArtifacts(finalBlocks);
         const assistantMsg: ChatMessage = {
           role: "assistant",
           content: content.length > 0 ? content : fallbackText,
-          blocks: streamedBlocks.length > 0 ? streamedBlocks : undefined,
+          blocks: finalBlocks.length > 0 ? finalBlocks : undefined,
           timestamp: Date.now(),
           ...finalMeta,
+          artifacts: mergeArtifacts(finalMeta.artifacts, derivedArtifacts),
         };
         const updated = [...messagesRef.current, assistantMsg];
         const assistantText = extractText(assistantMsg.content) || fallbackText;

@@ -2,12 +2,13 @@ import { Activity, Menu, SlidersHorizontal } from "lucide-react";
 import type { AgentSummary } from "../lib/feed";
 import type { DashboardStats } from "../lib/jamoss";
 import type { TranslatedActivity } from "../lib/feed-translate";
-import type { ChatMessage, StreamBlock } from "../types";
+import type { ChatMessage, FileArtifact, StreamBlock } from "../types";
 import ChatView from "./ChatView";
 import Composer from "./Composer";
 import OpsSidebar from "./OpsSidebar";
 import TeamPresenceBar from "./TeamPresenceBar";
 import ThreadListPanel from "./ThreadListPanel";
+import WebPreviewPane from "./WebPreviewPane";
 
 type View = "workbench" | "tasks" | "team" | "observe";
 type OpsLens = "overview" | "timeline" | "board";
@@ -18,8 +19,12 @@ interface UIShellDomain {
   sidebarOpen: boolean;
   opsPanelOpen: boolean;
   opsLens: OpsLens;
+  rightPane: "ops" | "preview";
+  previewArtifact: FileArtifact | null;
   setView?: (view: View) => void;
   setOpsLens: (lens: OpsLens) => void;
+  openPreview: (artifact: FileArtifact) => void;
+  closePreview: () => void;
   toggleSidebar?: () => void;
   toggleOpsPanel?: () => void;
   toggleMobileDrawer?: () => void;
@@ -81,6 +86,7 @@ export default function WorkbenchView({
   ops: OperationsDomain;
 }) {
   const openTasksView = () => ui.setView?.("tasks");
+  const showPreviewModal = ui.compact && ui.rightPane === "preview" && Boolean(ui.previewArtifact);
   const closeSidebar = () => {
     if (ui.compact && ui.sidebarOpen) {
       ui.toggleSidebar?.();
@@ -95,7 +101,8 @@ export default function WorkbenchView({
   return (
     <div className="workbench-shell">
       {ui.compact && ui.sidebarOpen && <div className="workbench-drawer-backdrop" onClick={closeSidebar} />}
-      {ui.compact && ui.opsPanelOpen && <div className="workbench-drawer-backdrop" onClick={closeOpsPanel} />}
+      {ui.compact && ui.opsPanelOpen && ui.rightPane === "ops" && <div className="workbench-drawer-backdrop" onClick={closeOpsPanel} />}
+      {showPreviewModal && <div className="preview-modal-overlay" onClick={ui.closePreview} />}
 
       <div className="workbench">
         <ThreadListPanel
@@ -138,7 +145,17 @@ export default function WorkbenchView({
                 <span>{getConnLabel(conversation.connState)}</span>
               </div>
               {ui.compact && (
-                <button className="workbench-toolbar-btn" onClick={() => ui.toggleOpsPanel?.()} title="打开运营侧栏">
+                <button
+                  className="workbench-toolbar-btn"
+                  onClick={() => {
+                    if (ui.rightPane === "preview") {
+                      ui.closePreview();
+                      return;
+                    }
+                    ui.toggleOpsPanel?.();
+                  }}
+                  title={ui.rightPane === "preview" ? "关闭预览" : "打开运营侧栏"}
+                >
                   <SlidersHorizontal size={16} />
                 </button>
               )}
@@ -153,6 +170,7 @@ export default function WorkbenchView({
             error={conversation.error}
             activeWorkspaceKey={workspace.activeWorkspaceKey}
             agentSummaries={ops.agentSummaries}
+            onPreview={ui.openPreview}
           />
           <Composer
             disabled={conversation.connState !== "connected"}
@@ -163,18 +181,47 @@ export default function WorkbenchView({
           />
         </section>
 
-        <OpsSidebar
-          open={!ui.compact || ui.opsPanelOpen}
-          lens={ui.opsLens}
-          onLensChange={ui.setOpsLens}
-          ops={ops}
-          onAgentClick={ops.selectAgent}
-          onTaskClick={ops.selectTask}
-          onOpenTasks={openTasksView}
-          showClose={ui.compact}
-          onClose={closeOpsPanel}
-        />
+        {!ui.compact ? (
+          <div className={`workbench-side-stack workbench-side-stack--${ui.rightPane}`}>
+            <div className={`workbench-side-panel workbench-side-panel--ops${ui.rightPane === "ops" ? " is-active" : ""}`}>
+              <OpsSidebar
+                open
+                lens={ui.opsLens}
+                onLensChange={ui.setOpsLens}
+                ops={ops}
+                onAgentClick={ops.selectAgent}
+                onTaskClick={ops.selectTask}
+                onOpenTasks={openTasksView}
+              />
+            </div>
+            <div className={`workbench-side-panel workbench-side-panel--preview${ui.rightPane === "preview" ? " is-active" : ""}`}>
+              <aside className="workbench-ops web-preview-shell open">
+                <WebPreviewPane artifact={ui.previewArtifact} onClose={ui.closePreview} />
+              </aside>
+            </div>
+          </div>
+        ) : (
+          <OpsSidebar
+            open={ui.opsPanelOpen && ui.rightPane === "ops"}
+            lens={ui.opsLens}
+            onLensChange={ui.setOpsLens}
+            ops={ops}
+            onAgentClick={ops.selectAgent}
+            onTaskClick={ops.selectTask}
+            onOpenTasks={openTasksView}
+            showClose={ui.compact}
+            onClose={closeOpsPanel}
+          />
+        )}
       </div>
+
+      {showPreviewModal && (
+        <div className="preview-modal">
+          <div className="workbench-ops web-preview-shell web-preview-shell--modal open">
+            <WebPreviewPane artifact={ui.previewArtifact} onClose={ui.closePreview} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

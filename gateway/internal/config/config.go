@@ -11,16 +11,16 @@ import (
 )
 
 type Config struct {
-	llmMu     sync.RWMutex    `yaml:"-"`
-	Server    ServerConfig    `yaml:"server"`
-	Auth      AuthConfig      `yaml:"auth"`
-	OpenClaw  OpenClawConfig  `yaml:"openclaw"`
-	LLM       LLMConfig       `yaml:"llm"`
-	Database  DatabaseConfig  `yaml:"database"`
-	GitHub    GitHubConfig    `yaml:"github"`
-	ChatAgent ChatAgentConfig `yaml:"chat_agent"`
-	PostHog       PostHogConfig   `yaml:"posthog"`
-	OcGatewayURL  string          `yaml:"oc_gateway_url"`
+	llmMu        sync.RWMutex    `yaml:"-"`
+	Server       ServerConfig    `yaml:"server"`
+	Auth         AuthConfig      `yaml:"auth"`
+	OpenClaw     OpenClawConfig  `yaml:"openclaw"`
+	LLM          LLMConfig       `yaml:"llm"`
+	Database     DatabaseConfig  `yaml:"database"`
+	GitHub       GitHubConfig    `yaml:"github"`
+	ChatAgent    ChatAgentConfig `yaml:"chat_agent"`
+	PostHog      PostHogConfig   `yaml:"posthog"`
+	OcGatewayURL string          `yaml:"oc_gateway_url"`
 }
 
 type OpenClawConfig struct {
@@ -47,19 +47,24 @@ type PostHogConfig struct {
 }
 
 type LLMConfig struct {
-	ProxyURL         string `yaml:"proxy_url"`
-	ProxyKey         string `yaml:"proxy_key"`
-	ExaAPIKey        string `yaml:"exa_api_key"`
-	TavilyKey        string `yaml:"tavily_api_key"`
-	OpenAIAPIKey     string `yaml:"openai_api_key"`
-	EmbeddingBaseURL string `yaml:"embedding_base_url"`
-	EmbeddingAPIKey  string `yaml:"embedding_api_key"`
-	FalAPIKey        string `yaml:"fal_api_key"`
-	MineruToken      string `yaml:"mineru_token"`
-	JimengAPIURL     string `yaml:"jimeng_api_url"`
-	JimengAPIKey     string `yaml:"jimeng_api_key"`
-	PrimaryModel     string `yaml:"primary_model"`
-	PrimaryProvider  string `yaml:"primary_provider"`
+	ProxyURL          string `yaml:"proxy_url"`
+	ProxyKey          string `yaml:"proxy_key"`
+	ExaAPIKey         string `yaml:"exa_api_key"`
+	TavilyKey         string `yaml:"tavily_api_key"`
+	GrokAPIURL        string `yaml:"grok_api_url"`
+	GrokAPIKey        string `yaml:"grok_api_key"`
+	GrokModel         string `yaml:"grok_model"`
+	OpenAIAPIKey      string `yaml:"openai_api_key"`
+	EmbeddingBaseURL  string `yaml:"embedding_base_url"`
+	EmbeddingAPIKey   string `yaml:"embedding_api_key"`
+	FalAPIKey         string `yaml:"fal_api_key"`
+	MineruToken       string `yaml:"mineru_token"`
+	JimengAPIURL      string `yaml:"jimeng_api_url"`
+	JimengAPIKey      string `yaml:"jimeng_api_key"`
+	AssetGatewayToken string `yaml:"asset_gateway_token"`
+	AssetGatewayURL   string `yaml:"asset_gateway_url"`
+	PrimaryModel      string `yaml:"primary_model"`
+	PrimaryProvider   string `yaml:"primary_provider"`
 }
 
 type ServerConfig struct {
@@ -201,6 +206,15 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("GATEWAY_LLM_TAVILY_API_KEY"); v != "" {
 		cfg.LLM.TavilyKey = v
 	}
+	if v := os.Getenv("GATEWAY_LLM_GROK_API_URL"); v != "" {
+		cfg.LLM.GrokAPIURL = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_GROK_API_KEY"); v != "" {
+		cfg.LLM.GrokAPIKey = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_GROK_MODEL"); v != "" {
+		cfg.LLM.GrokModel = v
+	}
 	if v := os.Getenv("GATEWAY_LLM_OPENAI_API_KEY"); v != "" {
 		cfg.LLM.OpenAIAPIKey = v
 	}
@@ -215,6 +229,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_LLM_JIMENG_API_KEY"); v != "" {
 		cfg.LLM.JimengAPIKey = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_ASSET_GATEWAY_TOKEN"); v != "" {
+		cfg.LLM.AssetGatewayToken = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_ASSET_GATEWAY_URL"); v != "" {
+		cfg.LLM.AssetGatewayURL = v
 	}
 	if v := os.Getenv("GATEWAY_LLM_PRIMARY_MODEL"); v != "" {
 		cfg.LLM.PrimaryModel = v

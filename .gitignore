@@ -24,6 +24,7 @@ gateway/data/*
 !gateway/data/chat.html
 !gateway/data/login.html
 website/website.toml
+openclaw/credentials/
 
 # === Go ===
 gateway/jacoworks-gateway

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - JAcoworks</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --card: #131a31;
+      --text: #edf2ff;
+      --muted: #9fb0d0;
+      --line: #273256;
+      --primary: #2f7dff;
+      --primary-hover: #2266d8;
+      --error: #ff6b6b;
+      --success: #51cf66;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      background: radial-gradient(1000px 420px at 20% -20%, #20315f 0%, transparent 60%), var(--bg);
+      color: var(--text);
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 12px 50px rgba(3, 8, 24, 0.45);
+    }
+    h1 {
+      margin: 0 0 4px;
+      text-align: center;
+      font-size: 22px;
+    }
+    .subtitle {
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      margin: 0 0 18px;
+    }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+      background: #0f1529;
+      border-radius: 9px;
+      padding: 3px;
+    }
+    .tab {
+      flex: 1;
+      padding: 8px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      transition: all 0.15s;
+    }
+    .tab.active {
+      background: var(--line);
+      color: var(--text);
+    }
+    .tab:hover:not(.active) {
+      color: var(--text);
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 11px 12px;
+      margin-bottom: 14px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: #0f1529;
+      color: var(--text);
+      outline: none;
+      font-size: 14px;
+    }
+    input:focus {
+      border-color: var(--primary);
+    }
+    .btn-primary {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 9px;
+      background: var(--primary);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 16px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--line);
+    }
+    .btn-feishu {
+      width: 100%;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: transparent;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+    .btn-feishu:hover {
+      background: rgba(47, 125, 255, 0.08);
+      border-color: var(--primary);
+    }
+    .error {
+      color: var(--error);
+      font-size: 13px;
+      margin-bottom: 12px;
+      min-height: 18px;
+    }
+    .form-section { display: none; }
+    .form-section.active { display: block; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <h1>JAcoworks AI</h1>
+    <p class="subtitle">企业 AI 协同办公平台</p>
+    <div class="error" id="error"></div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="login" type="button">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+        登录
+      </button>
+      <button class="tab" data-tab="activate" type="button">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        激活码
+      </button>
+    </div>
+
+    <div class="form-section active" id="loginSection">
+      <form id="loginForm">
+        <label>用户名 / 邮箱</label>
+        <input name="username" required autofocus placeholder="用户名">
+        <label>密码</label>
+        <input name="password" type="password" required placeholder="密码">
+        <button type="submit" class="btn-primary">登录</button>
+      </form>
+    </div>
+
+    <div class="form-section" id="activateSection">
+      <form id="activateForm">
+        <label>激活码</label>
+        <input name="code" required placeholder="激活码">
+        <label>用户名</label>
+        <input name="username" required placeholder="用户名" autocomplete="username">
+        <label>设置密码</label>
+        <input name="password" type="password" required placeholder="设置密码" autocomplete="new-password">
+        <button type="submit" class="btn-primary">激活并登录</button>
+      </form>
+    </div>
+
+    <div class="divider"><span>或</span></div>
+
+    <button class="btn-feishu" id="feishuBtn" type="button">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M3 3l8.5 5.5L7 18l14-9.5L3 3z" fill="currentColor" opacity="0.7"/><path d="M7 18l4.5-9.5L21 8.5 7 18z" fill="currentColor"/></svg>
+      飞书 SSO 登录
+    </button>
+  </div>
+
+  <script>
+    const errorEl = document.getElementById('error');
+    const tabs = document.querySelectorAll('.tab');
+    const sections = document.querySelectorAll('.form-section');
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.tab;
+        tabs.forEach(t => t.classList.toggle('active', t === tab));
+        sections.forEach(s => s.classList.toggle('active', s.id === target + 'Section'));
+        errorEl.textContent = '';
+      });
+    });
+
+    function setToken(token) {
+      const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+      document.cookie = `auth_token=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax${secure}`;
+      window.location.href = '/chat';
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+      const fd = new FormData(e.target);
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: fd.get('username'), password: fd.get('password') }),
+        });
+        const data = await res.json();
+        if (!res.ok) { errorEl.textContent = data.error || '登录失败'; return; }
+        setToken(data.token);
+      } catch (_) { errorEl.textContent = '网络错误'; }
+    });
+
+    document.getElementById('activateForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+      const fd = new FormData(e.target);
+      try {
+        const res = await fetch('/api/auth/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: fd.get('code'), username: fd.get('username'), password: fd.get('password') }),
+        });
+        const data = await res.json();
+        if (!res.ok) { errorEl.textContent = data.error || '激活失败'; return; }
+        setToken(data.token);
+      } catch (_) { errorEl.textContent = '网络错误'; }
+    });
+
+    document.getElementById('feishuBtn').addEventListener('click', () => {
+      window.location.href = '/api/auth/feishu?redirect=' + encodeURIComponent(window.location.origin + '/chat');
+    });
+  </script>
+</body>
+</html>

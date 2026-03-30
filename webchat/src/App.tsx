@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import type { View } from "./types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { FileArtifact, View } from "./types";
 import { getOpenClawToken } from "./lib/config";
 import NavRail from "./components/NavRail";
 import SetupGate from "./components/SetupGate";
@@ -14,6 +14,8 @@ import useWorkspace from "./hooks/useWorkspace";
 
 export default function App() {
   const [ocToken, setOcToken] = useState<string | null>(() => getOpenClawToken() || null);
+  const [rightPane, setRightPane] = useState<"ops" | "preview">("ops");
+  const [previewArtifact, setPreviewArtifact] = useState<FileArtifact | null>(null);
   const ui = useUIShell();
   const workspace = useWorkspace();
   const conversation = useConversation(ocToken, workspace);
@@ -33,6 +35,33 @@ export default function App() {
     setOcToken(token);
   }, []);
 
+  const openPreview = useCallback((artifact: FileArtifact) => {
+    setPreviewArtifact(artifact);
+    setRightPane("preview");
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setPreviewArtifact(null);
+    setRightPane("ops");
+  }, []);
+
+  useEffect(() => {
+    if (ui.view !== "workbench" && previewArtifact) {
+      closePreview();
+    }
+  }, [closePreview, previewArtifact, ui.view]);
+
+  const workbenchUI = useMemo(
+    () => ({
+      ...ui,
+      rightPane,
+      previewArtifact,
+      openPreview,
+      closePreview,
+    }),
+    [closePreview, openPreview, previewArtifact, rightPane, ui],
+  );
+
   if (!ocToken || conversation.connState !== "connected") {
     return <SetupGate onReady={handleGateReady} wsState={ocToken ? conversation.connState : undefined} />;
   }
@@ -44,6 +73,7 @@ export default function App() {
         compact={ui.compact}
         connState={conversation.connState}
         onViewChange={(nextView: View) => {
+          closePreview();
           ui.setView(nextView);
           ui.closeSidebar();
         }}
@@ -52,13 +82,14 @@ export default function App() {
       />
       <div className="app-main">
         {ui.view === "workbench" && (
-          <WorkbenchView ui={ui} workspace={workbenchWorkspace} conversation={conversation} ops={operations} />
+          <WorkbenchView ui={workbenchUI} workspace={workbenchWorkspace} conversation={conversation} ops={operations} />
         )}
         {ui.view === "tasks" && <TasksView />}
         {ui.view === "team" && (
           <TeamStudioView
             activeSessionKey={workspace.activeWorkspaceKey}
             onSwitchTeam={(sessionKey: string) => {
+              closePreview();
               workspace.switchWorkspace(sessionKey);
               ui.setView("workbench");
             }}

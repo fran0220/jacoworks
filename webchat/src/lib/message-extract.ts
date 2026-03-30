@@ -1,3 +1,4 @@
+import { extractFileArtifact } from "./file-artifacts";
 import type { MessageContentItem, StreamBlock } from "../types";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -6,6 +7,16 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function formatToolOutput(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") return value || undefined;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 export function toContentItems(value: unknown): MessageContentItem[] {
@@ -46,8 +57,14 @@ export function toContentItems(value: unknown): MessageContentItem[] {
 
     if (type === "toolresult" || type === "tool_result") {
       const name = asString(entry.name) || undefined;
-      const text = asString(entry.text);
-      items.push({ type: "toolresult", name, text: text || undefined, output: entry.output });
+      const text = asString(entry.text) || formatToolOutput(entry.output);
+      items.push({
+        type: "toolresult",
+        name,
+        text: text || undefined,
+        output: entry.output,
+        fileArtifact: extractFileArtifact(entry.fileArtifact ?? entry.file_artifact ?? entry.output ?? entry.artifact) || undefined,
+      });
     }
   }
 
@@ -112,6 +129,7 @@ export function contentToBlocks(value: unknown): StreamBlock[] {
       if (last?.type === "tool" && last.status === "running") {
         last.status = "completed";
         if (item.text) last.output = item.text;
+        if (item.fileArtifact) last.artifact = item.fileArtifact;
       } else {
         blocks.push({
           type: "tool",
@@ -119,6 +137,7 @@ export function contentToBlocks(value: unknown): StreamBlock[] {
           name: item.name || "tool",
           status: "completed",
           output: item.text,
+          artifact: item.fileArtifact,
         });
       }
     }
@@ -140,8 +159,13 @@ export function streamBlocksToContent(blocks: StreamBlock[]): MessageContentItem
     }
     if (block.type === "tool") {
       items.push({ type: "toolcall", name: block.name, arguments: block.args });
-      if (block.output) {
-        items.push({ type: "toolresult", name: block.name, text: block.output });
+      if (block.output || block.artifact) {
+        items.push({
+          type: "toolresult",
+          name: block.name,
+          text: block.output,
+          fileArtifact: block.artifact,
+        });
       }
     }
   }

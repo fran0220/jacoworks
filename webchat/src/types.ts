@@ -9,11 +9,51 @@ export type View = "workbench" | "tasks" | "team" | "observe";
 
 export type OpsLens = "overview" | "timeline" | "board";
 
+export type FileCategory =
+  | "image"
+  | "pdf"
+  | "docx"
+  | "xlsx"
+  | "code"
+  | "text"
+  | "csv"
+  | "audio"
+  | "video"
+  | "archive"
+  | "markdown"
+  | "design"
+  | "binary";
+
+export interface FileArtifact {
+  id: string;
+  name: string;
+  pathLabel?: string;
+  ext?: string;
+  mime?: string;
+  size?: number | null;
+  category?: FileCategory;
+  contentUrl: string;
+  downloadUrl: string;
+  createdAt?: number;
+  artifactId?: string;
+  filename?: string;
+  path?: string;
+  mimeType?: string;
+  containerName?: string;
+  thumbnailUrl?: string;
+}
+
 export type MessageContentItem =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
   | { type: "toolcall" | "tool_call"; name: string; arguments?: unknown }
-  | { type: "toolresult" | "tool_result"; name?: string; text?: string; output?: unknown };
+  | {
+      type: "toolresult" | "tool_result";
+      name?: string;
+      text?: string;
+      output?: unknown;
+      fileArtifact?: FileArtifact;
+    };
 
 export interface ChatSender {
   agentId: string;
@@ -32,6 +72,7 @@ export interface ChatMessage {
   type?: "text" | "orchestration";
   sender?: ChatSender;
   orchestration?: ChatOrchestration;
+  artifacts?: FileArtifact[];
   blocks?: StreamBlock[];
   timestamp?: number;
 }
@@ -56,5 +97,6 @@ export type StreamBlock =
       status: "running" | "completed" | "error";
       args?: unknown;
       output?: string;
+      artifact?: FileArtifact;
     }
   | { type: "status"; text: string };

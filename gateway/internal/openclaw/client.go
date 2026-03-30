@@ -5,10 +5,15 @@ package openclaw
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,6 +61,26 @@ func (c *Client) HostIP() string {
 
 const defaultGatewayPort = 18789
 
+const (
+	skillsHashPath        = "/home/node/.openclaw/skills/.bundle-hash"
+	searchCredentialsPath = "/home/node/.openclaw/credentials/search.json"
+	assetAuthPath         = "/home/node/.config/asset-gateway/auth.json"
+	skillEnvDropInPath    = "/etc/systemd/system/openclaw.service.d/skills.conf"
+)
+
+type skillBundleFile struct {
+	RelPath string
+	Data    []byte
+}
+
+type skillBundle struct {
+	Files             []skillBundleFile
+	SearchCredentials []byte
+	AssetGatewayAuth  []byte
+	SystemdDropIn     []byte
+	Hash              string
+}
+
 // resolveGatewayPort returns the gateway port, falling back to the default.
 func (c *Client) resolveGatewayPort(hostPort int) int {
 	if hostPort > 0 {
@@ -80,10 +105,15 @@ func (c *Client) ContainerEnvVars() map[string]string {
 	set("OPENAI_API_KEY", llm.OpenAIAPIKey)
 	set("EXA_API_KEY", llm.ExaAPIKey)
 	set("TAVILY_API_KEY", llm.TavilyKey)
+	set("GROK_API_URL", llm.GrokAPIURL)
+	set("GROK_API_KEY", llm.GrokAPIKey)
+	set("GROK_MODEL", llm.GrokModel)
 	set("FAL_API_KEY", llm.FalAPIKey)
 	set("MINERU_TOKEN", llm.MineruToken)
 	set("JIMENG_API_URL", llm.JimengAPIURL)
 	set("JIMENG_API_KEY", llm.JimengAPIKey)
+	set("ASSET_GATEWAY_TOKEN", llm.AssetGatewayToken)
+	set("ASSET_GATEWAY_URL", llm.AssetGatewayURL)
 	set("EMBEDDING_BASE_URL", llm.EmbeddingBaseURL)
 	set("EMBEDDING_API_KEY", llm.EmbeddingAPIKey)
 
@@ -201,14 +231,11 @@ func (c *Client) WriteConfig(containerName, userID, token string, hostPort int) 
 		return fmt.Errorf("copy config: %w", err)
 	}
 
-	// 2. Write team-builder SKILL.md
-	if skillData, err := c.loadTeamBuilderSkill(); err == nil {
-		skillPath := "/home/node/.openclaw/skills/team-builder/SKILL.md"
-		if err := c.rt.WriteFile(ctx, containerName, skillPath, skillData); err != nil {
-			log.Warn().Err(err).Msg("openclaw: write team-builder skill failed")
-		}
-	} else {
-		log.Warn().Err(err).Msg("openclaw: load team-builder skill failed")
+	// 2. Deploy repo-managed skills, credentials, and env drop-ins.
+	if hash, err := c.DeploySkills(ctx, containerName); err != nil {
+		log.Warn().Err(err).Str("container", containerName).Msg("openclaw: deploy skills failed")
+	} else if hash != "" {
+		log.Info().Str("container", containerName).Str("hash", hash[:12]).Msg("openclaw: skills deployed")
 	}
 
 	// 3. Deploy profile files (prompts + skills for each agent profile)
@@ -324,6 +351,10 @@ func (c *Client) EnsureRunning(ctx context.Context, info *store.ContainerInfo) e
 			log.Info().Str("name", info.ContainerName).Msg("config synced on ensure running")
 		}
 
+		if err := c.DeploySkillsIfChanged(bgCtx, info); err != nil {
+			log.Warn().Err(err).Str("name", info.ContainerName).Msg("skills sync failed after ensure running")
+		}
+
 		if changed, err := c.SyncJMOSConfig(info.ContainerName, info.UserID, info.ContainerToken); err != nil {
 			log.Warn().Err(err).Str("name", info.ContainerName).Msg("jmos config sync failed after ensure running")
 		} else if changed {
@@ -357,6 +388,322 @@ func (c *Client) resolveHost(containerIP string) string {
 func sha256hex(data []byte) string {
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)
+}
+
+// DeploySkills copies repo-managed base skills and related auth files into a VM.
+// It only writes files; callers that sync a running VM should restart OpenClaw separately.
+func (c *Client) DeploySkills(ctx context.Context, containerName string) (string, error) {
+	bundle, err := c.loadSkillsBundle()
+	if err != nil {
+		return "", err
+	}
+	if err := c.writeSkillBundle(ctx, containerName, bundle); err != nil {
+		return "", err
+	}
+	return bundle.Hash, nil
+}
+
+// DeploySkillsIfChanged syncs the repo-managed skill bundle into a running VM when the
+// persisted bundle hash differs, then restarts OpenClaw so the runtime reloads the bundle.
+func (c *Client) DeploySkillsIfChanged(ctx context.Context, info *store.ContainerInfo) error {
+	bundle, err := c.loadSkillsBundle()
+	if err != nil {
+		return err
+	}
+	currentHash, err := c.rt.ReadFile(ctx, info.ContainerName, skillsHashPath)
+	if err == nil && strings.TrimSpace(currentHash) == bundle.Hash {
+		return nil
+	}
+	if err := c.writeSkillBundle(ctx, info.ContainerName, bundle); err != nil {
+		return err
+	}
+	if _, err := c.rt.Exec(ctx, info.ContainerName, "systemctl", "daemon-reload"); err != nil {
+		return fmt.Errorf("reload systemd after skills sync: %w", err)
+	}
+	if _, err := c.rt.Exec(ctx, info.ContainerName, "systemctl", "restart", "openclaw"); err != nil {
+		return fmt.Errorf("restart openclaw after skills sync: %w", err)
+	}
+	if err := c.waitForContainerHealthURL(info.ContainerName, "http://127.0.0.1:18789/healthz", 45*time.Second); err != nil {
+		return err
+	}
+	log.Info().Str("container", info.ContainerName).Str("hash", bundle.Hash[:12]).Msg("openclaw skills synced")
+	return nil
+}
+
+// SyncAllVMs pushes the current skill bundle to every running OpenClaw VM.
+func (c *Client) SyncAllVMs(ctx context.Context) error {
+	if c.store == nil {
+		return nil
+	}
+	containers, err := c.store.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
+	if err != nil {
+		return fmt.Errorf("list openclaw VMs: %w", err)
+	}
+	var failed []string
+	for _, info := range containers {
+		if info == nil || strings.TrimSpace(info.ContainerName) == "" {
+			continue
+		}
+		status, err := c.rt.Status(ctx, info.ContainerName)
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s(status: %v)", info.ContainerName, err))
+			continue
+		}
+		if status.Status != "running" {
+			continue
+		}
+		if err := c.DeploySkillsIfChanged(ctx, info); err != nil {
+			failed = append(failed, fmt.Sprintf("%s(sync: %v)", info.ContainerName, err))
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("sync openclaw skills: %s", strings.Join(failed, "; "))
+	}
+	return nil
+}
+
+func (c *Client) writeSkillBundle(ctx context.Context, containerName string, bundle *skillBundle) error {
+	dirs := []string{
+		"/home/node/.openclaw/skills",
+		"/home/node/.openclaw/credentials",
+		"/etc/systemd/system/openclaw.service.d",
+	}
+	if len(bundle.AssetGatewayAuth) > 0 {
+		dirs = append(dirs, "/home/node/.config/asset-gateway")
+	}
+	seenDirs := map[string]struct{}{}
+	for _, file := range bundle.Files {
+		dirs = append(dirs, path.Dir(path.Join("/home/node/.openclaw/skills", file.RelPath)))
+	}
+	filtered := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		dir = path.Clean(dir)
+		if _, ok := seenDirs[dir]; ok {
+			continue
+		}
+		seenDirs[dir] = struct{}{}
+		filtered = append(filtered, dir)
+	}
+	sort.Strings(filtered)
+	args := append([]string{"mkdir", "-p"}, filtered...)
+	if _, err := c.rt.Exec(ctx, containerName, args...); err != nil {
+		return fmt.Errorf("prepare skill directories: %w", err)
+	}
+
+	for _, file := range bundle.Files {
+		target := path.Join("/home/node/.openclaw/skills", file.RelPath)
+		if err := c.rt.WriteFile(ctx, containerName, target, file.Data); err != nil {
+			return fmt.Errorf("write skill %s: %w", file.RelPath, err)
+		}
+	}
+	if len(bundle.SearchCredentials) > 0 {
+		if err := c.rt.WriteFile(ctx, containerName, searchCredentialsPath, bundle.SearchCredentials); err != nil {
+			return fmt.Errorf("write search credentials: %w", err)
+		}
+	}
+	if len(bundle.AssetGatewayAuth) > 0 {
+		if err := c.rt.WriteFile(ctx, containerName, assetAuthPath, bundle.AssetGatewayAuth); err != nil {
+			return fmt.Errorf("write asset gateway auth: %w", err)
+		}
+	}
+	if len(bundle.SystemdDropIn) > 0 {
+		if err := c.rt.WriteFile(ctx, containerName, skillEnvDropInPath, bundle.SystemdDropIn); err != nil {
+			return fmt.Errorf("write skills env drop-in: %w", err)
+		}
+	}
+	if err := c.rt.WriteFile(ctx, containerName, skillsHashPath, []byte(bundle.Hash+"\n")); err != nil {
+		return fmt.Errorf("write skills hash marker: %w", err)
+	}
+	if _, err := c.rt.Exec(ctx, containerName, "sh", "-lc", "chown -R 1000:1000 /home/node/.openclaw && if [ -d /home/node/.config ]; then chown -R 1000:1000 /home/node/.config; fi"); err != nil {
+		return fmt.Errorf("fix skills ownership: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) loadSkillsBundle() (*skillBundle, error) {
+	skillsDir, err := c.resolveSkillsDir()
+	if err != nil {
+		return nil, err
+	}
+	bundle := &skillBundle{}
+	err = filepath.WalkDir(skillsDir, func(filePath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".") {
+			if d.IsDir() && filePath != skillsDir {
+				return filepath.SkipDir
+			}
+			if !d.IsDir() {
+				return nil
+			}
+		}
+		if d.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(skillsDir, filePath)
+		if err != nil {
+			return err
+		}
+		bundle.Files = append(bundle.Files, skillBundleFile{
+			RelPath: filepath.ToSlash(relPath),
+			Data:    data,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load skills bundle: %w", err)
+	}
+	sort.Slice(bundle.Files, func(i, j int) bool {
+		return bundle.Files[i].RelPath < bundle.Files[j].RelPath
+	})
+	llm := c.getLLM()
+	bundle.SearchCredentials = buildSearchCredentials(llm)
+	bundle.AssetGatewayAuth = buildAssetGatewayAuth(llm)
+	bundle.SystemdDropIn = buildSkillEnvDropIn(llm)
+	bundle.Hash = computeSkillBundleHash(bundle)
+	return bundle, nil
+}
+
+func (c *Client) resolveSkillsDir() (string, error) {
+	var candidates []string
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates,
+			filepath.Join(exeDir, "openclaw", "skills"),
+			filepath.Join(exeDir, "..", "openclaw", "skills"),
+		)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(wd, "openclaw", "skills"),
+			filepath.Join(wd, "..", "openclaw", "skills"),
+		)
+	}
+	candidates = append(candidates,
+		filepath.Join("openclaw", "skills"),
+		filepath.Join("..", "openclaw", "skills"),
+	)
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if stat, err := os.Stat(candidate); err == nil && stat.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("openclaw skills directory not found")
+}
+
+func buildSearchCredentials(llm config.LLMConfig) []byte {
+	payload := map[string]any{}
+	if llm.ExaAPIKey != "" {
+		payload["exa"] = llm.ExaAPIKey
+	}
+	if llm.TavilyKey != "" {
+		payload["tavily"] = llm.TavilyKey
+	}
+	if llm.GrokAPIURL != "" || llm.GrokAPIKey != "" || llm.GrokModel != "" {
+		model := llm.GrokModel
+		if model == "" {
+			model = "grok-4.1-fast"
+		}
+		payload["grok"] = map[string]string{
+			"apiUrl": llm.GrokAPIURL,
+			"apiKey": llm.GrokAPIKey,
+			"model":  model,
+		}
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil
+	}
+	return append(data, '\n')
+}
+
+func buildAssetGatewayAuth(llm config.LLMConfig) []byte {
+	payload := map[string]string{}
+	if llm.AssetGatewayToken != "" {
+		payload["token"] = llm.AssetGatewayToken
+	}
+	if llm.AssetGatewayURL != "" {
+		payload["gateway_url"] = llm.AssetGatewayURL
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil
+	}
+	return append(data, '\n')
+}
+
+func buildSkillEnvDropIn(llm config.LLMConfig) []byte {
+	entries := [][2]string{
+		{"EXA_API_KEY", llm.ExaAPIKey},
+		{"TAVILY_API_KEY", llm.TavilyKey},
+		{"GROK_API_KEY", llm.GrokAPIKey},
+		{"GROK_API_URL", llm.GrokAPIURL},
+		{"GROK_MODEL", llm.GrokModel},
+		{"ASSET_GATEWAY_TOKEN", llm.AssetGatewayToken},
+		{"ASSET_GATEWAY_URL", llm.AssetGatewayURL},
+	}
+	var lines []string
+	for _, entry := range entries {
+		if strings.TrimSpace(entry[1]) == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("Environment=%s=%s", entry[0], escapeSystemdEnv(entry[1])))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	content := "[Service]\n" + strings.Join(lines, "\n") + "\n"
+	return []byte(content)
+}
+
+func computeSkillBundleHash(bundle *skillBundle) string {
+	h := sha256.New()
+	for _, file := range bundle.Files {
+		_, _ = h.Write([]byte(file.RelPath))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write(file.Data)
+		_, _ = h.Write([]byte{0})
+	}
+	for _, extra := range []struct {
+		name string
+		data []byte
+	}{
+		{name: searchCredentialsPath, data: bundle.SearchCredentials},
+		{name: assetAuthPath, data: bundle.AssetGatewayAuth},
+		{name: skillEnvDropInPath, data: bundle.SystemdDropIn},
+	} {
+		if len(extra.data) == 0 {
+			continue
+		}
+		_, _ = h.Write([]byte(extra.name))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write(extra.data)
+		_, _ = h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func escapeSystemdEnv(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
 // httpHealthPoll polls a URL until HTTP 200 or timeout.
@@ -413,32 +760,4 @@ func (c *Client) waitForContainerHealthURL(containerName, url string, timeout ti
 	}
 
 	return fmt.Errorf("container %s endpoint %s not healthy after %s", containerName, url, timeout)
-}
-
-// loadTeamBuilderSkill reads the team-builder SKILL.md from the openclaw/skills directory.
-func (c *Client) loadTeamBuilderSkill() ([]byte, error) {
-	candidates := []string{
-		"openclaw/skills/team-builder/SKILL.md",
-		"../openclaw/skills/team-builder/SKILL.md",
-	}
-	if wd, err := os.Getwd(); err == nil {
-		candidates = append(candidates,
-			wd+"/openclaw/skills/team-builder/SKILL.md",
-			wd+"/../openclaw/skills/team-builder/SKILL.md",
-		)
-	}
-	if exePath, err := os.Executable(); err == nil {
-		exeDir := exePath[:strings.LastIndex(exePath, "/")]
-		candidates = append(candidates,
-			exeDir+"/openclaw/skills/team-builder/SKILL.md",
-			exeDir+"/../openclaw/skills/team-builder/SKILL.md",
-		)
-	}
-	for _, p := range candidates {
-		data, err := os.ReadFile(p)
-		if err == nil {
-			return data, nil
-		}
-	}
-	return nil, fmt.Errorf("team-builder SKILL.md not found")
 }

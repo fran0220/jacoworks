@@ -76,6 +76,9 @@ llm:
 	t.Setenv("GATEWAY_SERVER_STATIC_DIR", "/tmp/jacoworks-static")
 	t.Setenv("GATEWAY_DATABASE_URL", "postgresql://env-value")
 	t.Setenv("GATEWAY_LLM_PROXY_URL", "http://env-proxy")
+	t.Setenv("GATEWAY_LLM_GROK_API_URL", "http://grok.local/v1")
+	t.Setenv("GATEWAY_LLM_GROK_API_KEY", "grok-secret")
+	t.Setenv("GATEWAY_LLM_ASSET_GATEWAY_TOKEN", "asset-token")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -96,6 +99,15 @@ llm:
 	}
 	if cfg.LLM.ProxyURL != "http://env-proxy" {
 		t.Fatalf("llm proxy url = %q, want %q", cfg.LLM.ProxyURL, "http://env-proxy")
+	}
+	if cfg.LLM.GrokAPIURL != "http://grok.local/v1" {
+		t.Fatalf("llm grok api url = %q, want %q", cfg.LLM.GrokAPIURL, "http://grok.local/v1")
+	}
+	if cfg.LLM.GrokAPIKey != "grok-secret" {
+		t.Fatalf("llm grok api key = %q, want %q", cfg.LLM.GrokAPIKey, "grok-secret")
+	}
+	if cfg.LLM.AssetGatewayToken != "asset-token" {
+		t.Fatalf("llm asset gateway token = %q, want %q", cfg.LLM.AssetGatewayToken, "asset-token")
 	}
 }
 

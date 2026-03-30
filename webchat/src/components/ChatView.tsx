@@ -1,10 +1,11 @@
 import { useRef, useEffect, useCallback } from "react";
 import type { AgentSummary } from "../lib/feed";
-import type { ChatMessage, StreamBlock } from "../types";
+import type { ChatMessage, FileArtifact, StreamBlock } from "../types";
 import StreamingCursor from "./StreamingCursor";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolStatus from "./ToolStatus";
 import Markdown from "./Markdown";
+import FileCard from "./FileCard";
 import VirtualMessageList from "./VirtualMessageList";
 
 function Welcome({ agentCount }: { agentCount: number }) {
@@ -28,7 +29,13 @@ function Welcome({ agentCount }: { agentCount: number }) {
   );
 }
 
-function renderBlock(block: StreamBlock, idx: number, all: StreamBlock[], streaming: boolean) {
+function renderBlock(
+  block: StreamBlock,
+  idx: number,
+  all: StreamBlock[],
+  streaming: boolean,
+  onPreview: (artifact: FileArtifact) => void,
+) {
   if (block.type === "text") {
     return (
       <div className="bubble-row" key={`block-text-${idx}`}>
@@ -46,13 +53,10 @@ function renderBlock(block: StreamBlock, idx: number, all: StreamBlock[], stream
 
   if (block.type === "tool") {
     return (
-      <ToolStatus
-        key={`block-tool-${idx}`}
-        toolName={block.name}
-        status={block.status}
-        args={block.args}
-        output={block.output}
-      />
+      <div className="tool-block-stack" key={`block-tool-${idx}`}>
+        <ToolStatus toolName={block.name} status={block.status} args={block.args} output={block.output} />
+        {block.artifact && <FileCard artifact={block.artifact} onPreview={onPreview} />}
+      </div>
     );
   }
 
@@ -66,6 +70,7 @@ export default function ChatView({
   error,
   activeWorkspaceKey,
   agentSummaries = [],
+  onPreview,
 }: {
   messages: ChatMessage[];
   blocks: StreamBlock[];
@@ -73,6 +78,7 @@ export default function ChatView({
   error: string | null;
   activeWorkspaceKey: string;
   agentSummaries?: AgentSummary[];
+  onPreview: (artifact: FileArtifact) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -96,6 +102,7 @@ export default function ChatView({
           messages={messages}
           activeWorkspaceKey={activeWorkspaceKey}
           agentSummaries={agentSummaries}
+          onPreview={onPreview}
           scrollRef={scrollRef}
         />
       )}
@@ -109,7 +116,7 @@ export default function ChatView({
           </div>
         </div>
       )}
-      {streaming && blocks.length > 0 && blocks.map((block, i) => renderBlock(block, i, blocks, true))}
+      {streaming && blocks.length > 0 && blocks.map((block, i) => renderBlock(block, i, blocks, true, onPreview))}
 
       {error && <div className="error-msg">错误: {error}</div>}
     </div>

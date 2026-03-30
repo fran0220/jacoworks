@@ -234,6 +234,26 @@ func (c *Client) List(ctx context.Context) ([]container.ContainerInfo, error) {
 
 // Exec runs a command inside the instance and returns the result.
 func (c *Client) Exec(ctx context.Context, name string, cmd ...string) (*container.ExecResult, error) {
+	result, err := c.execRaw(ctx, name, cmd...)
+	if result == nil {
+		return nil, err
+	}
+
+	return &container.ExecResult{
+		Stdout:   strings.TrimSpace(string(result.Stdout)),
+		Stderr:   strings.TrimSpace(string(result.Stderr)),
+		ExitCode: result.ExitCode,
+	}, err
+}
+
+type rawExecResult struct {
+	Stdout   []byte
+	Stderr   []byte
+	ExitCode int
+	Err      error
+}
+
+func (c *Client) execRaw(ctx context.Context, name string, cmd ...string) (*rawExecResult, error) {
 	if len(cmd) == 0 {
 		return nil, fmt.Errorf("empty command")
 	}
@@ -256,33 +276,38 @@ func (c *Client) Exec(ctx context.Context, name string, cmd ...string) (*contain
 		return nil, fmt.Errorf("incus exec %s: %w", name, err)
 	}
 
+	exitCode := 0
 	if err := op.Wait(); err != nil {
-		// Return output even on non-zero exit.
-		return &container.ExecResult{
-			Stdout:   strings.TrimSpace(stdoutBuf.String()),
-			Stderr:   strings.TrimSpace(stderrBuf.String()),
-			ExitCode: -1,
+		exitCode = parseExecExitCode(op.Get().Metadata, -1)
+		return &rawExecResult{
+			Stdout:   append([]byte(nil), stdoutBuf.Bytes()...),
+			Stderr:   append([]byte(nil), stderrBuf.Bytes()...),
+			ExitCode: exitCode,
+			Err:      err,
 		}, fmt.Errorf("incus exec %s: %w", name, err)
 	}
 
-	exitCode := 0
-	opMeta := op.Get()
-	if opMeta.Metadata != nil {
-		if rc, ok := opMeta.Metadata["return"]; ok {
-			switch v := rc.(type) {
-			case float64:
-				exitCode = int(v)
-			case int:
-				exitCode = v
-			}
-		}
-	}
-
-	return &container.ExecResult{
-		Stdout:   strings.TrimSpace(stdoutBuf.String()),
-		Stderr:   strings.TrimSpace(stderrBuf.String()),
+	exitCode = parseExecExitCode(op.Get().Metadata, 0)
+	return &rawExecResult{
+		Stdout:   append([]byte(nil), stdoutBuf.Bytes()...),
+		Stderr:   append([]byte(nil), stderrBuf.Bytes()...),
 		ExitCode: exitCode,
 	}, nil
+}
+
+func parseExecExitCode(metadata map[string]any, fallback int) int {
+	if metadata == nil {
+		return fallback
+	}
+	if rc, ok := metadata["return"]; ok {
+		switch v := rc.(type) {
+		case float64:
+			return int(v)
+		case int:
+			return v
+		}
+	}
+	return fallback
 }
 
 // ─── File I/O ──────────────────────────────────────
@@ -315,6 +340,42 @@ func (c *Client) ReadFile(ctx context.Context, name, path string) (string, error
 		return "", fmt.Errorf("incus read file %s:%s: %w", name, path, err)
 	}
 	return string(data), nil
+}
+
+// ReadFileBytes reads file content from inside the instance using `cat` so callers
+// can stream raw bytes without string trimming.
+func (c *Client) ReadFileBytes(ctx context.Context, name, path string) ([]byte, error) {
+	result, err := c.execRaw(ctx, name, "cat", "--", path)
+	if err != nil {
+		stderr := ""
+		if result != nil {
+			stderr = strings.TrimSpace(string(result.Stderr))
+		}
+		if stderr != "" {
+			return nil, fmt.Errorf("incus read file %s:%s: %s", name, path, stderr)
+		}
+		return nil, err
+	}
+	if result.ExitCode != 0 {
+		return nil, fmt.Errorf("incus read file %s:%s exit %d: %s", name, path, result.ExitCode, strings.TrimSpace(string(result.Stderr)))
+	}
+	return append([]byte(nil), result.Stdout...), nil
+}
+
+// StatFile returns the file size in bytes from inside the instance.
+func (c *Client) StatFile(ctx context.Context, name, path string) (int64, error) {
+	result, err := c.Exec(ctx, name, "stat", "-c", "%s", "--", path)
+	if err != nil {
+		return 0, err
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(result.Stdout), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse file size for %s:%s: %w", name, path, err)
+	}
+	if size < 0 {
+		return 0, fmt.Errorf("invalid file size for %s:%s", name, path)
+	}
+	return size, nil
 }
 
 // ─── Logs ──────────────────────────────────────────

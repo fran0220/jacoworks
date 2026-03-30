@@ -212,6 +212,76 @@ make deploy-webchat    # 仅 webchat 前端 (构建 + 同步到 local)
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，网关启动加载 + 热重载，无本地 fallback
 - **新增配置项四层联动**: 新增 `system_settings` 项必须同时改: ① SQL 迁移 ② 网关 Go ③ 网站 Rust 表单 ④ 线上 DB 执行迁移 (详见 `gateway/AGENTS.md` checklist)
 
+## VM 模板与 Skills 自动同步
+
+### Golden Image (`openclaw-ready` v2)
+
+构建脚本: `deploy/incus/build-openclaw-vm.sh`。完整预装环境：
+
+| 层 | 内容 |
+|-----|------|
+| **OS & 桌面** | Ubuntu 24.04, XFCE4, TigerVNC :5901, noVNC :6080, CJK/emoji 字体 |
+| **运行时** | Node.js 22, Python 3.12 + pip, OpenClaw (latest), JMOS |
+| **Python 库** | openpyxl, pandas, requests, beautifulsoup4, lxml, python-docx, Pillow, pyyaml, toml, markdown, chardet, feedparser, yt-dlp |
+| **npm 全局** | @doufunao123/asset-gateway, @steipete/bird, mcporter |
+| **系统工具** | git, curl, wget, jq, tmux, ffmpeg, ImageMagick, poppler-utils, zip, p7zip, htop, ncdu, tree, sqlite3, gh CLI |
+| **办公套件** | LibreOffice Writer/Calc/Impress (文档转换) |
+| **互联网能力** | agent-reach (Twitter/YouTube/Reddit/B站/小红书/RSS 等) |
+
+### Skills 自动同步
+
+Skills 文件统一管理在 `openclaw/skills/` 目录，oc-gateway 自动推送到 VM：
+
+| Skill | 类型 | 功能 |
+|-------|------|------|
+| team-builder | 内置 | Agent 团队构建 |
+| word-docx | ClawHub 指令 | Word 文档创建/编辑 |
+| excel-xlsx | ClawHub 指令 | Excel 电子表格 |
+| asset-gateway | 指令 + CLI | 统一资产生成 (图片/视频/音频/TTS/3D) |
+| search | 指令 + Python 脚本 | 多源网页搜索 (Exa + Tavily + Grok) |
+| agent-reach | 指令 | 互联网能力 (Twitter/YouTube/Reddit 等) |
+
+**同步触发点**:
+- **新用户 Provision**: `WriteConfig()` → `DeploySkills()` 自动推送
+- **用户连接 WS**: `EnsureRunning()` → 后台 `DeploySkillsIfChanged()` 按 hash 比较
+- **oc-gateway 启动**: 10s 后 `SyncAllVMs()` 遍历所有 RUNNING VM
+- **`make deploy-local`**: rsync skills/ → 重启 gateway → 自动同步
+
+**添加新 skill**: 把 SKILL.md 放到 `openclaw/skills/<name>/` → `make deploy-local` → 自动推到所有 VM。
+
+**Credentials**: 从 `oc-gateway.yaml` 的 `llm` 配置读取，Provision 时自动注入 VM 的 `~/.openclaw/credentials/` 和 systemd drop-in。模板见 `openclaw/credentials.example/`。
+
+### OpenClaw 工具权限
+
+当前配置 `tools.deny: ["gateway"]`，即 **除 gateway 外所有工具默认开启**：
+
+| 工具 | 状态 | 说明 |
+|------|------|------|
+| exec / bash | ✅ | Agent 可执行 shell 命令 |
+| write / read / edit | ✅ | Agent 可读写文件 |
+| web_search / web_fetch | ✅ | Agent 可搜索/抓取网页 |
+| browser | ✅ | Agent 可操作浏览器 |
+| cron | ✅ | Agent 可管理定时任务 |
+| gateway | ❌ | 防止 Agent 修改自身配置 |
+| sandbox | off | VM 本身即隔离边界 |
+
+### 文件预览与下载
+
+webchat 支持 Agent 生成的文件预览和下载：
+
+| 格式 | 预览方式 | 库 |
+|------|----------|-----|
+| 图片 (PNG/JPG/GIF/SVG) | 缩略图 + 放大查看 | 原生 img |
+| PDF | 分页渲染 + 缩放 | pdfjs-dist |
+| DOCX | HTML 渲染 | mammoth |
+| XLSX | 多 Sheet 表格 | SheetJS |
+| CSV | 可排序表格 | 自实现 |
+| 代码 | 语法高亮 + 行号 | highlight.js |
+| 视频/音频 | 播放器 | 原生 video/audio |
+| 其他 | 元信息 + 下载 | — |
+
+**API**: `GET /api/files/:id` (元数据) + `GET /api/files/:id/content` (二进制流)。文件通过 `incus exec cat` 从 VM 代理。上限 50MB，文本预览 1MB。
+
 ## VNC 远程桌面
 
 webchat 的「桌面」Tab 通过 noVNC iframe 嵌入用户专属 Incus 桌面 VM。
@@ -272,3 +342,7 @@ webchat 的「桌面」Tab 通过 noVNC iframe 嵌入用户专属 Incus 桌面 V
 - [ ] 每用户独立桌面 VM (Incus VM, 基于 openclaw-ready golden image)
 - [ ] 桌面 VM 镜像 (预装 Godot 4.4 编辑器 + godot-forge CLI)
 - [x] GodotForge 团队模板创建 (7 角色 + prompts + skills)
+- [x] VM Golden Image v2 全面预装 (Python/npm/系统工具/LibreOffice/Agent Reach)
+- [x] Skills 自动同步机制 (DeploySkills + SyncAllVMs + hash 版本追踪)
+- [x] 文件预览与下载 (FileCard + WebPreviewPane + oc-gateway 文件代理)
+- [x] Agent Reach 预装 (Twitter/YouTube/Reddit/B站/小红书/RSS)

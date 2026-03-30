@@ -63,6 +63,20 @@ apt-get install -y -qq \
     dbus-x11 xauth
 "
 
+# ── 2b. Development & media tools ───────────────────
+echo "📥 Installing development & media tools..."
+incus exec "${BUILD_INSTANCE}" -- bash -c "
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -qq --no-install-recommends \
+    python3 python3-pip python3-venv python3-dev \
+    ffmpeg imagemagick poppler-utils \
+    zip p7zip-full \
+    htop ncdu tree file \
+    sqlite3 \
+    fonts-liberation fonts-dejavu-core \
+    libreoffice-calc libreoffice-writer libreoffice-impress
+"
+
 # ── 3. Desktop environment (XFCE, lightweight) ───────
 echo "🖥️  Installing XFCE desktop..."
 incus exec "${BUILD_INSTANCE}" -- bash -c "
@@ -103,6 +117,48 @@ incus exec "${BUILD_INSTANCE}" -- bash -c "
 npm install -g openclaw@${OPENCLAW_VERSION}
 "
 
+# ── 7b. Python packages for skills ───────────────────
+echo "📥 Installing Python packages for skills..."
+incus exec "${BUILD_INSTANCE}" -- bash -c "
+pip3 install --break-system-packages \
+    openpyxl pandas \
+    requests beautifulsoup4 lxml \
+    python-docx \
+    Pillow \
+    pyyaml toml \
+    markdown \
+    chardet
+"
+
+# ── 7c. npm global tools ─────────────────────────────
+echo "📥 Installing global npm tools..."
+incus exec "${BUILD_INSTANCE}" -- bash -c "
+npm install -g @doufunao123/asset-gateway
+"
+
+# ── 7d. Agent Reach (互联网能力) ─────────────────────
+echo "📥 Installing Agent Reach and internet tools..."
+incus exec "${BUILD_INSTANCE}" -- bash -c "
+pip3 install --break-system-packages \
+    https://github.com/Panniantong/agent-reach/archive/main.zip \
+    feedparser
+
+# yt-dlp (视频字幕提取)
+pip3 install --break-system-packages yt-dlp
+
+# bird CLI (Twitter 读取)
+npm install -g @steipete/bird
+
+# mcporter (MCP 工具转接)
+npm install -g mcporter
+
+# gh CLI (GitHub)
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+echo 'deb [arch=\$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+apt-get update -qq && apt-get install -y -qq gh
+"
+
 # ── 8. Create node user (uid 1000) ───────────────────
 echo "👤 Setting up node user..."
 incus exec "${BUILD_INSTANCE}" -- bash -c "
@@ -115,7 +171,7 @@ if ! id node &>/dev/null; then
         useradd -m -s /bin/bash node
     fi
 fi
-mkdir -p /home/node/.openclaw /data/workspace
+mkdir -p /home/node/.openclaw /home/node/.openclaw/skills /home/node/.openclaw/credentials /data/workspace
 chown -R node:node /home/node /data
 "
 
@@ -250,12 +306,76 @@ else
     echo "   ⚠️  JMOS binary not found at $JMOS_BIN, skipping"
 fi
 
+# ── 11b. Verify installations ────────────────────────
+echo "🔍 Verifying installations..."
+incus exec "${BUILD_INSTANCE}" -- bash -c '
+set -euo pipefail
+
+echo "  Node.js: $(node --version)"
+echo "  npm: $(npm --version)"
+echo "  OpenClaw: $(openclaw --version 2>&1 | head -1 || openclaw --help 2>&1 | head -1)"
+echo "  Python: $(python3 --version)"
+echo "  pip: $(pip3 --version | cut -d" " -f1-2)"
+echo "  ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
+echo "  libreoffice: $(libreoffice --version 2>&1 | head -1)"
+echo "  imagemagick: $(magick --version 2>&1 | head -1 || convert --version 2>&1 | head -1)"
+echo "  poppler: $(pdftotext -v 2>&1 | head -1)"
+echo "  sqlite3: $(sqlite3 --version | cut -d" " -f1)"
+echo "  asset-gateway: $(asset-gateway --version 2>&1 | head -1 || echo installed)"
+echo "  agent-reach: $(agent-reach --version 2>&1 | head -1 || echo installed)"
+echo "  yt-dlp: $(yt-dlp --version 2>&1 | head -1)"
+echo "  bird: $(bird --version 2>&1 | head -1 || echo installed)"
+echo "  mcporter: $(mcporter --version 2>&1 | head -1 || echo installed)"
+echo "  gh: $(gh --version 2>&1 | head -1)"
+
+python3 - <<"PY"
+import bs4
+import chardet
+import docx
+import feedparser
+import lxml
+import markdown
+import openpyxl
+import pandas
+import requests
+import toml
+import yaml
+from PIL import Image
+
+print(f"  openpyxl: {openpyxl.__version__}")
+print(f"  pandas: {pandas.__version__}")
+print(f"  requests: {requests.__version__}")
+print(f"  beautifulsoup4: {bs4.__version__}")
+print(f"  lxml: {lxml.__version__}")
+print(f"  python-docx: {docx.__version__}")
+print(f"  Pillow: {Image.__version__}")
+print(f"  pyyaml: {yaml.__version__}")
+print(f"  toml: {toml.__version__}")
+print(f"  markdown: {markdown.__version__}")
+print(f"  chardet: {chardet.__version__}")
+print(f"  feedparser: {feedparser.__version__}")
+PY
+
+test -d /home/node/.openclaw/skills
+test -d /home/node/.openclaw/credentials
+echo "  node skill dirs: ok"
+
+if command -v jmos >/dev/null 2>&1; then
+    echo "  JMOS binary: $(command -v jmos)"
+else
+    echo "  JMOS binary: skipped"
+fi
+'
+
 # ── 12. Clean up ─────────────────────────────────────
 echo "🧹 Cleaning up..."
 incus exec "${BUILD_INSTANCE}" -- bash -c "
+apt-get autoremove -y -qq
 apt-get clean
-rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 npm cache clean --force
+pip3 cache purge || true
+rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+rm -rf /root/.cache/pip
 "
 
 # ── 13. Publish image ────────────────────────────────
@@ -273,5 +393,9 @@ echo "   Desktop: XFCE4"
 echo "   VNC: TigerVNC :1 (port 5901)"
 echo "   noVNC: websockify :6080"
 echo "   OpenClaw: port 18789"
+echo "   Preinstalled Python: openpyxl, pandas, requests, python-docx, Pillow"
+echo "   Preinstalled tools: asset-gateway, ffmpeg, ImageMagick, poppler-utils, sqlite3"
+echo "   Internet: agent-reach, bird (Twitter), yt-dlp (YouTube/B站), mcporter (MCP), gh CLI"
+echo "   Conversion stack: LibreOffice Writer/Calc/Impress"
 echo ""
 echo "   Test: incus launch ${IMAGE_ALIAS} test-vm --vm -c limits.cpu=2 -c limits.memory=2GiB"

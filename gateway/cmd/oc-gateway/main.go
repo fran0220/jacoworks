@@ -26,11 +26,12 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/fran0220/jacoworks/gateway/internal/agent"
-	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/audit"
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
+	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
 	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
+	filespkg "github.com/fran0220/jacoworks/gateway/internal/files"
 	incuspkg "github.com/fran0220/jacoworks/gateway/internal/incus"
 	"github.com/fran0220/jacoworks/gateway/internal/middleware"
 	ocpkg "github.com/fran0220/jacoworks/gateway/internal/openclaw"
@@ -150,6 +151,8 @@ func main() {
 		log.Fatal().Err(err).Msg("init incus client")
 	}
 	ocClient := ocpkg.NewClient(incusRT, cfg.OpenClaw.DataRoot, cfg.OpenClaw.HostIP, cfg.OpenClaw.Image, cfg.GetLLM, s)
+	artifactStore := filespkg.NewArtifactStore(24*time.Hour, time.Hour)
+	defer artifactStore.Close()
 
 	// Freeze disabled: VMs stay running permanently for instant WS connection.
 	// Previously: freeze after 1h idle → unpause + health poll added 5-30s to every reconnect.
@@ -177,6 +180,7 @@ func main() {
 	}
 
 	channelPool := agent.NewChannelPool(s, dialers, 5*time.Minute, 1024)
+	channelPool.ConfigureArtifacts(artifactStore, incusRT)
 	defer channelPool.Close()
 
 	// Initialize Feishu Bot handler (shares ChannelPool with webchat for conversation sync)
@@ -235,6 +239,8 @@ func main() {
 	mux.Handle("GET /api/oc/stream", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.StreamEvents)))
 	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
 	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
+	mux.Handle("GET /api/files/{id}", authMiddleware.Authenticate(http.HandlerFunc(filespkg.GetFileMetaHandler(artifactStore))))
+	mux.Handle("GET /api/files/{id}/content", authMiddleware.Authenticate(http.HandlerFunc(filespkg.GetFileContentHandler(artifactStore, incusRT))))
 
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
 	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, ocClient, auditLogger))))
@@ -303,6 +309,13 @@ func main() {
 		WriteTimeout:      0,
 		IdleTimeout:       120 * time.Second,
 	}
+
+	go func() {
+		time.Sleep(10 * time.Second)
+		if err := ocClient.SyncAllVMs(context.Background()); err != nil {
+			log.Warn().Err(err).Msg("initial openclaw skills sync failed")
+		}
+	}()
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)

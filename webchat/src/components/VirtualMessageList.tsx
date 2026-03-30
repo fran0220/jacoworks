@@ -2,13 +2,14 @@ import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import type { AgentSummary } from "../lib/feed";
 import { DEFAULT_OPENCLAW_SESSION_KEY } from "../lib/config";
 import { parseAgentIdFromSessionKey } from "../lib/team-utils";
-import type { ChatMessage, ChatSender, StreamBlock } from "../types";
+import type { ChatMessage, ChatSender, FileArtifact, StreamBlock } from "../types";
 import { contentToBlocks, extractText } from "../lib/message-extract";
 import { usePretextFont, useShrinkwrap, calcTextHeight } from "../hooks/usePretext";
 import StreamingCursor from "./StreamingCursor";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolStatus from "./ToolStatus";
 import Markdown from "./Markdown";
+import FileCard from "./FileCard";
 import OrchestrationRow from "./OrchestrationRow";
 
 /* ---- Constants ---- */
@@ -23,6 +24,8 @@ const USER_BUBBLE_LINE_HEIGHT = 22.4; // 14px * 1.6
 const TEXT_BLOCK_HEIGHT_PER_LINE = 24;
 const THINKING_BLOCK_HEIGHT = 48;
 const TOOL_BLOCK_HEIGHT = 44;
+const FILE_CARD_HEIGHT = 112;
+const IMAGE_FILE_CARD_HEIGHT = 252;
 const DEFAULT_MSG_HEIGHT = 80;
 const USER_MAX_WIDTH_RATIO = 0.75;
 
@@ -86,7 +89,13 @@ function AssistantHeader({ sender }: { sender?: ChatSender }) {
   );
 }
 
-function renderBlock(block: StreamBlock, idx: number, all: StreamBlock[], streaming: boolean) {
+function renderBlock(
+  block: StreamBlock,
+  idx: number,
+  all: StreamBlock[],
+  streaming: boolean,
+  onPreview: (artifact: FileArtifact) => void,
+) {
   if (block.type === "text") {
     return (
       <div className="bubble-row" key={`block-text-${idx}`}>
@@ -104,13 +113,10 @@ function renderBlock(block: StreamBlock, idx: number, all: StreamBlock[], stream
 
   if (block.type === "tool") {
     return (
-      <ToolStatus
-        key={`block-tool-${idx}`}
-        toolName={block.name}
-        status={block.status}
-        args={block.args}
-        output={block.output}
-      />
+      <div className="tool-block-stack" key={`block-tool-${idx}`}>
+        <ToolStatus toolName={block.name} status={block.status} args={block.args} output={block.output} />
+        {block.artifact && <FileCard artifact={block.artifact} onPreview={onPreview} />}
+      </div>
     );
   }
 
@@ -152,6 +158,9 @@ function estimateAssistantHeight(msg: ChatMessage): number {
       h += THINKING_BLOCK_HEIGHT;
     } else if (block.type === "tool") {
       h += TOOL_BLOCK_HEIGHT;
+      if (block.artifact) {
+        h += block.artifact.category === "image" ? IMAGE_FILE_CARD_HEIGHT : FILE_CARD_HEIGHT;
+      }
     }
   }
   return h;
@@ -197,6 +206,7 @@ interface VirtualMessageListProps {
   messages: ChatMessage[];
   activeWorkspaceKey: string;
   agentSummaries: AgentSummary[];
+  onPreview: (artifact: FileArtifact) => void;
   scrollRef: React.RefObject<HTMLDivElement | null>;
 }
 
@@ -204,6 +214,7 @@ export default function VirtualMessageList({
   messages,
   activeWorkspaceKey,
   agentSummaries,
+  onPreview,
   scrollRef,
 }: VirtualMessageListProps) {
   const fontInfo = usePretextFont();
@@ -348,6 +359,7 @@ export default function VirtualMessageList({
           activeWorkspaceKey={activeWorkspaceKey}
           agentSummaries={agentSummaries}
           fontInfo={fontInfo}
+          onPreview={onPreview}
         />
       </div>,
     );
@@ -367,11 +379,13 @@ function MessageItem({
   activeWorkspaceKey,
   agentSummaries,
   fontInfo,
+  onPreview,
 }: {
   msg: ChatMessage;
   activeWorkspaceKey: string;
   agentSummaries: AgentSummary[];
   fontInfo: ReturnType<typeof usePretextFont>;
+  onPreview: (artifact: FileArtifact) => void;
 }) {
   const sender = resolveSender(msg, activeWorkspaceKey, agentSummaries);
 
@@ -394,7 +408,7 @@ function MessageItem({
       return (
         <div className="assistant-message-group">
           <AssistantHeader sender={sender} />
-          {msgBlocks.map((block, idx) => renderBlock(block, idx, msgBlocks, false))}
+          {msgBlocks.map((block, idx) => renderBlock(block, idx, msgBlocks, false, onPreview))}
         </div>
       );
     }
