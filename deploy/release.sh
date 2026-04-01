@@ -193,13 +193,13 @@ do_build() {
   echo "📦 macOS 构建完成! 产物在: $DIST_DIR/"
   ls -la "$DIST_DIR"/*/
   echo ""
-  echo "💡 Windows 包请在 win-build VM 上构建:"
-  echo "   1. 复制 sidecar: scp $SIDECAR_DIR/vm-agent-x86_64-pc-windows-msvc.exe builder@192.168.122.98:C:/build/jacoworks/desktop/src-tauri/binaries/"
-  echo "   2. 在 VM 上: cd C:\\build\\jacoworks && git pull && cd desktop && npm ci && cargo tauri build --bundles nsis,updater"
-  echo "   3. 复制产物: scp builder@192.168.122.98:C:/build/jacoworks/desktop/src-tauri/target/release/bundle/nsis/*.exe $DIST_DIR/windows-x86_64/"
-  echo "   4. 复制签名: scp builder@192.168.122.98:C:/build/jacoworks/desktop/src-tauri/target/release/bundle/nsis/*.sig $DIST_DIR/windows-x86_64/"
+  echo "💡 Windows 包请通过 GitHub Actions 构建:"
+  echo "   1. 推送代码到 main 分支"
+  echo "   2. 前往 Actions → Build Windows Desktop → Run workflow"
+  echo "   3. 输入版本号: v${VERSION}"
+  echo "   4. CI 将自动构建、上传 COS 并注册 DB"
   echo ""
-  echo "   准备好后运行: ./deploy/release.sh ${VERSION} upload"
+  echo "   macOS 产物上传: ./deploy/release.sh ${VERSION} upload"
 }
 
 # ─── Phase: upload ───────────────────────────────────────────────

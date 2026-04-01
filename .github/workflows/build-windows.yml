@@ -1,0 +1,219 @@
+name: Build Windows Desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. v1.8.5)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # ── Cross-compile Windows sidecar ──
+  build-sidecar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+        working-directory: vm-agent
+      - name: Cross-compile Windows sidecar
+        working-directory: vm-agent
+        run: |
+          mkdir -p dist
+          bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
+          echo "📦 Sidecar binary:"
+          ls -lh dist/vm-agent-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vm-agent-sidecar
+          path: vm-agent/dist/vm-agent-*
+
+  # ── Windows Tauri build ──
+  build-windows:
+    needs: build-sidecar
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: vm-agent-sidecar
+          path: sidecar-bin/
+
+      - name: Prepare release resources
+        shell: bash
+        run: |
+          bash desktop/src-tauri/scripts/prepare-release.sh \
+            "x86_64-pc-windows-msvc" \
+            --sidecar-from "sidecar-bin/vm-agent-x86_64-pc-windows-msvc.exe"
+
+      - name: Prepare Windows dependencies
+        shell: bash
+        run: bash desktop/src-tauri/scripts/prepare-win-deps.sh
+
+      - run: npm ci
+        working-directory: desktop
+
+      - name: Build Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          args: --target x86_64-pc-windows-msvc --bundles nsis,updater
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-upload
+          BUNDLE_DIR="desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+
+          cp ${BUNDLE_DIR}/nsis/*.exe dist-upload/ 2>/dev/null || true
+          cp ${BUNDLE_DIR}/nsis/*.nsis.zip dist-upload/ 2>/dev/null || true
+          find ${BUNDLE_DIR} -name '*.sig' -exec cp {} dist-upload/ \; 2>/dev/null || true
+
+          echo "windows-x86_64" > dist-upload/platform.txt
+
+          echo "📦 Artifacts for windows-x86_64:"
+          ls -la dist-upload/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-x86_64
+          path: dist-upload/
+
+  # ── Upload to COS + register in DB ──
+  distribute:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    env:
+      COS_BUCKET: jingao-1350796151
+      COS_REGION: ap-beijing
+      COS_ACCEL_ENDPOINT: cos.accelerate.myqcloud.com
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows-x86_64
+          path: artifacts/desktop-windows-x86_64/
+
+      - name: Upload to COS
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          curl -fsSL https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -o /usr/local/bin/coscli
+          chmod +x /usr/local/bin/coscli
+
+          printf 'cos:\n  base:\n    secretid: %s\n    secretkey: %s\n  buckets:\n    - name: %s\n      alias: cos\n      endpoint: %s\n' \
+            "$COS_SECRET_ID" "$COS_SECRET_KEY" "$COS_BUCKET" "$COS_ACCEL_ENDPOINT" > /tmp/.cos.yaml
+
+          UPLOADED=0
+          FAILED=0
+
+          for file in artifacts/desktop-windows-x86_64/*; do
+            [ -f "$file" ] || continue
+            FILENAME=$(basename "$file")
+            case "$FILENAME" in platform.txt) continue;; esac
+
+            FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
+            COS_PATH="cos://${COS_BUCKET}/releases/${VERSION}/windows-x86_64/${FILENAME}"
+            echo "⬆️  ${FILENAME} ($(numfmt --to=iec $FILESIZE))"
+
+            if coscli cp -c /tmp/.cos.yaml "$file" "$COS_PATH"; then
+              echo "✅ ${FILENAME}"
+              UPLOADED=$((UPLOADED + 1))
+            else
+              echo "❌ ${FILENAME} upload failed!"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          rm -f /tmp/.cos.yaml
+
+          echo ""
+          echo "📊 Upload: ${UPLOADED} succeeded, ${FAILED} failed"
+          if [ "$FAILED" -gt 0 ]; then echo "❌ Some uploads failed!"; exit 1; fi
+          if [ "$UPLOADED" -eq 0 ]; then echo "❌ No files uploaded!"; exit 1; fi
+
+          echo "✅ All at: https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/windows-x86_64/"
+
+      - name: Setup SSH
+        env:
+          SSH_KEY: ${{ secrets.JINGAO_SSH_KEY }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Register release assets in DB
+        env:
+          SSH_USER: ${{ secrets.JINGAO_SSH_USER }}
+          SSH_HOST: ${{ secrets.JINGAO_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          BASE_URL="https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/windows-x86_64"
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o ConnectTimeout=30 ${SSH_USER}@${SSH_HOST}"
+          DIR="artifacts/desktop-windows-x86_64"
+
+          SQL="BEGIN;"
+
+          for file in "${DIR}"/*; do
+            [ -f "$file" ] || continue
+            FILENAME=$(basename "$file")
+            case "$FILENAME" in *.sig|platform.txt) continue;; esac
+
+            FILESIZE=$(stat -c%s "$file" 2>/dev/null || echo 0)
+            DOWNLOAD_URL="${BASE_URL}/${FILENAME}"
+
+            SIG=""
+            [ -f "${file}.sig" ] && SIG=$(cat "${file}.sig")
+
+            # Determine DB platform: updater bundle vs installer
+            DB_PLATFORM="windows-x86_64"
+            case "$FILENAME" in *.nsis.zip) DB_PLATFORM="windows-x86_64-updater";; esac
+
+            SQL="${SQL}
+          INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
+            SELECT gen_random_uuid()::text, r.id, '${DB_PLATFORM}', '${DOWNLOAD_URL}', '${SIG}', ${FILESIZE}
+            FROM releases r WHERE r.version = '${VERSION}'
+            ON CONFLICT (release_id, platform) DO UPDATE SET download_url = EXCLUDED.download_url, signature = EXCLUDED.signature, file_size = EXCLUDED.file_size;"
+
+            echo "📦 ${DB_PLATFORM} → ${FILENAME} (${FILESIZE} bytes)"
+          done
+
+          SQL="${SQL}
+          COMMIT;"
+
+          echo "$SQL" | $SSH_CMD "PGPASSWORD='${DB_PASSWORD}' psql -h 127.0.0.1 -U postgres -d jacoworks -v ON_ERROR_STOP=1"
+
+          echo "✅ Windows assets for ${VERSION} registered"
+          echo "🎉 Distribution complete!"
