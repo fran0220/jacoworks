@@ -1,5 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
-import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname, extname } from "node:path";
 
@@ -137,7 +137,7 @@ export function createImageGenExtension(
   workspaceDir: string,
 ): ExtensionFactory {
   return (pi) => {
-    const tool: ToolDefinition<typeof GenerateImageParams> = {
+    const tool = defineTool<typeof GenerateImageParams, Record<string, unknown>>({
       name: "generate_image",
       label: "Generate Image",
       description:
@@ -146,7 +146,7 @@ export function createImageGenExtension(
       promptSnippet:
         "Use to create or edit an image file from a prompt when the task needs visual assets or transformed imagery.",
       parameters: GenerateImageParams,
-      execute: async (_toolCallId, params: Static<typeof GenerateImageParams>) => {
+      execute: async (_toolCallId, params) => {
         const outputPath = resolve(workspaceDir, params.filename);
         const inputPath = params.input_image
           ? resolve(workspaceDir, params.input_image)
@@ -197,7 +197,7 @@ export function createImageGenExtension(
           details: { path: outputPath, size: imgBuffer.length },
         };
       },
-    };
+    });
 
     pi.registerTool(tool);
   };

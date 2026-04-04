@@ -1,5 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
-import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 
 // ─── Parameter Schema ───────────────────────────────
 
@@ -18,7 +18,7 @@ const RenderVisualParams = Type.Object({
 
 export function createVisualExtension(): ExtensionFactory {
   return (pi) => {
-    const tool: ToolDefinition<typeof RenderVisualParams> = {
+    const tool = defineTool<typeof RenderVisualParams, Record<string, unknown>>({
       name: "render_visual",
       label: "Render Visual",
       description:
@@ -32,7 +32,7 @@ export function createVisualExtension(): ExtensionFactory {
       promptSnippet:
         "Use when a chart, diagram, table, or custom HTML visual will explain data or concepts better than prose alone.",
       parameters: RenderVisualParams,
-      execute: async (_toolCallId, params: Static<typeof RenderVisualParams>) => {
+      execute: async (_toolCallId, params) => {
         if (!params.html || params.html.trim().length === 0) {
           return {
             content: [{ type: "text" as const, text: "Error: html content is required" }],
@@ -45,7 +45,7 @@ export function createVisualExtension(): ExtensionFactory {
           details: { type: params.type, title: params.title, html: params.html },
         };
       },
-    };
+    });
 
     pi.registerTool(tool);
   };

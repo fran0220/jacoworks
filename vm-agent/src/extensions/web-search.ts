@@ -1,5 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
-import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 
 // ─── Parameter Schema ───────────────────────────────
 
@@ -171,7 +171,7 @@ export function createWebSearchExtension(
   const tavilyKey = process.env.TAVILY_API_KEY || "";
 
   return (pi) => {
-    const tool: ToolDefinition<typeof WebSearchParams> = {
+    const tool = defineTool<typeof WebSearchParams, Record<string, unknown>>({
       name: "web_search",
       label: "Web Search",
       description:
@@ -180,7 +180,7 @@ export function createWebSearchExtension(
       promptSnippet:
         "Use for current web information, external documentation, API references, or recent facts that are not in the workspace.",
       parameters: WebSearchParams,
-      execute: async (_toolCallId, params: Static<typeof WebSearchParams>) => {
+      execute: async (_toolCallId, params) => {
         const num = Math.min(params.num_results || 5, 10);
         const includeAnswer = params.include_answer || false;
 
@@ -221,7 +221,7 @@ export function createWebSearchExtension(
           details: { resultCount: results.length, source: results[0]?.source || "none" },
         };
       },
-    };
+    });
 
     pi.registerTool(tool);
   };

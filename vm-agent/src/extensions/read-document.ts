@@ -1,5 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
-import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve, extname, basename, join } from "node:path";
 import { chunkMarkdown, getMemoryStore, type MemoryStoreConfig } from "../lib/memory-store.js";
@@ -255,7 +255,7 @@ export function createReadDocumentExtension(
   return (pi) => {
     const store = getMemoryStore(memoryRootDir, storeConfig);
 
-    const tool: ToolDefinition<typeof ReadDocumentParams> = {
+    const tool = defineTool<typeof ReadDocumentParams, Record<string, unknown>>({
       name: "read_document",
       label: "Read Document",
       description:
@@ -265,7 +265,7 @@ export function createReadDocumentExtension(
       promptSnippet:
         "Use to extract readable text from documents like PDF, DOCX, XLSX, CSV, or PPTX instead of relying on raw file reads.",
       parameters: ReadDocumentParams,
-      execute: async (_toolCallId, params: Static<typeof ReadDocumentParams>, signal?: AbortSignal) => {
+      execute: async (_toolCallId, params, signal) => {
         const filePath = resolve(workspaceDir, params.path);
         const ext = extname(filePath).toLowerCase();
         const docsDir = join(memoryRootDir, "documents");
@@ -414,7 +414,7 @@ export function createReadDocumentExtension(
           };
         }
       },
-    };
+    });
 
     pi.registerTool(tool);
   };

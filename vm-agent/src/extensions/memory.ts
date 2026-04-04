@@ -1,8 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
-import type {
-  ExtensionFactory,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import {
@@ -356,7 +353,7 @@ export function createMemoryExtension(
     });
 
     // ── memory_search tool: hybrid BM25 + vector ──
-    const memorySearch: ToolDefinition<typeof SearchParams> = {
+    const memorySearch = defineTool<typeof SearchParams, Record<string, unknown>>({
       name: "memory_search",
       label: "Memory Search",
       description:
@@ -364,7 +361,7 @@ export function createMemoryExtension(
       promptSnippet:
         "Use to recall saved long-term memory, daily logs, or indexed documents when earlier context or prior findings may matter.",
       parameters: SearchParams,
-      execute: async (_toolCallId, params: Static<typeof SearchParams>) => {
+      execute: async (_toolCallId, params) => {
         await initPromise;
         const topK = params.top_k ?? 5;
         const results = await store.hybridSearch(params.query, topK);
@@ -388,10 +385,10 @@ export function createMemoryExtension(
           details: { matchCount: results.length },
         };
       },
-    };
+    });
 
     // ── memory_save tool: write MEMORY.md + upsert + async embed ──
-    const memorySave: ToolDefinition<typeof SaveParams> = {
+    const memorySave = defineTool<typeof SaveParams, Record<string, unknown>>({
       name: "memory_save",
       label: "Memory Save",
       description:
@@ -399,7 +396,7 @@ export function createMemoryExtension(
       promptSnippet:
         "Use to preserve durable decisions, progress, file paths, or findings in long-term memory before they are lost to compaction.",
       parameters: SaveParams,
-      execute: async (_toolCallId, params: Static<typeof SaveParams>) => {
+      execute: async (_toolCallId, params) => {
         await appendMemoryMd(memoryRootDir, params.content, params.section);
 
         const chunkText = params.section
@@ -426,7 +423,7 @@ export function createMemoryExtension(
           details: {},
         };
       },
-    };
+    });
 
     pi.registerTool(memorySearch);
     pi.registerTool(memorySave);

@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Type, type Static } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 
 // ─── Cron Expression Parser ─────────────────────────
 
@@ -593,8 +593,6 @@ export function createCronService(
     limit: Type.Optional(Type.Number({ description: "Number of history entries (default 10)" })),
   });
 
-  type CronManageInput = Static<typeof CronManageParams>;
-
   function parseScheduleFromTool(kind: "cron" | "at" | "every", raw: string): CronJob["schedule"] | string {
     switch (kind) {
       case "cron":
@@ -619,14 +617,14 @@ export function createCronService(
     }
   }
 
-  const cronManageTool: ToolDefinition<typeof CronManageParams> = {
+  const cronManageTool = defineTool<typeof CronManageParams, Record<string, unknown>>({
     name: "cron_manage",
     label: "Cron Manager",
     description: "Create, list, delete, manually run, or view history of scheduled jobs. Supports cron expressions, one-shot timestamps, and fixed intervals.",
     promptSnippet:
       "Use to create, inspect, run, or delete scheduled jobs and to view their execution history.",
     parameters: CronManageParams,
-    async execute(_toolCallId, params: CronManageInput) {
+    async execute(_toolCallId, params) {
       // Sidecar mode: proxy all calls to Gateway API
       if (config.mode === "sidecar" && config.gatewayUrl) {
         return proxyToGateway(config, params);
@@ -758,7 +756,7 @@ export function createCronService(
           };
       }
     },
-  };
+  });
 
   function describeSchedule(s: CronJob["schedule"]): string {
     switch (s.kind) {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Type, type Static } from "@sinclair/typebox";
-import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 300_000;
@@ -97,7 +97,7 @@ function runPython(
 
 export function createPythonExtension(): ExtensionFactory {
   return (pi) => {
-    const pythonTool: ToolDefinition<typeof PythonParams> = {
+    const pythonTool = defineTool<typeof PythonParams, Record<string, unknown>>({
       name: "python",
       label: "Python",
       description:
@@ -107,12 +107,12 @@ export function createPythonExtension(): ExtensionFactory {
       promptSnippet:
         "Use for Python-friendly computation, data wrangling, parsing, or format conversion when bash is awkward.",
       parameters: PythonParams,
-      execute: async (_toolCallId, params: Static<typeof PythonParams>, signal?: AbortSignal) => {
+      execute: async (_toolCallId, params, signal) => {
         const timeoutMs = clampTimeout(params);
         const cwd = params.cwd?.trim() || process.cwd();
         return runPython(params.code, cwd, timeoutMs, signal);
       },
-    };
+    });
 
     pi.registerTool(pythonTool);
   };

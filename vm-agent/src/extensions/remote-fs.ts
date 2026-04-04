@@ -1,5 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
-import type { ExtensionFactory, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { TransportSender } from "../transport/types.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -126,7 +126,7 @@ export function createRemoteFsExtension(
     }
 
     // ── remote_read ──
-    const remoteRead: ToolDefinition<typeof ReadParams> = {
+    const remoteRead = defineTool<typeof ReadParams, Record<string, unknown>>({
       name: "remote_read",
       label: "Remote Read",
       description:
@@ -134,7 +134,7 @@ export function createRemoteFsExtension(
       promptSnippet:
         "Use to read a file from the user's local machine when running in cloud mode and the needed file is not inside the container.",
       parameters: ReadParams,
-      execute: async (_toolCallId, params: Static<typeof ReadParams>) => {
+      execute: async (_toolCallId, params) => {
         const result = await sendRequest({ type: "fs.read", path: params.path });
         const content = typeof result.content === "string"
           ? Buffer.from(result.content, "base64").toString("utf-8")
@@ -144,10 +144,10 @@ export function createRemoteFsExtension(
           details: { size: result.size ?? content.length },
         };
       },
-    };
+    });
 
     // ── remote_write ──
-    const remoteWrite: ToolDefinition<typeof WriteParams> = {
+    const remoteWrite = defineTool<typeof WriteParams, Record<string, unknown>>({
       name: "remote_write",
       label: "Remote Write",
       description:
@@ -155,7 +155,7 @@ export function createRemoteFsExtension(
       promptSnippet:
         "Use to write or update a file on the user's local machine from cloud mode.",
       parameters: WriteParams,
-      execute: async (_toolCallId, params: Static<typeof WriteParams>) => {
+      execute: async (_toolCallId, params) => {
         const encoded = Buffer.from(params.content, "utf-8").toString("base64");
         await sendRequest({ type: "fs.write", path: params.path, content: encoded });
         return {
@@ -163,10 +163,10 @@ export function createRemoteFsExtension(
           details: {},
         };
       },
-    };
+    });
 
     // ── remote_list ──
-    const remoteList: ToolDefinition<typeof ListParams> = {
+    const remoteList = defineTool<typeof ListParams, Record<string, unknown>>({
       name: "remote_list",
       label: "Remote List",
       description:
@@ -174,7 +174,7 @@ export function createRemoteFsExtension(
       promptSnippet:
         "Use to inspect directories on the user's local machine from cloud mode before reading or writing files there.",
       parameters: ListParams,
-      execute: async (_toolCallId, params: Static<typeof ListParams>) => {
+      execute: async (_toolCallId, params) => {
         const result = await sendRequest({
           type: "fs.list",
           path: params.path,
@@ -191,10 +191,10 @@ export function createRemoteFsExtension(
           details: { count: entries.length },
         };
       },
-    };
+    });
 
     // ── remote_stat ──
-    const remoteStat: ToolDefinition<typeof StatParams> = {
+    const remoteStat = defineTool<typeof StatParams, Record<string, unknown>>({
       name: "remote_stat",
       label: "Remote Stat",
       description:
@@ -202,7 +202,7 @@ export function createRemoteFsExtension(
       promptSnippet:
         "Use to check whether a local file or directory exists, and whether it is a file or directory, from cloud mode.",
       parameters: StatParams,
-      execute: async (_toolCallId, params: Static<typeof StatParams>) => {
+      execute: async (_toolCallId, params) => {
         const result = await sendRequest({ type: "fs.stat", path: params.path });
         const exists = result.exists === true;
         const text = exists
@@ -213,7 +213,7 @@ export function createRemoteFsExtension(
           details: { exists, is_dir: result.is_dir ?? false, size: result.size ?? 0 },
         };
       },
-    };
+    });
 
     pi.registerTool(remoteRead);
     pi.registerTool(remoteWrite);
