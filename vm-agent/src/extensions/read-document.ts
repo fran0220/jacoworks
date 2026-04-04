@@ -262,6 +262,8 @@ export function createReadDocumentExtension(
         "Read and extract content from documents and images. " +
         "Supports: docx, xlsx, csv, pdf, pptx, and images (png/jpg/etc via native read). " +
         "Returns extracted text in markdown format.",
+      promptSnippet:
+        "Use to extract readable text from documents like PDF, DOCX, XLSX, CSV, or PPTX instead of relying on raw file reads.",
       parameters: ReadDocumentParams,
       execute: async (_toolCallId, params: Static<typeof ReadDocumentParams>, signal?: AbortSignal) => {
         const filePath = resolve(workspaceDir, params.path);

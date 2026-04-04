@@ -143,6 +143,8 @@ export function createImageGenExtension(
       description:
         "Generate or edit images using AI. Supports text-to-image and image editing. " +
         "Returns the saved file path. Use for game sprites, UI assets, illustrations, etc.",
+      promptSnippet:
+        "Use to create or edit an image file from a prompt when the task needs visual assets or transformed imagery.",
       parameters: GenerateImageParams,
       execute: async (_toolCallId, params: Static<typeof GenerateImageParams>) => {
         const outputPath = resolve(workspaceDir, params.filename);

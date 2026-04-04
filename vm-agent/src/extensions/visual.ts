@@ -29,6 +29,8 @@ export function createVisualExtension(): ExtensionFactory {
         "- table: Interactive HTML table with sorting/highlighting. Style with inline CSS.\n" +
         "- custom: Any self-contained HTML/CSS/JS widget.\n\n" +
         "The html field MUST be a complete HTML document (<!DOCTYPE html><html>...) with all CSS/JS inline or from CDN. Keep it concise and focused.",
+      promptSnippet:
+        "Use when a chart, diagram, table, or custom HTML visual will explain data or concepts better than prose alone.",
       parameters: RenderVisualParams,
       execute: async (_toolCallId, params: Static<typeof RenderVisualParams>) => {
         if (!params.html || params.html.trim().length === 0) {

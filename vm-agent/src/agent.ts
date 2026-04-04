@@ -310,7 +310,7 @@ export function initAgent(cfg: Config) {
   config = cfg;
 
   authStorage = AuthStorage.inMemory();
-  modelRegistry = new ModelRegistry(authStorage);
+  modelRegistry = ModelRegistry.inMemory(authStorage);
 
   // 注册中转站所有模型
   registerProxyModels(modelRegistry, cfg.proxyUrl, cfg.proxyKey);

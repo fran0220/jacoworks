@@ -361,6 +361,8 @@ export function createMemoryExtension(
       label: "Memory Search",
       description:
         "Search across all memory (MEMORY.md, daily logs, and indexed documents) using hybrid BM25 + semantic matching. Returns the most relevant chunks with relevance scores. Use this to recall information from previously read documents, saved memories, and conversation history.",
+      promptSnippet:
+        "Use to recall saved long-term memory, daily logs, or indexed documents when earlier context or prior findings may matter.",
       parameters: SearchParams,
       execute: async (_toolCallId, params: Static<typeof SearchParams>) => {
         await initPromise;
@@ -394,6 +396,8 @@ export function createMemoryExtension(
       label: "Memory Save",
       description:
         "Save important information to MEMORY.md (long-term curated memory). Use this proactively to preserve key decisions, task progress, file paths, and findings before they are lost to context compression. Content is automatically indexed for hybrid search.",
+      promptSnippet:
+        "Use to preserve durable decisions, progress, file paths, or findings in long-term memory before they are lost to compaction.",
       parameters: SaveParams,
       execute: async (_toolCallId, params: Static<typeof SaveParams>) => {
         await appendMemoryMd(memoryRootDir, params.content, params.section);

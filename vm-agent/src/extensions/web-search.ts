@@ -177,6 +177,8 @@ export function createWebSearchExtension(
       description:
         "Search the web for current information. Returns titles, URLs, and snippets. " +
         "Use for factual lookups, recent news, documentation, API references, etc.",
+      promptSnippet:
+        "Use for current web information, external documentation, API references, or recent facts that are not in the workspace.",
       parameters: WebSearchParams,
       execute: async (_toolCallId, params: Static<typeof WebSearchParams>) => {
         const num = Math.min(params.num_results || 5, 10);

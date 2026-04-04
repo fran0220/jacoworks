@@ -131,6 +131,8 @@ export function createRemoteFsExtension(
       label: "Remote Read",
       description:
         "Read a file from the user's local machine (via WebSocket). The path is relative to the user's workspace root.",
+      promptSnippet:
+        "Use to read a file from the user's local machine when running in cloud mode and the needed file is not inside the container.",
       parameters: ReadParams,
       execute: async (_toolCallId, params: Static<typeof ReadParams>) => {
         const result = await sendRequest({ type: "fs.read", path: params.path });
@@ -150,6 +152,8 @@ export function createRemoteFsExtension(
       label: "Remote Write",
       description:
         "Write a file to the user's local machine (via WebSocket). The path is relative to the user's workspace root.",
+      promptSnippet:
+        "Use to write or update a file on the user's local machine from cloud mode.",
       parameters: WriteParams,
       execute: async (_toolCallId, params: Static<typeof WriteParams>) => {
         const encoded = Buffer.from(params.content, "utf-8").toString("base64");
@@ -167,6 +171,8 @@ export function createRemoteFsExtension(
       label: "Remote List",
       description:
         "List directory contents on the user's local machine (via WebSocket). The path is relative to the user's workspace root.",
+      promptSnippet:
+        "Use to inspect directories on the user's local machine from cloud mode before reading or writing files there.",
       parameters: ListParams,
       execute: async (_toolCallId, params: Static<typeof ListParams>) => {
         const result = await sendRequest({
@@ -193,6 +199,8 @@ export function createRemoteFsExtension(
       label: "Remote Stat",
       description:
         "Check if a file or directory exists on the user's local machine (via WebSocket). The path is relative to the user's workspace root.",
+      promptSnippet:
+        "Use to check whether a local file or directory exists, and whether it is a file or directory, from cloud mode.",
       parameters: StatParams,
       execute: async (_toolCallId, params: Static<typeof StatParams>) => {
         const result = await sendRequest({ type: "fs.stat", path: params.path });

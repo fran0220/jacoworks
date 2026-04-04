@@ -623,6 +623,8 @@ export function createCronService(
     name: "cron_manage",
     label: "Cron Manager",
     description: "Create, list, delete, manually run, or view history of scheduled jobs. Supports cron expressions, one-shot timestamps, and fixed intervals.",
+    promptSnippet:
+      "Use to create, inspect, run, or delete scheduled jobs and to view their execution history.",
     parameters: CronManageParams,
     async execute(_toolCallId, params: CronManageInput) {
       // Sidecar mode: proxy all calls to Gateway API

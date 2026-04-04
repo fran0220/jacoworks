@@ -184,7 +184,7 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
       } else if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
         const te = event as { toolName?: string };
         plog.debug(event.type, { tool: te.toolName || "?" });
-      } else if (event.type === "auto_compaction_start" || event.type === "auto_compaction_end" || event.type === "auto_retry_start" || event.type === "auto_retry_end") {
+      } else if (event.type === "compaction_start" || event.type === "compaction_end" || event.type === "auto_retry_start" || event.type === "auto_retry_end") {
         plog.info(event.type);
       }
 

@@ -104,6 +104,8 @@ export function createPythonExtension(): ExtensionFactory {
         "Execute Python code. Use for data processing, calculations, file format conversion, " +
         "and tasks where Python libraries are more suitable than bash. " +
         "Code is passed via -c flag; for multi-line scripts, use triple-quoted strings or semicolons.",
+      promptSnippet:
+        "Use for Python-friendly computation, data wrangling, parsing, or format conversion when bash is awkward.",
       parameters: PythonParams,
       execute: async (_toolCallId, params: Static<typeof PythonParams>, signal?: AbortSignal) => {
         const timeoutMs = clampTimeout(params);
