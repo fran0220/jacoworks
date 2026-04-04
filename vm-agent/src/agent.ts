@@ -12,7 +12,7 @@ import {
   createCodingTools,
   loadSkillsFromDir,
 } from "@mariozechner/pi-coding-agent";
-import type { ExtensionFactory, CreateAgentSessionResult } from "@mariozechner/pi-coding-agent";
+import type { ExtensionFactory, CreateAgentSessionResult, Skill } from "@mariozechner/pi-coding-agent";
 import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
@@ -818,6 +818,8 @@ export function getCronService(): CronService | null {
 
 // ─── Skill Discovery (Pi SDK native) ─────────────────
 
+// TODO(pi-sdk): remove this fallback once Skill exposes display-name/display-description
+// metadata from frontmatter. Pi SDK 0.65 only surfaces canonical name/description.
 function readDisplayFields(filePath: string): { displayName?: string; displayDesc?: string } {
   try {
     const content = readFileSync(filePath, "utf-8");
@@ -845,30 +847,34 @@ export interface SkillInfo {
   editable: boolean;
 }
 
+function toSkillInfo(skill: Skill, dir: string): SkillInfo {
+  const { displayName, displayDesc } = readDisplayFields(skill.filePath);
+  const rel = relative(dir, skill.filePath);
+  const parts = rel.split(/[\\/]+/).filter(Boolean);
+  const source = skill.sourceInfo?.source === "user" ? "user" : "builtin";
+
+  return {
+    id: skill.name,
+    name: displayName || skill.name,
+    description: displayDesc || skill.description,
+    group: parts.length >= 3 && parts[0] !== ".." ? parts[0] : undefined,
+    source,
+    editable: source === "user",
+  };
+}
+
 export function listAvailableSkills(): SkillInfo[] {
   const skills: SkillInfo[] = [];
   const seen = new Set<string>();
   const userDir = config.userSkillsDir;
 
-  // Helper: load skills from a directory and tag source (skip duplicates)
   function loadFrom(dir: string, source: "builtin" | "user") {
     if (!existsSync(dir)) return;
-    const result = loadSkillsFromDir({ dir, source: "additional" });
+    const result = loadSkillsFromDir({ dir, source });
     for (const s of result.skills) {
       if (seen.has(s.name)) continue;
       seen.add(s.name);
-      const { displayName, displayDesc } = readDisplayFields(s.filePath);
-      const rel = relative(dir, s.filePath);
-      const parts = rel.split(/[\\/]+/).filter(Boolean);
-      const dirGroup = parts.length >= 3 && parts[0] !== ".." ? parts[0] : undefined;
-      skills.push({
-        id: s.name,
-        name: displayName || s.name,
-        description: displayDesc || s.description,
-        group: dirGroup,
-        source,
-        editable: source === "user",
-      });
+      skills.push(toSkillInfo(s, dir));
     }
   }
 
