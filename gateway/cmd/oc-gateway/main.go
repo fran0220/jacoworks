@@ -731,6 +731,11 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 			return
 		}
 
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
+			return
+		}
+
 		var body provisionBody
 		_ = json.NewDecoder(r.Body).Decode(&body)
 
@@ -878,6 +883,10 @@ func installUserTeamHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Lo
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
 			return
 		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
+			return
+		}
 
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -929,6 +938,10 @@ func jamossProxyHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc
 		}
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
 			return
 		}
 
@@ -1072,6 +1085,10 @@ func installTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Lo
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
 			return
 		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
+			return
+		}
 
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1138,6 +1155,10 @@ func syncContainerConfigHandler(s *store.Store, ocClient *ocpkg.Client, al *audi
 
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
 			return
 		}
 
@@ -1260,6 +1281,10 @@ func userCreateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
 			return
 		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
+			return
+		}
 
 		var detail ocpkg.ProfileDetail
 		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
@@ -1300,6 +1325,10 @@ func userUpdateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
 			return
 		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
+			return
+		}
 
 		name := r.PathValue("name")
 		var detail ocpkg.ProfileDetail
@@ -1330,6 +1359,10 @@ func userDeleteProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 		}
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
 			return
 		}
 
@@ -1395,6 +1428,10 @@ func createTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
 			return
 		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
+			return
+		}
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -1432,6 +1469,10 @@ func updateTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
 			return
 		}
 		user := auth.GetUser(r.Context())
@@ -1472,6 +1513,10 @@ func deleteTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			return
+		}
+		if ocClient.LegacyProtocolDisabled() {
+			writePiMigrationPending(w)
 			return
 		}
 		user := auth.GetUser(r.Context())
@@ -1563,6 +1608,10 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writePiMigrationPending(w http.ResponseWriter) {
+	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": ocpkg.ErrPiMigrationPending.Error()})
 }
 
 func generateToken() (string, error) {

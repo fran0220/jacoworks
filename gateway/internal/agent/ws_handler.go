@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
-	ocpkg "github.com/fran0220/jacoworks/gateway/internal/openclaw"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -80,43 +78,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 
-	// Dial upstream OpenClaw WS
-	upstreamURL := h.oc.UpstreamAddr(info)
-	origin := fmt.Sprintf("http://%s:18789", info.ContainerIP)
-	upstream, _, err := websocket.DefaultDialer.Dial(upstreamURL, http.Header{"Origin": {origin}})
-	if err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Str("url", upstreamURL).Msg("ws relay: dial upstream failed")
-		_ = sendJSON(client, map[string]string{"type": "proxy.error", "error": "upstream unreachable"})
-		return
-	}
-	defer upstream.Close()
-
-	// Server-side handshake (browser never sees challenge frames)
-	if err := ocpkg.HandshakeConn(upstream, info.ContainerToken, 10*time.Second); err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Msg("ws relay: handshake failed")
-		_ = sendJSON(client, map[string]string{"type": "proxy.error", "error": "handshake failed"})
-		return
-	}
-
-	// Auto-pairer disabled: it opens a second operator WS connection which
-	// can cause OpenClaw to disconnect the relay's primary connection.
-	// Device pairing is already handled during provision/config sync.
-
-	// Signal browser that relay is live
-	_ = sendJSON(client, map[string]string{"type": "proxy.ready"})
-
-	log.Info().Str("user_id", userID).Str("container", info.ContainerName).Msg("ws relay: connected")
-	if h.onEvent != nil {
-		h.onEvent(userID, "ws_oc_connected", map[string]interface{}{"container": info.ContainerName})
-	}
-
-	// Bidirectional relay
-	relay(client, upstream, userID)
-
-	log.Info().Str("user_id", userID).Str("container", info.ContainerName).Msg("ws relay: disconnected")
-	if h.onEvent != nil {
-		h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{"container": info.ContainerName})
-	}
+	// TODO(Thread 6): replace the removed OpenClaw upstream dial + handshake with
+	// Pi process management and JSONL/frame translation. Ticket auth, VM wake-up,
+	// relay helpers, and heartbeat filtering stay in place for that swap.
+	log.Info().Str("user_id", userID).Str("container", info.ContainerName).Msg("ws relay: upstream disabled during Pi migration")
+	_ = sendJSON(client, map[string]string{"type": "proxy.error", "error": "Pi upstream not wired yet"})
 }
 
 // relay runs two goroutines forwarding frames in each direction.
