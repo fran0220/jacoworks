@@ -12,7 +12,7 @@ database:
 
 openclaw:
   docker_host: ""  # ignored for Incus — uses local Unix socket
-  image: "openclaw-base"  # Incus image alias (was Docker image name)
+  image: "pi-ready"  # Pi CLI VM image alias (use openclaw-ready until Thread 4 lands)
   port: 18789
   host_ip: "127.0.0.1"
   base_port: 18800

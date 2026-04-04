@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
+	"github.com/fran0220/jacoworks/gateway/internal/pi"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -29,22 +30,22 @@ var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize: 16 * 1024, WriteBufferSize: 16 * 1024,
 }
 
-// OpenClawBackend abstracts VM lifecycle and addressing.
-type OpenClawBackend interface {
+// VMBackend abstracts VM lifecycle and upstream addressing.
+type VMBackend interface {
 	EnsureRunning(ctx context.Context, info *store.ContainerInfo) error
 	UpstreamAddr(info *store.ContainerInfo) string
 }
 
-// WSHandler is a thin WebSocket relay between browser and OpenClaw VM.
+// WSHandler is a thin WebSocket relay between browser and the VM-hosted Pi wrapper.
 type WSHandler struct {
 	store       *store.Store
 	ticketStore *TicketStore
-	oc          OpenClawBackend
+	backend     VMBackend
 	onEvent     EventCallback
 }
 
-func NewWSHandler(s *store.Store, ticketStore *TicketStore, oc OpenClawBackend, onEvent EventCallback) *WSHandler {
-	return &WSHandler{store: s, ticketStore: ticketStore, oc: oc, onEvent: onEvent}
+func NewWSHandler(s *store.Store, ticketStore *TicketStore, backend VMBackend, onEvent EventCallback) *WSHandler {
+	return &WSHandler{store: s, ticketStore: ticketStore, backend: backend, onEvent: onEvent}
 }
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -65,10 +66,15 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.oc.EnsureRunning(r.Context(), info); err != nil {
+	if err := h.backend.EnsureRunning(r.Context(), info); err != nil {
 		log.Warn().Err(err).Str("user_id", userID).Msg("ws relay: EnsureRunning failed")
 		writeWSJSON(w, http.StatusBadGateway, map[string]string{"error": "container not ready"})
 		return
+	}
+
+	// EnsureRunning may refresh container IP/status in the DB.
+	if refreshed, err := h.store.GetContainerInfo(r.Context(), userID, store.ContainerTypeOpenClaw); err == nil {
+		info = refreshed
 	}
 
 	client, err := wsUpgrader.Upgrade(w, r, nil)
@@ -78,11 +84,25 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 
-	// TODO(Thread 6): replace the removed OpenClaw upstream dial + handshake with
-	// Pi process management and JSONL/frame translation. Ticket auth, VM wake-up,
-	// relay helpers, and heartbeat filtering stay in place for that swap.
-	log.Info().Str("user_id", userID).Str("container", info.ContainerName).Msg("ws relay: upstream disabled during Pi migration")
-	_ = sendJSON(client, map[string]string{"type": "proxy.error", "error": "Pi upstream not wired yet"})
+	upstream, _, err := websocket.DefaultDialer.DialContext(r.Context(), h.backend.UpstreamAddr(info), nil)
+	if err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Str("container", info.ContainerName).Msg("ws relay: upstream dial failed")
+		_ = sendJSON(client, map[string]string{"type": "proxy.error", "error": "Pi wrapper not reachable"})
+		return
+	}
+	defer upstream.Close()
+
+	if h.onEvent != nil {
+		h.onEvent(userID, "ws_oc_connected", map[string]interface{}{"container": info.ContainerName})
+		defer h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{"container": info.ContainerName})
+	}
+
+	if err := sendJSON(client, map[string]string{"type": "proxy.ready"}); err != nil {
+		log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: proxy.ready failed")
+		return
+	}
+
+	relay(client, upstream, userID)
 }
 
 // relay runs two goroutines forwarding frames in each direction.
@@ -114,13 +134,22 @@ func relay(client, upstream *websocket.Conn, userID string) {
 			if isHeartbeat(msgType, data) {
 				continue
 			}
-			if msgType == websocket.TextMessage && len(data) < 512 {
+			outType, outData, err := translateUpstreamFrame(msgType, data)
+			if err != nil {
+				log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: translate upstream frame failed")
+				outType = websocket.TextMessage
+				outData = mustMarshalRelayError(err)
+			}
+			if outData == nil {
+				continue
+			}
+			if outType == websocket.TextMessage && len(outData) < 512 {
 				log.Debug().Str("user_id", userID).Str("frame", string(data)).Msg("ws relay: upstream→client")
 			} else {
-				log.Debug().Str("user_id", userID).Int("size", len(data)).Msg("ws relay: upstream→client (large)")
+				log.Debug().Str("user_id", userID).Int("size", len(outData)).Msg("ws relay: upstream→client (large)")
 			}
 			_ = client.SetWriteDeadline(time.Now().Add(wsWriteWait))
-			if err := client.WriteMessage(msgType, data); err != nil {
+			if err := client.WriteMessage(outType, outData); err != nil {
 				log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: write to client failed")
 				return
 			}
@@ -138,13 +167,33 @@ func relay(client, upstream *websocket.Conn, userID string) {
 				}
 				return
 			}
-			if msgType == websocket.TextMessage {
-				log.Debug().Str("user_id", userID).Str("frame", string(data)).Msg("ws relay: client→upstream")
+			payloads, replies, err := translateClientFrame(msgType, data)
+			if err != nil {
+				log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: translate client frame failed")
+				if err := sendJSON(client, map[string]string{"type": "error", "error": err.Error()}); err != nil {
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: client error reply failed")
+				}
+				continue
 			}
-			_ = upstream.SetWriteDeadline(time.Now().Add(wsWriteWait))
-			if err := upstream.WriteMessage(msgType, data); err != nil {
-				log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: write to upstream failed")
-				return
+			if len(payloads) == 0 && len(replies) == 0 {
+				continue
+			}
+			for _, payload := range payloads {
+				if msgType == websocket.TextMessage {
+					log.Debug().Str("user_id", userID).Str("frame", string(payload)).Msg("ws relay: client→upstream")
+				}
+				_ = upstream.SetWriteDeadline(time.Now().Add(wsWriteWait))
+				if err := upstream.WriteMessage(websocket.TextMessage, payload); err != nil {
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: write to upstream failed")
+					return
+				}
+			}
+			for _, reply := range replies {
+				_ = client.SetWriteDeadline(time.Now().Add(wsWriteWait))
+				if err := client.WriteMessage(websocket.TextMessage, reply); err != nil {
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: write ack to client failed")
+					return
+				}
 			}
 		}
 	}()
@@ -205,6 +254,48 @@ func sendJSON(conn *websocket.Conn, v interface{}) error {
 		return err
 	}
 	return conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func translateUpstreamFrame(msgType int, data []byte) (int, []byte, error) {
+	if msgType != websocket.TextMessage {
+		return msgType, data, nil
+	}
+	translated, err := pi.TranslatePiToOC(data)
+	if err != nil {
+		return 0, nil, err
+	}
+	if translated == nil {
+		return 0, nil, nil
+	}
+	return websocket.TextMessage, translated, nil
+}
+
+func translateClientFrame(msgType int, data []byte) ([][]byte, [][]byte, error) {
+	if msgType != websocket.TextMessage {
+		return [][]byte{data}, nil, nil
+	}
+	cmd, err := pi.ParseOCCommand(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cmd == nil || cmd.Ignore || cmd.Payload == "" {
+		return nil, nil, nil
+	}
+
+	payload := []byte(cmd.Payload)
+	replies := make([][]byte, 0, 1)
+	if len(cmd.Ack) > 0 {
+		replies = append(replies, cmd.Ack)
+	}
+	return [][]byte{payload}, replies, nil
+}
+
+func mustMarshalRelayError(err error) []byte {
+	data, marshalErr := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+	if marshalErr != nil {
+		return []byte(`{"type":"error","error":"relay translation failed"}`)
+	}
+	return data
 }
 
 func writeWSJSON(w http.ResponseWriter, status int, payload interface{}) {

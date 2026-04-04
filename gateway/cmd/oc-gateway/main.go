@@ -33,7 +33,7 @@ import (
 	filespkg "github.com/fran0220/jacoworks/gateway/internal/files"
 	incuspkg "github.com/fran0220/jacoworks/gateway/internal/incus"
 	"github.com/fran0220/jacoworks/gateway/internal/middleware"
-	ocpkg "github.com/fran0220/jacoworks/gateway/internal/openclaw"
+	pipkg "github.com/fran0220/jacoworks/gateway/internal/pi"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
@@ -152,7 +152,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("init incus client")
 	}
-	ocClient := ocpkg.NewClient(incusRT, cfg.OpenClaw.DataRoot, cfg.OpenClaw.HostIP, cfg.OpenClaw.Image, cfg.GetLLM, s)
+	ocClient := pipkg.NewClient(incusRT, cfg.OpenClaw.DataRoot, cfg.OpenClaw.HostIP, cfg.OpenClaw.Image, cfg.GetLLM, s, cfg.Server.PublicURL)
 
 	// Freeze disabled: VMs stay running permanently for instant WS connection.
 	// Previously: freeze after 1h idle → unpause + health poll added 5-30s to every reconnect.
@@ -714,7 +714,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func selfProvisionHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	type provisionBody struct {
 		ContainerType string `json:"container_type"`
 	}
@@ -728,11 +728,6 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
 			return
 		}
 
@@ -794,7 +789,7 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 		go func() {
 			ip, err := ocClient.Provision(containerName, userID, containerToken, hostPort, vncPort)
 			if err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision failed")
+				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async pi provision failed")
 				return
 			}
 
@@ -802,24 +797,24 @@ func selfProvisionHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logg
 			defer bgCancel()
 
 			if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeOpenClaw, containerName, ip, containerToken, hostPort, vncPort); err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async openclaw provision: persist failed")
+				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async pi provision: persist failed")
 				return
 			}
 
-			log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async openclaw provision complete")
+			log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async pi provision complete")
 		}()
 	}
 }
 
-func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
+func userTeamsHandler(s *store.Store, ocClient *pipkg.Client) http.HandlerFunc {
 	type response struct {
 		Installed        string                  `json:"installed"`
 		ActiveSessionKey string                  `json:"activeSessionKey"`
-		Available        []ocpkg.TemplateSummary `json:"available"`
-		Profiles         []ocpkg.ProfileSummary  `json:"profiles"`
+		Available        []pipkg.TemplateSummary `json:"available"`
+		Profiles         []pipkg.ProfileSummary  `json:"profiles"`
 	}
 
-	leaderSessionKey := func(tmpl *ocpkg.TemplateSummary) string {
+	leaderSessionKey := func(tmpl *pipkg.TemplateSummary) string {
 		if tmpl == nil {
 			return ""
 		}
@@ -848,7 +843,7 @@ func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
 			return
 		}
 		if available == nil {
-			available = []ocpkg.TemplateSummary{}
+			available = []pipkg.TemplateSummary{}
 		}
 
 		installed, _ := s.GetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw)
@@ -861,7 +856,7 @@ func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
 
 		profiles := ocClient.ListProfilesMerged(user.ID)
 		if profiles == nil {
-			profiles = []ocpkg.ProfileSummary{}
+			profiles = []pipkg.ProfileSummary{}
 		}
 
 		writeJSON(w, http.StatusOK, response{
@@ -873,7 +868,7 @@ func userTeamsHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
 	}
 }
 
-func installUserTeamHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func installUserTeamHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	type installRequest struct {
 		Template string `json:"template"`
 	}
@@ -929,7 +924,7 @@ func installUserTeamHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Lo
 
 const jamossProxyPrefix = "/api/jamoss"
 
-func jamossProxyHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
+func jamossProxyHandler(s *store.Store, ocClient *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1075,7 +1070,7 @@ func isAllowedJaMOSSWritePath(p string) bool {
 	}
 }
 
-func installTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func installTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	type installRequest struct {
 		Template string `json:"template"`
 	}
@@ -1122,9 +1117,9 @@ func installTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Lo
 		result, err := ocClient.InstallTemplate(r.Context(), info, req.Template)
 		if err != nil {
 			switch {
-			case errors.Is(err, ocpkg.ErrTemplateNotFound):
+			case errors.Is(err, pipkg.ErrTemplateNotFound):
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			case errors.Is(err, ocpkg.ErrTemplatesDirNotFound):
+			case errors.Is(err, pipkg.ErrTemplatesDirNotFound):
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 			default:
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1137,7 +1132,7 @@ func installTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Lo
 	}
 }
 
-func syncContainerConfigHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func syncContainerConfigHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		user := auth.GetUser(r.Context())
@@ -1176,7 +1171,7 @@ func syncContainerConfigHandler(s *store.Store, ocClient *ocpkg.Client, al *audi
 	}
 }
 
-func restartContainerHandler(ocClient *ocpkg.Client, s *store.Store, al *audit.Logger) http.HandlerFunc {
+func restartContainerHandler(ocClient *pipkg.Client, s *store.Store, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		user := auth.GetUser(r.Context())
@@ -1219,7 +1214,7 @@ func restartContainerHandler(ocClient *ocpkg.Client, s *store.Store, al *audit.L
 
 // ── Profile CRUD handlers (user-scoped) ──────────────────────
 
-func userListProfilesHandler(s *store.Store, ocClient *ocpkg.Client) http.HandlerFunc {
+func userListProfilesHandler(s *store.Store, ocClient *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1235,7 +1230,7 @@ func userListProfilesHandler(s *store.Store, ocClient *ocpkg.Client) http.Handle
 	}
 }
 
-func userGetProfileHandler(ocClient *ocpkg.Client) http.HandlerFunc {
+func userGetProfileHandler(ocClient *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1250,11 +1245,11 @@ func userGetProfileHandler(ocClient *ocpkg.Client) http.HandlerFunc {
 		// Try user profile first, fall back to system profile
 		detail, err := ocClient.UserGetProfileDetail(user.ID, name)
 		if err != nil {
-			if errors.Is(err, ocpkg.ErrProfileNotFound) {
+			if errors.Is(err, pipkg.ErrProfileNotFound) {
 				// Try system profile
-				detail, err = ocpkg.GetProfileDetail(name)
+				detail, err = pipkg.GetProfileDetail(name)
 				if err != nil {
-					if errors.Is(err, ocpkg.ErrProfileNotFound) {
+					if errors.Is(err, pipkg.ErrProfileNotFound) {
 						writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
 						return
 					}
@@ -1270,7 +1265,7 @@ func userGetProfileHandler(ocClient *ocpkg.Client) http.HandlerFunc {
 	}
 }
 
-func userCreateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func userCreateProfileHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1286,7 +1281,7 @@ func userCreateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 			return
 		}
 
-		var detail ocpkg.ProfileDetail
+		var detail pipkg.ProfileDetail
 		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
@@ -1314,7 +1309,7 @@ func userCreateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 	}
 }
 
-func userUpdateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func userUpdateProfileHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1331,7 +1326,7 @@ func userUpdateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 		}
 
 		name := r.PathValue("name")
-		var detail ocpkg.ProfileDetail
+		var detail pipkg.ProfileDetail
 		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
@@ -1350,7 +1345,7 @@ func userUpdateProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 	}
 }
 
-func userDeleteProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func userDeleteProfileHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -1368,7 +1363,7 @@ func userDeleteProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 
 		name := r.PathValue("name")
 		if err := ocClient.UserDeleteProfile(user.ID, name); err != nil {
-			if errors.Is(err, ocpkg.ErrProfileNotFound) {
+			if errors.Is(err, pipkg.ErrProfileNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
 				return
 			}
@@ -1384,7 +1379,7 @@ func userDeleteProfileHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.
 
 // ── Template CRUD handlers ───────────────────────────────────
 
-func listTemplatesAdminHandler(ocClient *ocpkg.Client) http.HandlerFunc {
+func listTemplatesAdminHandler(ocClient *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
@@ -1396,13 +1391,13 @@ func listTemplatesAdminHandler(ocClient *ocpkg.Client) http.HandlerFunc {
 			return
 		}
 		if templates == nil {
-			templates = []ocpkg.TemplateSummary{}
+			templates = []pipkg.TemplateSummary{}
 		}
 		writeJSON(w, http.StatusOK, templates)
 	}
 }
 
-func getTemplateHandler(ocClient *ocpkg.Client) http.HandlerFunc {
+func getTemplateHandler(ocClient *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
@@ -1411,7 +1406,7 @@ func getTemplateHandler(ocClient *ocpkg.Client) http.HandlerFunc {
 		name := r.PathValue("name")
 		detail, err := ocClient.GetTemplateDetail(name)
 		if err != nil {
-			if errors.Is(err, ocpkg.ErrTemplateNotFound) {
+			if errors.Is(err, pipkg.ErrTemplateNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
 				return
 			}
@@ -1422,7 +1417,7 @@ func getTemplateHandler(ocClient *ocpkg.Client) http.HandlerFunc {
 	}
 }
 
-func createTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func createTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
@@ -1438,7 +1433,7 @@ func createTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 			return
 		}
 
-		var detail ocpkg.TemplateDetail
+		var detail pipkg.TemplateDetail
 		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
@@ -1465,7 +1460,7 @@ func createTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 	}
 }
 
-func updateTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func updateTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
@@ -1482,7 +1477,7 @@ func updateTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 		}
 
 		name := r.PathValue("name")
-		var detail ocpkg.TemplateDetail
+		var detail pipkg.TemplateDetail
 		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
@@ -1490,7 +1485,7 @@ func updateTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 		detail.Name = name
 
 		if _, err := ocClient.GetTemplateDetail(name); err != nil {
-			if errors.Is(err, ocpkg.ErrTemplateNotFound) {
+			if errors.Is(err, pipkg.ErrTemplateNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
 				return
 			}
@@ -1509,7 +1504,7 @@ func updateTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 	}
 }
 
-func deleteTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Logger) http.HandlerFunc {
+func deleteTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ocClient == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
@@ -1527,7 +1522,7 @@ func deleteTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 
 		name := r.PathValue("name")
 		if err := ocClient.DeleteTemplate(name); err != nil {
-			if errors.Is(err, ocpkg.ErrTemplateNotFound) {
+			if errors.Is(err, pipkg.ErrTemplateNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
 				return
 			}
@@ -1542,7 +1537,7 @@ func deleteTemplateHandler(s *store.Store, ocClient *ocpkg.Client, al *audit.Log
 
 // ── Propagation helpers ──────────────────────────────────────
 
-func propagateToUserContainer(s *store.Store, ocClient *ocpkg.Client, userID string) {
+func propagateToUserContainer(s *store.Store, ocClient *pipkg.Client, userID string) {
 	ctx := context.Background()
 	info, err := s.GetContainerInfo(ctx, userID, store.ContainerTypeOpenClaw)
 	if err != nil {
@@ -1563,7 +1558,7 @@ func propagateToUserContainer(s *store.Store, ocClient *ocpkg.Client, userID str
 	}
 }
 
-func propagateToAllOpenClawContainers(s *store.Store, ocClient *ocpkg.Client) {
+func propagateToAllOpenClawContainers(s *store.Store, ocClient *pipkg.Client) {
 	ctx := context.Background()
 	containers, err := s.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
 	if err != nil {
@@ -1583,7 +1578,7 @@ func propagateToAllOpenClawContainers(s *store.Store, ocClient *ocpkg.Client) {
 	}
 }
 
-func propagateTemplateToContainers(s *store.Store, ocClient *ocpkg.Client, templateName string) {
+func propagateTemplateToContainers(s *store.Store, ocClient *pipkg.Client, templateName string) {
 	ctx := context.Background()
 	containers, err := s.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
 	if err != nil {
@@ -1611,7 +1606,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writePiMigrationPending(w http.ResponseWriter) {
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": ocpkg.ErrPiMigrationPending.Error()})
+	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": pipkg.ErrPiMigrationPending.Error()})
 }
 
 func generateToken() (string, error) {
