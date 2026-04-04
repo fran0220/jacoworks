@@ -1,0 +1,10 @@
+{
+  "defaultProvider": "proxy-anthropic",
+  "defaultModel": "claude-sonnet-4-6",
+  "defaultThinkingLevel": "off",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 32768,
+    "keepRecentTokens": 40000
+  }
+}
