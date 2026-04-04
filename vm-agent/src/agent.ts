@@ -1,5 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join, resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,53 +235,18 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
   });
 }
 
-// ─── Document Processing Packages ───────────────────
+// ─── Document Processing Package Resolution ─────────
 
-const DOC_PACKAGES: Record<string, string> = {
-  exceljs: "^4.4.0",
-  "csv-parse": "^6.1.0",
-};
-
-function ensureDocPackages(dir: string): boolean {
-  const nmDir = join(dir, "node_modules");
-  if (existsSync(join(nmDir, "exceljs")) && existsSync(join(nmDir, "csv-parse"))) return true;
-
-  log.info("installing document processing packages");
-  try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "package.json"),
-      JSON.stringify({ name: "jacoworks-doc-packages", private: true, dependencies: DOC_PACKAGES }),
-    );
-    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-    execSync(`${npmCmd} install --production --no-audit --no-fund`, {
-      cwd: dir,
-      timeout: 120_000,
-      stdio: "pipe",
-    });
-    log.info("document processing packages installed");
-    return true;
-  } catch (err) {
-    log.warn("doc packages install failed", { error: err instanceof Error ? err.message : String(err) });
-    return false;
-  }
-}
-
-function setupNodePath(cfg: Config): void {
+function setupNodePath(): void {
   const sep = process.platform === "win32" ? ";" : ":";
   const nodePaths: string[] = [];
 
-  // 1. DOC_PACKAGES_DIR from sidecar (production: extracted from bundled tar.gz)
+  // 1. DOC_PACKAGES_DIR from the sidecar launcher (production extracted deps)
   const docPkgDir = process.env.DOC_PACKAGES_DIR;
   if (docPkgDir) {
     const docNm = join(docPkgDir, "node_modules");
     if (existsSync(docNm)) {
       nodePaths.push(docNm);
-    } else {
-      // First-time setup: install via npm (fallback when tar.gz not bundled)
-      if (ensureDocPackages(docPkgDir)) {
-        nodePaths.push(join(docPkgDir, "node_modules"));
-      }
     }
   }
 
@@ -329,7 +293,7 @@ export function initAgent(cfg: Config) {
   }
 
   // 设置 NODE_PATH 让文档处理脚本能找到预装包
-  setupNodePath(cfg);
+  setupNodePath();
 
   log.info("agent initialized", {
     model: `${cfg.primaryProvider}/${cfg.primaryModel}`,
