@@ -218,72 +218,49 @@ type SharedStderrBuf = Arc<Mutex<Vec<String>>>;
 
 const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 const LOG_KEEP_FILES: usize = 3;
-static AGENT_LOG_LOCK: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
+const PI_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const PI_SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const READY_TIMEOUT: Duration = Duration::from_secs(10);
+static AGENT_LOG_LOCK: std::sync::LazyLock<Mutex<()>> =
+    std::sync::LazyLock::new(|| Mutex::new(()));
+static PI_SESSION_CLEANUP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 struct AgentProcess {
     child: Child,
     stdin: SharedStdin,
+    session_id: String,
     workspace: PathBuf,
     stderr_buf: SharedStderrBuf,
+    last_access: Instant,
 }
 
-static AGENT_PROCESS: std::sync::LazyLock<Mutex<Option<AgentProcess>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
+static AGENT_PROCESSES: std::sync::LazyLock<Mutex<HashMap<String, AgentProcess>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Returns the running agent's workspace directory (used by file-card path resolution).
 pub fn agent_workspace() -> Option<PathBuf> {
-    AGENT_PROCESS
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|p| p.workspace.clone()))
+    let mut processes = AGENT_PROCESSES.lock().ok()?;
+    prune_exited_processes(&mut processes);
+
+    let mut selected: Option<(Duration, PathBuf)> = None;
+    for process in processes.values() {
+        let idle = process.last_access.elapsed();
+        let should_replace = selected
+            .as_ref()
+            .map(|(best_idle, _)| idle < *best_idle)
+            .unwrap_or(true);
+        if should_replace {
+            selected = Some((idle, process.workspace.clone()));
+        }
+    }
+
+    selected.map(|(_, workspace)| workspace)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentStatus {
     pub running: bool,
     pub transport: String,
-}
-
-// ───── Sidecar binary resolution ──────────────────────────────
-
-/// Look for the bun-compiled sidecar binary next to the main executable.
-/// Returns None in dev mode (binary not bundled).
-fn find_sidecar_binary() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-
-    // Tauri may bundle as "vm-agent" (stripped triple) or "vm-agent-{triple}"
-    let triple = option_env!("TARGET_TRIPLE")
-        .map(str::to_string)
-        .or_else(|| std::env::var("TARGET_TRIPLE").ok())
-        .filter(|v| !v.is_empty());
-
-    let mut candidates = Vec::new();
-    if cfg!(windows) {
-        if let Some(triple) = &triple {
-            candidates.push(format!("vm-agent-{}.exe", triple));
-        }
-        candidates.push("vm-agent.exe".to_string());
-    } else {
-        if let Some(triple) = &triple {
-            candidates.push(format!("vm-agent-{}", triple));
-        }
-        candidates.push("vm-agent".to_string());
-    }
-
-    for name in candidates {
-        let path = dir.join(&name);
-        if path.exists() {
-            // Skip tiny dev placeholders; real bun-compiled binaries are much larger.
-            if let Ok(meta) = path.metadata() {
-                if meta.len() < 1024 {
-                    continue;
-                }
-            }
-            return Some(path);
-        }
-    }
-    None
 }
 
 fn agent_log_dir(app: &AppHandle) -> Option<PathBuf> {
@@ -330,17 +307,33 @@ fn append_log_line(app: &AppHandle, source: &str, line: &str) {
     }
 }
 
-fn handle_agent_line(app: &AppHandle, line: &str, source: &str) -> bool {
+fn handle_session_line(
+    app: &AppHandle,
+    line: &str,
+    source: &str,
+    session_id: Option<&str>,
+) -> bool {
     append_log_line(app, source, line);
-    emit_json_or_log(app, line, source)
+    emit_json_or_log(app, line, source, session_id)
 }
 
-fn emit_json_or_log(app: &AppHandle, line: &str, source: &str) -> bool {
-    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(line) {
+fn emit_json_or_log(
+    app: &AppHandle,
+    line: &str,
+    source: &str,
+    session_id: Option<&str>,
+) -> bool {
+    if let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(line) {
+        if let (Some(session_id), Some(object)) = (session_id, payload.as_object_mut()) {
+            object
+                .entry("session_id".to_string())
+                .or_insert_with(|| serde_json::Value::String(session_id.to_string()));
+        }
+
         let is_ready = payload
             .get("type")
             .and_then(|value| value.as_str())
-            .map(|value| value == "ready")
+            .map(|value| value == "session")
             .unwrap_or(false);
         let _ = app.emit("agent-rpc-event", payload);
         return is_ready;
@@ -350,6 +343,7 @@ fn emit_json_or_log(app: &AppHandle, line: &str, source: &str) -> bool {
             serde_json::json!({
                 "source": source,
                 "line": line,
+                "session_id": session_id,
             }),
         );
         return false;
@@ -364,458 +358,742 @@ fn is_running(process: &mut AgentProcess) -> bool {
     matches!(process.child.try_wait(), Ok(None))
 }
 
-fn push_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
-    if !candidates.iter().any(|existing| existing == &candidate) {
-        candidates.push(candidate);
-    }
+fn mark_process_access(process: &mut AgentProcess) {
+    process.last_access = Instant::now();
 }
 
-fn resolve_agent_paths(agent_dir: &str) -> Result<(PathBuf, PathBuf), String> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    let requested = PathBuf::from(agent_dir);
-    push_candidate(&mut candidates, requested.clone());
+fn prune_exited_processes(processes: &mut HashMap<String, AgentProcess>) {
+    processes.retain(|_, process| is_running(process));
+}
 
-    if requested.is_relative() {
-        if let Ok(cwd) = std::env::current_dir() {
-            push_candidate(&mut candidates, cwd.join(&requested));
-        }
-    }
+fn normalize_proxy_url(url: &str) -> String {
+    url.trim_end_matches('/').to_string()
+}
+
+fn pi_agent_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?;
+    Ok(home.join(".pi").join("agent"))
+}
+
+fn resolve_pi_config_dir() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
 
     if let Ok(cwd) = std::env::current_dir() {
-        push_candidate(&mut candidates, cwd.join("vm-agent"));
-        push_candidate(&mut candidates, cwd.join("../vm-agent"));
-        push_candidate(&mut candidates, cwd.join("../../vm-agent"));
+        candidates.push(cwd.join("pi-config"));
     }
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    push_candidate(&mut candidates, manifest_dir.join("../vm-agent"));
-    push_candidate(&mut candidates, manifest_dir.join("../../vm-agent"));
+    candidates.push(manifest_dir.join("../../pi-config"));
 
-    if let Some(desktop_dir) = manifest_dir.parent() {
-        push_candidate(&mut candidates, desktop_dir.join("../vm-agent"));
-    }
-    if let Some(repo_dir) = manifest_dir.parent().and_then(Path::parent) {
-        push_candidate(&mut candidates, repo_dir.join("vm-agent"));
-    }
-
-    let mut tried_entries: Vec<String> = Vec::new();
-    for candidate in candidates {
-        let resolved_dir = dunce::canonicalize(&candidate).unwrap_or(candidate);
-        let entry = resolved_dir.join("dist").join("index.js");
-        tried_entries.push(entry.display().to_string());
-        if entry.exists() {
-            return Ok((resolved_dir, entry));
-        }
-    }
-
-    Err(format!(
-        "Agent entry not found. requested='{}'; tried: {}",
-        agent_dir,
-        tried_entries.join(", ")
-    ))
+    candidates.into_iter().find(|candidate| candidate.exists())
 }
 
-#[tauri::command]
-pub async fn start_agent(
-    app: AppHandle,
-    agent_dir: String,
-    env_vars: HashMap<String, String>,
-) -> Result<AgentStatus, String> {
-    eprintln!("[sidecar] start_agent called: agent_dir={}", agent_dir);
-    let (ready_tx, ready_rx) = mpsc::channel::<()>();
+fn resolve_skill_paths(app: &AppHandle) -> Vec<String> {
+    let mut skills_paths: Vec<String> = Vec::new();
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir.join("resources").join("skills");
+        if bundled.exists() {
+            skills_paths.push(bundled.to_string_lossy().to_string());
+        }
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dev_skills = manifest_dir.join("../../vm-agent/skills");
+    if let Ok(canonical) = dunce::canonicalize(&dev_skills) {
+        let canonical_str = canonical.to_string_lossy().to_string();
+        if canonical.exists() && !skills_paths.iter().any(|p| p == &canonical_str) {
+            skills_paths.push(canonical_str);
+        }
+    }
+
+    skills_paths
+}
+
+fn infer_provider_for_model(model: &str) -> String {
+    if model.starts_with("claude-") {
+        return "proxy-claude".to_string();
+    }
+    if model.starts_with("gpt-") {
+        return "proxy-gpt".to_string();
+    }
+    if model.starts_with("gemini-") {
+        return "proxy-gemini".to_string();
+    }
+    if model.starts_with("grok-") {
+        return "proxy-grok".to_string();
+    }
+    if model.starts_with("glm-") {
+        return "proxy-glm".to_string();
+    }
+
+    "proxy-claude".to_string()
+}
+
+fn resolve_primary_selection(env_vars: &HashMap<String, String>) -> (String, String) {
+    let raw_model = env_vars
+        .get("PRIMARY_MODEL")
+        .cloned()
+        .unwrap_or_else(|| "claude-opus-4-6".to_string());
+    let raw_provider = env_vars
+        .get("PRIMARY_PROVIDER")
+        .cloned()
+        .unwrap_or_default();
+
+    if let Some((provider, model)) = raw_model.split_once('/') {
+        let provider = if raw_provider.is_empty() {
+            provider.to_string()
+        } else {
+            raw_provider
+        };
+        return (provider, model.to_string());
+    }
+
+    let provider = if raw_provider.is_empty() {
+        infer_provider_for_model(&raw_model)
+    } else {
+        raw_provider
+    };
+
+    (provider, raw_model)
+}
+
+fn build_models_config(proxy_url: &str) -> serde_json::Value {
+    let proxy_url = normalize_proxy_url(proxy_url);
+    let openai_proxy_url = format!("{}/v1", proxy_url);
+
+    serde_json::json!({
+        "providers": {
+            "proxy-claude": {
+                "baseUrl": proxy_url,
+                "apiKey": "LLM_PROXY_KEY",
+                "api": "anthropic-messages",
+                "models": [
+                    {
+                        "id": "claude-sonnet-4-6",
+                        "name": "Claude Sonnet 4.6",
+                        "reasoning": true,
+                        "input": ["text", "image"],
+                        "contextWindow": 200000,
+                        "maxTokens": 16384,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    },
+                    {
+                        "id": "claude-opus-4-6",
+                        "name": "Claude Opus 4.6",
+                        "reasoning": true,
+                        "input": ["text", "image"],
+                        "contextWindow": 200000,
+                        "maxTokens": 16384,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    },
+                    {
+                        "id": "claude-haiku-4-5",
+                        "name": "Claude Haiku 4.5",
+                        "reasoning": false,
+                        "input": ["text", "image"],
+                        "contextWindow": 200000,
+                        "maxTokens": 8192,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    }
+                ]
+            },
+            "proxy-gpt": {
+                "baseUrl": openai_proxy_url,
+                "apiKey": "LLM_PROXY_KEY",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "gpt-5.3-codex",
+                        "name": "GPT-5.3 Codex",
+                        "reasoning": true,
+                        "input": ["text"],
+                        "contextWindow": 128000,
+                        "maxTokens": 16384,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    },
+                    {
+                        "id": "gpt-5.4",
+                        "name": "GPT-5.4",
+                        "reasoning": true,
+                        "input": ["text", "image"],
+                        "contextWindow": 128000,
+                        "maxTokens": 16384,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    }
+                ]
+            },
+            "proxy-gemini": {
+                "baseUrl": openai_proxy_url,
+                "apiKey": "LLM_PROXY_KEY",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "gemini-3.1-pro-preview",
+                        "name": "Gemini 3.1 Pro",
+                        "reasoning": true,
+                        "input": ["text", "image"],
+                        "contextWindow": 1000000,
+                        "maxTokens": 8192,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    },
+                    {
+                        "id": "gemini-3-flash-preview",
+                        "name": "Gemini 3 Flash",
+                        "reasoning": false,
+                        "input": ["text", "image"],
+                        "contextWindow": 1000000,
+                        "maxTokens": 8192,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    }
+                ]
+            },
+            "proxy-grok": {
+                "baseUrl": openai_proxy_url,
+                "apiKey": "LLM_PROXY_KEY",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "grok-4.1-fast",
+                        "name": "Grok 4.1 Fast",
+                        "reasoning": false,
+                        "input": ["text"],
+                        "contextWindow": 128000,
+                        "maxTokens": 8192,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    }
+                ]
+            },
+            "proxy-glm": {
+                "baseUrl": openai_proxy_url,
+                "apiKey": "LLM_PROXY_KEY",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "glm-5",
+                        "name": "GLM-5",
+                        "reasoning": false,
+                        "input": ["text", "image"],
+                        "contextWindow": 128000,
+                        "maxTokens": 16384,
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                    }
+                ]
+            }
+        }
+    })
+}
+
+fn build_settings_config(
+    env_vars: &HashMap<String, String>,
+    skill_paths: Vec<String>,
+) -> serde_json::Value {
+    let (default_provider, default_model) = resolve_primary_selection(env_vars);
+    let reserve_tokens = env_vars
+        .get("COMPACTION_RESERVE_TOKENS")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(32768);
+    let keep_recent_tokens = env_vars
+        .get("COMPACTION_KEEP_RECENT_TOKENS")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(40000);
+
+    serde_json::json!({
+        "defaultProvider": default_provider,
+        "defaultModel": default_model,
+        "quietStartup": true,
+        "compaction": {
+            "reserveTokens": reserve_tokens,
+            "keepRecentTokens": keep_recent_tokens,
+        },
+        "skills": skill_paths,
+    })
+}
+
+fn sync_pi_extensions(pi_dir: &Path, app: &AppHandle) {
+    let extensions_dir = pi_dir.join("extensions");
+    if let Err(error) = fs::create_dir_all(&extensions_dir) {
+        append_log_line(
+            app,
+            "sidecar",
+            &format!("Failed to create Pi extensions dir: {}", error),
+        );
+        return;
+    }
+
+    let Some(config_dir) = resolve_pi_config_dir() else {
+        append_log_line(app, "sidecar", "pi-config directory not found; skipping custom extension sync");
+        return;
+    };
+
+    for file_name in ["visual.ts", "cron-proxy.ts", "image-gen.ts"] {
+        let source = config_dir.join("extensions").join(file_name);
+        if !source.is_file() {
+            continue;
+        }
+
+        let destination = extensions_dir.join(file_name);
+        if let Err(error) = fs::copy(&source, &destination) {
+            append_log_line(
+                app,
+                "sidecar",
+                &format!(
+                    "Failed to sync Pi extension {}: {}",
+                    source.display(),
+                    error
+                ),
+            );
+        }
+    }
+}
+
+fn write_pi_config(app: &AppHandle, env_vars: &HashMap<String, String>) -> Result<PathBuf, String> {
+    let proxy_url = env_vars
+        .get("LLM_PROXY_URL")
+        .cloned()
+        .ok_or_else(|| "Missing LLM_PROXY_URL for Pi config generation".to_string())?;
+    let pi_dir = pi_agent_dir()?;
+    fs::create_dir_all(&pi_dir)
+        .map_err(|error| format!("Failed to create Pi agent dir: {}", error))?;
+
+    let user_skills_dir = user_skills_dir(app)?;
+    fs::create_dir_all(&user_skills_dir)
+        .map_err(|error| format!("Failed to create skills directory: {}", error))?;
+
+    let mut skills = resolve_skill_paths(app);
+    let user_skills = user_skills_dir.to_string_lossy().to_string();
+    if !skills.iter().any(|path| path == &user_skills) {
+        skills.push(user_skills);
+    }
+
+    let models_path = pi_dir.join("models.json");
+    let settings_path = pi_dir.join("settings.json");
+    let models = build_models_config(&proxy_url);
+    let settings = build_settings_config(env_vars, skills);
+
+    let models_json = serde_json::to_vec_pretty(&models)
+        .map_err(|error| format!("Failed to encode models.json: {}", error))?;
+    let settings_json = serde_json::to_vec_pretty(&settings)
+        .map_err(|error| format!("Failed to encode settings.json: {}", error))?;
+
+    fs::write(&models_path, models_json)
+        .map_err(|error| format!("Failed to write models.json: {}", error))?;
+    fs::write(&settings_path, settings_json)
+        .map_err(|error| format!("Failed to write settings.json: {}", error))?;
+    sync_pi_extensions(&pi_dir, app);
+
+    Ok(pi_dir)
+}
+
+fn interrupt_process(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        if pid > 0 {
+            unsafe {
+                libc::killpg(pid, libc::SIGINT);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = child.kill();
+    }
+}
+
+fn stop_process(process: &mut AgentProcess) {
+    kill_process_tree(&mut process.child);
+}
+
+fn cleanup_idle_sessions(app: &AppHandle) {
+    let mut removed = Vec::new();
 
     {
-        let mut proc = AGENT_PROCESS.lock().unwrap();
-
-        if let Some(existing) = proc.as_mut() {
-            if is_running(existing) {
-                return Ok(AgentStatus {
-                    running: true,
-                    transport: "rpc-stdio".to_string(),
-                });
-            }
-            *proc = None;
-        }
-
-        // User skills directory: <app_data>/skills
-        let user_skills_dir = app
-            .path()
-            .app_data_dir()
-            .map(|dir| dir.join("skills"))
-            .unwrap_or_default();
-        let memory_root = app
-            .path()
-            .app_data_dir()
-            .map(|dir| dir.join("memory"))
-            .unwrap_or_default();
-
-        // Dual mode: production (compiled binary) vs dev (node + dist/index.js)
-        let (mut cmd, resolved_agent_dir) = if let Some(binary) = find_sidecar_binary() {
-            // Production: bun-compiled sidecar binary
-            eprintln!("[sidecar] Using compiled binary: {}", binary.display());
-            let bin_dir = binary.parent().unwrap_or(Path::new(".")).to_path_buf();
-            let mut c = Command::new(&binary);
-            c.current_dir(&bin_dir);
-
-            // PI_PACKAGE_DIR: resource dir contains pi-meta/package.json
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                let pi_meta = resource_dir.join("resources").join("pi-meta");
-                if pi_meta.exists() {
-                    c.env("PI_PACKAGE_DIR", pi_meta.to_string_lossy().as_ref());
+        let mut processes = AGENT_PROCESSES.lock().unwrap();
+        let idle_ids: Vec<String> = processes
+            .iter_mut()
+            .filter_map(|(session_id, process)| {
+                if !is_running(process) || process.last_access.elapsed() >= PI_SESSION_IDLE_TIMEOUT {
+                    Some(session_id.clone())
+                } else {
+                    None
                 }
-            }
-            (c, bin_dir)
-        } else {
-            // Dev fallback: bun + src/index.ts (vm-agent uses bun:sqlite, node cannot run it)
-            eprintln!("[sidecar] No compiled binary found, trying bun dev mode");
-            let (resolved_dir, _entry) = resolve_agent_paths(&agent_dir)?;
-            let src_entry = resolved_dir.join("src").join("index.ts");
-            let entry = if src_entry.exists() { src_entry.clone() } else { _entry };
-            eprintln!("[sidecar] Dev entry: {}, dir: {}", entry.display(), resolved_dir.display());
-            let mut c = Command::new("bun");
-            c.arg("run").arg(&entry).current_dir(&resolved_dir);
-            (c, resolved_dir)
-        };
+            })
+            .collect();
 
-        // Built-in skills: explicitly pass SKILLS_PATHS so the compiled binary
-        // doesn't have to guess via import.meta.url (which breaks in bundled mode).
-        {
-            let mut skills_paths: Vec<String> = Vec::new();
-
-            // 1. Production: bundled in resources/skills/
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                let bundled = resource_dir.join("resources").join("skills");
-                if bundled.exists() {
-                    skills_paths.push(bundled.to_string_lossy().to_string());
-                }
-            }
-
-            // 2. Dev fallback: monorepo vm-agent/skills/
-            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let dev_skills = manifest_dir.join("../../vm-agent/skills");
-            if let Ok(canonical) = dunce::canonicalize(&dev_skills) {
-                if canonical.exists() && !skills_paths.iter().any(|p| PathBuf::from(p) == canonical)
-                {
-                    skills_paths.push(canonical.to_string_lossy().to_string());
-                }
-            }
-
-            if !skills_paths.is_empty() {
-                cmd.env("SKILLS_PATHS", skills_paths.join(","));
+        for session_id in idle_ids {
+            if let Some(process) = processes.remove(&session_id) {
+                removed.push(process);
             }
         }
+    }
 
-        // Document processing packages (NODE_PATH for .mjs scripts)
-        if let Ok(app_data) = app.path().app_data_dir() {
-            let doc_pkg_dir = app_data.join("doc-packages");
-
-            // Extract bundled archive on first launch
-            if !doc_pkg_dir.join("node_modules").exists() {
-                if let Ok(resource_dir) = app.path().resource_dir() {
-                    let archive = resource_dir.join("resources").join("doc-packages.tar.gz");
-                    if archive.exists() {
-                        let _ = std::fs::create_dir_all(&doc_pkg_dir);
-                        if let Ok(file) = std::fs::File::open(&archive) {
-                            let gz = flate2::read::GzDecoder::new(file);
-                            let mut tar = tar::Archive::new(gz);
-                            if tar.unpack(&doc_pkg_dir).is_ok() {
-                                eprintln!(
-                                    "[sidecar] Extracted doc-packages to {}",
-                                    doc_pkg_dir.display()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            cmd.env("DOC_PACKAGES_DIR", doc_pkg_dir.to_string_lossy().as_ref());
+    for mut process in removed {
+        let was_idle = process.last_access.elapsed() >= PI_SESSION_IDLE_TIMEOUT;
+        let session_id = process.session_id.clone();
+        if is_running(&mut process) {
+            stop_process(&mut process);
         }
-
-        // Bundled fonts directory
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            let fonts_dir = resource_dir.join("resources").join("fonts");
-            if fonts_dir.exists() {
-                cmd.env("FONTS_DIR", fonts_dir.to_string_lossy().as_ref());
-            }
-        }
-
-        // Prepend bundled runtimes to PATH — guaranteed available by build process.
-        // Python: all platforms (python-build-standalone).
-        // Bash + Node: Windows only (MSYS2 bash + Bun).
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            let runtimes = resource_dir.join("resources").join("runtimes");
-            let mut extra_paths: Vec<PathBuf> = Vec::new();
-
-            // Python (all platforms): python-build-standalone uses bin/ on unix, flat on windows
-            #[cfg(not(windows))]
-            extra_paths.push(runtimes.join("python").join("bin"));
-            #[cfg(windows)]
-            extra_paths.push(runtimes.join("python"));
-
-            // Windows-only: bash (MSYS2) + node (Bun)
-            #[cfg(windows)]
-            {
-                extra_paths.push(runtimes.join("bash"));
-                extra_paths.push(runtimes.join("node"));
-
-                // MSYS2 environment for bash
-                cmd.env("CHERE_INVOKING", "1");
-                cmd.env("MSYS2_PATH_TYPE", "inherit");
-                cmd.env("MSYS2_ARG_CONV_EXCL", "*");
-                cmd.env("LANG", "C.UTF-8");
-                cmd.env("LC_ALL", "C.UTF-8");
-            }
-
-            // macOS/Linux: Tauri .app bundles inherit a minimal PATH that often
-            // lacks the user's shell-profile paths (nvm, Homebrew, etc.).
-            // Probe the user's default shell to recover the full PATH.
-            #[cfg(not(windows))]
-            {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-                if let Ok(output) = Command::new(&shell)
-                    .args(["-l", "-i", "-c", "echo __PATH_PROBE__\"$PATH\""])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .output()
-                {
-                    if let Ok(stdout) = String::from_utf8(output.stdout) {
-                        if let Some(line) = stdout
-                            .lines()
-                            .find(|l| l.starts_with("__PATH_PROBE__"))
-                        {
-                            let shell_path = &line["__PATH_PROBE__".len()..];
-                            for p in std::env::split_paths(shell_path) {
-                                extra_paths.push(p);
-                            }
-                        }
-                    }
-                }
-            }
-
-            let current_path = std::env::var("PATH").unwrap_or_default();
-            let existing: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
-            let mut all_paths = extra_paths;
-            all_paths.extend(existing);
-
-            if let Ok(new_path) = std::env::join_paths(&all_paths) {
-                cmd.env("PATH", &new_path);
-            }
-        }
-
-        if !memory_root.as_os_str().is_empty() {
-            std::fs::create_dir_all(&memory_root).ok();
-            cmd.env("MEMORY_ROOT_DIR", memory_root.to_string_lossy().as_ref());
-        }
-
-        cmd.env("MEMORY_ENABLED", "true")
-            .env("HEARTBEAT_ENABLED", "false")
-            .env("CRON_ENABLED", "false")
-            .env(
-                "USER_SKILLS_DIR",
-                user_skills_dir.to_string_lossy().as_ref(),
-            )
-            .env(
-                "AGENT_HOME_DIR",
-                app.path()
-                    .app_data_dir()
-                    .map(|dir| dir.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-            )
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // Make sidecar the leader of a new process group so killpg can reap descendants.
-            cmd.process_group(0);
-        }
-
-        // Windows: hide the console window for the sidecar process
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        // Apply caller-provided env vars, but protect enforced keys.
-        const PROTECTED_KEYS: &[&str] = &[
-            "MEMORY_ROOT_DIR",
-            "USER_SKILLS_DIR",
-            "AGENT_HOME_DIR",
-            "MEMORY_ENABLED",
-            "HEARTBEAT_ENABLED",
-            "CRON_ENABLED",
-        ];
-        for (key, value) in &env_vars {
-            if !PROTECTED_KEYS.contains(&key.as_str()) {
-                cmd.env(key, value);
-            }
-        }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| {
-                eprintln!("[sidecar] spawn FAILED: {}", e);
-                format!("Failed to spawn agent: {}", e)
-            })?;
-        eprintln!("[sidecar] spawned pid={}", child.id());
-        append_log_line(&app, "sidecar", &format!("spawned pid={}", child.id()));
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Failed to capture agent stdin".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Failed to capture agent stdout".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "Failed to capture agent stderr".to_string())?;
-
-        let app_stdout = app.clone();
-        let ready_tx_stdout = ready_tx.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                // Never block ready handshake on UI log delivery.
-                if trimmed.contains("\"type\":\"ready\"") || trimmed.contains("\"type\": \"ready\"")
-                {
-                    signal_ready(&ready_tx_stdout);
-                }
-                if handle_agent_line(&app_stdout, trimmed, "stdout") {
-                    signal_ready(&ready_tx_stdout);
-                }
-            }
-            // Agent stdout closed (process exited or crashed) — notify all listening streams
-            let _ = app_stdout.emit(
+        if was_idle {
+            let detail = "Pi session cleaned up after 30 minutes of inactivity";
+            append_log_line(app, "sidecar", detail);
+            let _ = app.emit(
                 "agent-rpc-event",
                 serde_json::json!({
                     "type": "error",
-                    "error": "Agent 进程已退出"
+                    "session_id": session_id,
+                    "error": detail,
                 }),
             );
-        });
+        }
+    }
+}
 
-        let app_stderr = app.clone();
-        let stderr_buf: SharedStderrBuf = Arc::new(Mutex::new(Vec::new()));
-        let stderr_buf_writer = stderr_buf.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                // Keep last 10 stderr lines for diagnostics on crash
-                if let Ok(mut buf) = stderr_buf_writer.lock() {
-                    if buf.len() >= 10 {
-                        buf.remove(0);
-                    }
-                    buf.push(trimmed.to_string());
-                }
-                let _ = handle_agent_line(&app_stderr, trimmed, "stderr");
-            }
-        });
-
-        *proc = Some(AgentProcess {
-            child,
-            stdin: Arc::new(Mutex::new(stdin)),
-            workspace: env_vars.get("WORKSPACE_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| resolved_agent_dir.clone()),
-            stderr_buf,
-        });
+fn ensure_cleanup_thread(app: &AppHandle) {
+    if PI_SESSION_CLEANUP_STARTED.set(()).is_err() {
+        return;
     }
 
-    // Strict handshake: startup only succeeds after receiving the RPC ready event.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if ready_rx.recv_timeout(Duration::from_millis(100)).is_ok() {
-            eprintln!("[sidecar] ready handshake succeeded");
-            return Ok(AgentStatus {
-                running: true,
-                transport: "rpc-stdio".to_string(),
-            });
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(PI_SESSION_CLEANUP_INTERVAL);
+        cleanup_idle_sessions(&app);
+    });
+}
+
+fn spawn_pi_process(
+    app: &AppHandle,
+    session_id: &str,
+    env_vars: &HashMap<String, String>,
+) -> Result<AgentProcess, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {}", error))?;
+    let user_skills_dir = user_skills_dir(app)?;
+    let memory_root = memory_root_dir(app)?;
+    let workspace = env_vars
+        .get("WORKSPACE_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| app_data_dir.clone());
+
+    if !memory_root.as_os_str().is_empty() {
+        std::fs::create_dir_all(&memory_root).ok();
+    }
+    std::fs::create_dir_all(&user_skills_dir).ok();
+
+    let pi_dir = write_pi_config(app, env_vars)?;
+    let mut cmd = Command::new("pi");
+    cmd.args(["--mode", "json"])
+        .current_dir(&workspace)
+        .env("PI_CODING_AGENT_DIR", pi_dir.to_string_lossy().to_string())
+        .env("WORKSPACE_DIR", workspace.to_string_lossy().to_string())
+        .env("MEMORY_ROOT_DIR", memory_root.to_string_lossy().to_string())
+        .env("MEMORY_ENABLED", "true")
+        .env("HEARTBEAT_ENABLED", "false")
+        .env("CRON_ENABLED", "false")
+        .env("USER_SKILLS_DIR", user_skills_dir.to_string_lossy().to_string())
+        .env("AGENT_HOME_DIR", app_data_dir.to_string_lossy().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let fonts_dir = resource_dir.join("resources").join("fonts");
+        if fonts_dir.exists() {
+            cmd.env("FONTS_DIR", fonts_dir.to_string_lossy().to_string());
         }
 
-        let mut proc = AGENT_PROCESS.lock().unwrap();
-        let Some(existing) = proc.as_mut() else {
-            return Err("Agent process disappeared during startup".to_string());
-        };
+        let runtimes = resource_dir.join("resources").join("runtimes");
+        let mut extra_paths: Vec<PathBuf> = Vec::new();
 
-        if !is_running(existing) {
-            let exit_info = match existing.child.try_wait() {
+        #[cfg(not(windows))]
+        extra_paths.push(runtimes.join("python").join("bin"));
+        #[cfg(windows)]
+        extra_paths.push(runtimes.join("python"));
+
+        #[cfg(windows)]
+        {
+            extra_paths.push(runtimes.join("bash"));
+            extra_paths.push(runtimes.join("node"));
+
+            cmd.env("CHERE_INVOKING", "1");
+            cmd.env("MSYS2_PATH_TYPE", "inherit");
+            cmd.env("MSYS2_ARG_CONV_EXCL", "*");
+            cmd.env("LANG", "C.UTF-8");
+            cmd.env("LC_ALL", "C.UTF-8");
+        }
+
+        #[cfg(not(windows))]
+        {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+            if let Ok(output) = Command::new(&shell)
+                .args(["-l", "-i", "-c", "echo __PATH_PROBE__\"$PATH\""])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .output()
+            {
+                if let Ok(stdout) = String::from_utf8(output.stdout) {
+                    if let Some(line) = stdout.lines().find(|l| l.starts_with("__PATH_PROBE__")) {
+                        let shell_path = &line["__PATH_PROBE__".len()..];
+                        for path in std::env::split_paths(shell_path) {
+                            extra_paths.push(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let existing: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
+        let mut all_paths = extra_paths;
+        all_paths.extend(existing);
+
+        if let Ok(new_path) = std::env::join_paths(&all_paths) {
+            cmd.env("PATH", new_path);
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    const PROTECTED_KEYS: &[&str] = &[
+        "PI_CODING_AGENT_DIR",
+        "WORKSPACE_DIR",
+        "MEMORY_ROOT_DIR",
+        "USER_SKILLS_DIR",
+        "AGENT_HOME_DIR",
+        "MEMORY_ENABLED",
+        "HEARTBEAT_ENABLED",
+        "CRON_ENABLED",
+    ];
+    for (key, value) in env_vars {
+        if !PROTECTED_KEYS.contains(&key.as_str()) {
+            cmd.env(key, value);
+        }
+    }
+
+    let mut child = cmd.spawn().map_err(|error| {
+        eprintln!("[sidecar] pi spawn FAILED: {}", error);
+        format!("Failed to spawn pi: {}", error)
+    })?;
+    append_log_line(
+        app,
+        "sidecar",
+        &format!("spawned pi pid={} for session {}", child.id(), session_id),
+    );
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to capture pi stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture pi stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture pi stderr".to_string())?;
+
+    let stderr_buf: SharedStderrBuf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf_writer = stderr_buf.clone();
+    let session_id_owned = session_id.to_string();
+    let session_id_stdout = session_id_owned.clone();
+    let session_id_stderr = session_id_owned.clone();
+    let app_stdout = app.clone();
+    let app_stderr = app.clone();
+    let (ready_tx, ready_rx) = mpsc::channel::<()>();
+    let ready_tx_stdout = ready_tx.clone();
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.contains("\"type\":\"session\"")
+                || trimmed.contains("\"type\": \"session\"")
+            {
+                signal_ready(&ready_tx_stdout);
+            }
+            if handle_session_line(&app_stdout, trimmed, "stdout", Some(&session_id_stdout)) {
+                signal_ready(&ready_tx_stdout);
+            }
+        }
+        let _ = app_stdout.emit(
+            "agent-rpc-event",
+            serde_json::json!({
+                "type": "error",
+                "session_id": session_id_stdout,
+                "error": "Pi session process exited"
+            }),
+        );
+    });
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(mut buf) = stderr_buf_writer.lock() {
+                if buf.len() >= 10 {
+                    buf.remove(0);
+                }
+                buf.push(trimmed.to_string());
+            }
+            let _ = handle_session_line(&app_stderr, trimmed, "stderr", Some(&session_id_stderr));
+        }
+    });
+
+    let mut process = AgentProcess {
+        child,
+        stdin: Arc::new(Mutex::new(stdin)),
+        session_id: session_id_owned,
+        workspace,
+        stderr_buf,
+        last_access: Instant::now(),
+    };
+
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        if ready_rx.recv_timeout(Duration::from_millis(100)).is_ok() {
+            mark_process_access(&mut process);
+            return Ok(process);
+        }
+
+        if !is_running(&mut process) {
+            let exit_info = match process.child.try_wait() {
                 Ok(Some(status)) => format!(" (exit {})", status),
                 _ => String::new(),
             };
-            let stderr_tail = existing
+            let stderr_tail = process
                 .stderr_buf
                 .lock()
                 .ok()
                 .map(|buf| buf.join(" | "))
                 .unwrap_or_default();
-            *proc = None;
             let detail = if stderr_tail.is_empty() {
-                format!("Agent exited during startup{}", exit_info)
+                format!("Pi exited during startup{}", exit_info)
             } else {
-                format!("Agent exited during startup{}: {}", exit_info, stderr_tail)
+                format!("Pi exited during startup{}: {}", exit_info, stderr_tail)
             };
-            eprintln!("[sidecar] {}", detail);
-            append_log_line(&app, "sidecar", &detail);
+            append_log_line(app, "sidecar", &detail);
             return Err(detail);
         }
 
         if Instant::now() >= deadline {
-            eprintln!("[sidecar] ready handshake timed out after 10s");
-            append_log_line(&app, "sidecar", "ready handshake timed out after 10s");
-            if let Some(existing) = proc.as_mut() {
-                kill_process_tree(&mut existing.child);
-            }
-            *proc = None;
-            return Err("Agent ready handshake timed out".to_string());
+            append_log_line(app, "sidecar", "Pi session handshake timed out after 10s");
+            stop_process(&mut process);
+            return Err("Pi session handshake timed out".to_string());
         }
     }
 }
 
 #[tauri::command]
-pub fn agent_rpc_send(command: serde_json::Value) -> Result<(), String> {
-    let mut proc = AGENT_PROCESS.lock().unwrap();
-    let Some(process) = proc.as_mut() else {
-        return Err("Agent is not running".to_string());
-    };
-
-    if !is_running(process) {
-        *proc = None;
-        return Err("Agent is not running".to_string());
+pub async fn ensure_pi_session(
+    app: AppHandle,
+    session_id: String,
+    env_vars: HashMap<String, String>,
+) -> Result<AgentStatus, String> {
+    if session_id.trim().is_empty() {
+        return Err("Session ID is required".to_string());
     }
 
-    let mut stdin = process.stdin.lock().unwrap();
-    let line =
-        serde_json::to_string(&command).map_err(|e| format!("Invalid command JSON: {}", e))?;
-    stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .and_then(|_| stdin.flush())
-        .map_err(|e| format!("Failed to send command to agent: {}", e))
+    ensure_cleanup_thread(&app);
+
+    {
+        let mut processes = AGENT_PROCESSES.lock().unwrap();
+        prune_exited_processes(&mut processes);
+        if let Some(existing) = processes.get_mut(&session_id) {
+            mark_process_access(existing);
+            return Ok(AgentStatus {
+                running: true,
+                transport: "rpc-stdio".to_string(),
+            });
+        }
+    }
+
+    let process = spawn_pi_process(&app, &session_id, &env_vars)?;
+    let mut processes = AGENT_PROCESSES.lock().unwrap();
+    processes.insert(session_id, process);
+
+    Ok(AgentStatus {
+        running: true,
+        transport: "rpc-stdio".to_string(),
+    })
 }
 
 #[tauri::command]
-pub fn stop_agent() -> Result<(), String> {
-    let mut proc = AGENT_PROCESS.lock().unwrap();
-    if let Some(process) = proc.as_mut() {
-        kill_process_tree(&mut process.child);
+pub fn agent_rpc_send(session_id: String, message: String) -> Result<(), String> {
+    let mut processes = AGENT_PROCESSES.lock().unwrap();
+    prune_exited_processes(&mut processes);
+    let Some(process) = processes.get_mut(&session_id) else {
+        return Err("Pi session is not running".to_string());
+    };
+
+    mark_process_access(process);
+    let mut stdin = process.stdin.lock().unwrap();
+    stdin
+        .write_all(message.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
+        .map_err(|error| format!("Failed to send prompt to Pi session: {}", error))
+}
+
+#[tauri::command]
+pub fn interrupt_pi_session(session_id: String) -> Result<(), String> {
+    let mut processes = AGENT_PROCESSES.lock().unwrap();
+    prune_exited_processes(&mut processes);
+    let Some(process) = processes.get_mut(&session_id) else {
+        return Err("Pi session is not running".to_string());
+    };
+
+    mark_process_access(process);
+    interrupt_process(&mut process.child);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_pi_session(session_id: Option<String>) -> Result<(), String> {
+    let mut removed = Vec::new();
+
+    {
+        let mut processes = AGENT_PROCESSES.lock().unwrap();
+        prune_exited_processes(&mut processes);
+
+        match session_id {
+            Some(ref session_id) => {
+                if let Some(process) = processes.remove(session_id) {
+                    removed.push(process);
+                }
+            }
+            None => {
+                removed.extend(processes.drain().map(|(_, process)| process));
+            }
+        }
     }
-    *proc = None;
+
+    for mut process in removed {
+        stop_process(&mut process);
+    }
+
     Ok(())
 }
 
@@ -914,19 +1192,11 @@ pub fn reveal_user_skill(app: AppHandle, skill_id: String) -> Result<(), String>
 
 #[tauri::command]
 pub fn agent_status() -> AgentStatus {
-    let mut proc = AGENT_PROCESS.lock().unwrap();
-    if let Some(existing) = proc.as_mut() {
-        if is_running(existing) {
-            return AgentStatus {
-                running: true,
-                transport: "rpc-stdio".to_string(),
-            };
-        }
-        *proc = None;
-    }
+    let mut processes = AGENT_PROCESSES.lock().unwrap();
+    prune_exited_processes(&mut processes);
 
     AgentStatus {
-        running: false,
+        running: !processes.is_empty(),
         transport: "rpc-stdio".to_string(),
     }
 }
