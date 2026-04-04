@@ -1,357 +1,247 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/fran0220/jacoworks/gateway/internal/store"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+
+	ocpkg "github.com/fran0220/jacoworks/gateway/internal/openclaw"
+	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
 const (
 	wsClientWriteQueueSize = 256
 	wsClientReadLimit      = 1 << 20
-
-	// Client-facing pongWait (shorter than upstream's 120s)
-	wsClientPongWait = 90 * time.Second
+	wsClientPongWait       = 90 * time.Second
+	upstreamPongWait       = 120 * time.Second
+	wsPingPeriod           = 30 * time.Second
+	wsWriteWait            = 10 * time.Second
 )
 
-var wsClientUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // CORS already handled by outer middleware
-	},
-	ReadBufferSize:  16 * 1024,
-	WriteBufferSize: 16 * 1024,
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin:    func(r *http.Request) bool { return true },
+	ReadBufferSize: 16 * 1024, WriteBufferSize: 16 * 1024,
 }
 
-// EventCallback is invoked for key WebSocket lifecycle events (connect, disconnect, etc.).
-type EventCallback func(userID, event string, properties map[string]interface{})
+// OpenClawBackend abstracts VM lifecycle and addressing.
+type OpenClawBackend interface {
+	EnsureRunning(ctx context.Context, info *store.ContainerInfo) error
+	UpstreamAddr(info *store.ContainerInfo) string
+}
 
-// WSHandler exposes OpenClaw events/commands over browser WebSocket with ticket auth.
+// WSHandler is a thin WebSocket relay between browser and OpenClaw VM.
 type WSHandler struct {
-	pool        *ChannelPool
+	store       *store.Store
 	ticketStore *TicketStore
+	oc          OpenClawBackend
 	onEvent     EventCallback
 }
 
-func NewWSHandler(pool *ChannelPool, ticketStore *TicketStore, onEvent EventCallback) *WSHandler {
-	return &WSHandler{pool: pool, ticketStore: ticketStore, onEvent: onEvent}
+func NewWSHandler(s *store.Store, ticketStore *TicketStore, oc OpenClawBackend, onEvent EventCallback) *WSHandler {
+	return &WSHandler{store: s, ticketStore: ticketStore, oc: oc, onEvent: onEvent}
 }
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.pool == nil || h.ticketStore == nil {
-		writeWSHTTPJSON(w, http.StatusInternalServerError, map[string]string{"error": "ws handler not initialized"})
-		return
-	}
-
 	ticket := strings.TrimSpace(r.URL.Query().Get("ticket"))
 	if ticket == "" {
-		writeWSHTTPJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing ticket"})
+		writeWSJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing ticket"})
 		return
 	}
-
 	userID, err := h.ticketStore.ValidateTicket(ticket)
 	if err != nil {
-		writeWSHTTPJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired ticket"})
+		writeWSJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired ticket"})
 		return
 	}
 
-	lastSeq, err := parseWSLastSeq(r.URL.Query().Get("lastSeq"))
+	info, err := h.store.GetContainerInfo(r.Context(), userID, store.ContainerTypeOpenClaw)
 	if err != nil {
-		writeWSHTTPJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lastSeq"})
+		writeWSJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
 	}
 
-	// Container type defaults to openclaw. vm-agent is no longer supported.
-	containerType := strings.TrimSpace(r.URL.Query().Get("type"))
-	if containerType == "" {
-		containerType = store.ContainerTypeOpenClaw
-	}
-	if containerType != store.ContainerTypeOpenClaw {
-		writeWSHTTPJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid 'type' query parameter (must be 'openclaw')"})
+	if err := h.oc.EnsureRunning(r.Context(), info); err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Msg("ws relay: EnsureRunning failed")
+		writeWSJSON(w, http.StatusBadGateway, map[string]string{"error": "container not ready"})
 		return
 	}
 
-	// Unified path: all container types go through ChannelPool
-	channel, info, err := h.pool.GetOrCreate(r.Context(), userID, containerType)
+	client, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Str("type", containerType).Msg("ws bridge: GetOrCreate failed")
-		writeWSHTTPJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
+		log.Warn().Err(err).Str("user_id", userID).Msg("ws relay: upgrade failed")
 		return
 	}
+	defer client.Close()
 
-	conn, err := wsClientUpgrader.Upgrade(w, r, nil)
+	// Dial upstream OpenClaw WS
+	upstreamURL := h.oc.UpstreamAddr(info)
+	origin := fmt.Sprintf("http://%s:18789", info.ContainerIP)
+	upstream, _, err := websocket.DefaultDialer.Dial(upstreamURL, http.Header{"Origin": {origin}})
 	if err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Msg("ws bridge: upgrade failed")
+		log.Warn().Err(err).Str("user_id", userID).Str("url", upstreamURL).Msg("ws relay: dial upstream failed")
+		_ = sendJSON(client, map[string]string{"type": "proxy.error", "error": "upstream unreachable"})
 		return
 	}
-	defer conn.Close()
+	defer upstream.Close()
 
-	replay, updates, unsubscribe := channel.Subscribe(lastSeq)
-	defer unsubscribe()
-
-	containerName := ""
-	if info != nil {
-		containerName = info.ContainerName
+	// Server-side handshake (browser never sees challenge frames)
+	if err := ocpkg.HandshakeConn(upstream, info.ContainerToken, 10*time.Second); err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Msg("ws relay: handshake failed")
+		_ = sendJSON(client, map[string]string{"type": "proxy.error", "error": "handshake failed"})
+		return
 	}
 
-	log.Info().
-		Str("user_id", userID).
-		Str("container", containerName).
-		Str("container_type", containerType).
-		Uint64("last_seq", lastSeq).
-		Msg("ws bridge: client connected")
+	// Auto-pairer disabled: it opens a second operator WS connection which
+	// can cause OpenClaw to disconnect the relay's primary connection.
+	// Device pairing is already handled during provision/config sync.
 
+	// Signal browser that relay is live
+	_ = sendJSON(client, map[string]string{"type": "proxy.ready"})
+
+	log.Info().Str("user_id", userID).Str("container", info.ContainerName).Msg("ws relay: connected")
 	if h.onEvent != nil {
-		h.onEvent(userID, "ws_oc_connected", map[string]interface{}{
-			"container":      containerName,
-			"container_type": containerType,
-			"last_seq":       lastSeq,
-		})
+		h.onEvent(userID, "ws_oc_connected", map[string]interface{}{"container": info.ContainerName})
 	}
 
-	h.runConnection(conn, channel, userID, replay, updates)
+	// Bidirectional relay
+	relay(client, upstream, userID)
 
-	log.Info().
-		Str("user_id", userID).
-		Str("container", containerName).
-		Str("container_type", containerType).
-		Msg("ws bridge: client disconnected")
-
+	log.Info().Str("user_id", userID).Str("container", info.ContainerName).Msg("ws relay: disconnected")
 	if h.onEvent != nil {
-		h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{
-			"container":      containerName,
-			"container_type": containerType,
-		})
+		h.onEvent(userID, "ws_oc_disconnected", map[string]interface{}{"container": info.ContainerName})
 	}
 }
 
-func (h *WSHandler) runConnection(conn *websocket.Conn, channel *UserChannel, userID string, replay []Event, updates <-chan Event) {
-	conn.SetReadLimit(wsClientReadLimit)
-	_ = conn.SetReadDeadline(time.Now().Add(wsClientPongWait))
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(wsClientPongWait))
-	})
-
-	outbound := make(chan []byte, wsClientWriteQueueSize)
+// relay runs two goroutines forwarding frames in each direction.
+func relay(client, upstream *websocket.Conn, userID string) {
+	var once sync.Once
 	done := make(chan struct{})
+	shutdown := func() { once.Do(func() { close(done) }) }
 
-	var closeOnce sync.Once
-	closeConn := func() {
-		closeOnce.Do(func() {
-			close(done)
-			_ = conn.Close()
-		})
-	}
+	// Configure ping/pong
+	client.SetReadLimit(wsClientReadLimit)
+	_ = client.SetReadDeadline(time.Now().Add(wsClientPongWait))
+	client.SetPongHandler(func(string) error { return client.SetReadDeadline(time.Now().Add(wsClientPongWait)) })
 
-	enqueue := func(payload []byte) bool {
-		payload = append([]byte(nil), payload...)
+	upstream.SetReadLimit(wsClientReadLimit)
+	_ = upstream.SetReadDeadline(time.Now().Add(upstreamPongWait))
+	upstream.SetPongHandler(func(string) error { return upstream.SetReadDeadline(time.Now().Add(upstreamPongWait)) })
 
-		select {
-		case <-done:
-			return false
-		default:
-		}
-
-		select {
-		case outbound <- payload:
-			return true
-		case <-done:
-			return false
-		default:
-			log.Warn().Str("user_id", userID).Int("queue_size", len(outbound)).Msg("ws bridge: outbound queue overflow")
-			closeConn()
-			return false
-		}
-	}
-
+	// Upstream → client
 	go func() {
-		defer closeConn()
+		defer shutdown()
 		for {
-			select {
-			case <-done:
-				return
-			case payload := <-outbound:
-				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
-				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-					log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: write failed")
-					return
+			msgType, data, err := upstream.ReadMessage()
+			if err != nil {
+				if !isNormalClose(err) {
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: upstream read error")
 				}
+				return
+			}
+			if isHeartbeat(msgType, data) {
+				continue
+			}
+			if msgType == websocket.TextMessage && len(data) < 512 {
+				log.Debug().Str("user_id", userID).Str("frame", string(data)).Msg("ws relay: upstream→client")
+			} else {
+				log.Debug().Str("user_id", userID).Int("size", len(data)).Msg("ws relay: upstream→client (large)")
+			}
+			_ = client.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			if err := client.WriteMessage(msgType, data); err != nil {
+				log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: write to client failed")
+				return
 			}
 		}
 	}()
 
-	// Ping ticker: keep client connection alive during long LLM streaming
+	// Client → upstream
 	go func() {
-		ticker := time.NewTicker(pingPeriod)
+		defer shutdown()
+		for {
+			msgType, data, err := client.ReadMessage()
+			if err != nil {
+				if !isNormalClose(err) {
+					log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: client read error")
+				}
+				return
+			}
+			if msgType == websocket.TextMessage {
+				log.Debug().Str("user_id", userID).Str("frame", string(data)).Msg("ws relay: client→upstream")
+			}
+			_ = upstream.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			if err := upstream.WriteMessage(msgType, data); err != nil {
+				log.Debug().Err(err).Str("user_id", userID).Msg("ws relay: write to upstream failed")
+				return
+			}
+		}
+	}()
+
+	// Ping ticker for both sides
+	go func() {
+		ticker := time.NewTicker(wsPingPeriod)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
-				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
-					log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: ping failed")
-					return
-				}
+				dl := time.Now().Add(wsWriteWait)
+				_ = client.WriteControl(websocket.PingMessage, nil, dl)
+				_ = upstream.WriteControl(websocket.PingMessage, nil, dl)
 			}
 		}
 	}()
 
-	for _, event := range replay {
-		payload, err := marshalWSEventFrame(event)
-		if err != nil {
-			log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: skip invalid replay event")
-			continue
-		}
-		if !enqueue(payload) {
-			<-done
-			return
-		}
-	}
-
-	if status := channel.Status(); status.Connected {
-		readyPayload, _ := json.Marshal(map[string]string{"type": "proxy.ready"})
-		payload, err := marshalWSEventFrame(Event{Event: "proxy.ready", Data: readyPayload})
-		if err == nil {
-			if !enqueue(payload) {
-				<-done
-				return
-			}
-		}
-	}
-
-	go func() {
-		defer closeConn()
-		for {
-			select {
-			case <-done:
-				return
-			case event, ok := <-updates:
-				if !ok {
-					return
-				}
-
-				payload, err := marshalWSEventFrame(event)
-				if err != nil {
-					log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: skip invalid update event")
-					continue
-				}
-				if !enqueue(payload) {
-					return
-				}
-			}
-		}
-	}()
-
-	for {
-		msgType, payload, err := conn.ReadMessage()
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Info().Str("user_id", userID).Msg("ws bridge: client pong timeout")
-			} else if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: read failed")
-			}
-			closeConn()
-			<-done
-			return
-		}
-
-		if msgType != websocket.TextMessage {
-			continue
-		}
-
-		_, err = h.handleClientMessage(channel, payload, enqueue)
-		if err != nil {
-			log.Debug().Err(err).Str("user_id", userID).Msg("ws bridge: invalid client frame")
-		}
-	}
+	<-done
+	_ = client.Close()
+	_ = upstream.Close()
 }
 
-func (h *WSHandler) handleClientMessage(channel *UserChannel, payload []byte, enqueue func([]byte) bool) (bool, error) {
-	var frame struct {
-		Type    string          `json:"type"`
-		ID      string          `json:"id"`
-		Message string          `json:"message"`
-		Params  json.RawMessage `json:"-"`
+// isHeartbeat returns true for upstream heartbeat/ping/pong frames that should not be forwarded.
+func isHeartbeat(msgType int, data []byte) bool {
+	if msgType != websocket.TextMessage {
+		return false
 	}
-
-	if err := json.Unmarshal(payload, &frame); err != nil {
-		enqueueProxyError(enqueue, "invalid request frame")
-		return false, err
+	s := strings.TrimSpace(string(data))
+	if s == "HEARTBEAT_OK" || s == "HEARTBEAT" || s == "PONG" {
+		return true
 	}
-
-	switch frame.Type {
-	case "ping":
-		pong, _ := json.Marshal(map[string]string{"type": "pong"})
-		enqueue(pong)
-		return true, nil
-	default:
-		// Forward all message types through the channel's dialer
-		err := channel.SendRequest(frame.Type, payload, frame.ID)
-		if err != nil {
-			if errors.Is(err, ErrChannelReconnecting) || errors.Is(err, ErrChannelNotConnected) {
-				enqueueProxyError(enqueue, "agent reconnecting")
-				return true, err
-			}
-			enqueueProxyError(enqueue, "failed to send command")
-			return true, err
+	var m map[string]interface{}
+	if json.Unmarshal(data, &m) == nil {
+		if t, ok := m["type"].(string); ok {
+			return t == "heartbeat" || t == "ping" || t == "pong"
 		}
-		return true, nil
 	}
+	return false
 }
 
-func parseWSLastSeq(raw string) (uint64, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0, nil
+func isNormalClose(err error) bool {
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return true
 	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return true
+	}
+	return false
+}
 
-	seq, err := strconv.ParseUint(raw, 10, 64)
+func sendJSON(conn *websocket.Conn, v interface{}) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	data, err := json.Marshal(v)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	return seq, nil
+	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func marshalWSEventFrame(event Event) ([]byte, error) {
-	data := event.Data
-	if len(data) == 0 || !json.Valid(data) {
-		data = []byte("{}")
-	}
-
-	eventType := event.Event
-	if eventType == "" {
-		eventType = "message"
-	}
-
-	frame := struct {
-		Seq   uint64          `json:"seq"`
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}{
-		Seq:   event.Seq,
-		Event: eventType,
-		Data:  json.RawMessage(data),
-	}
-
-	return json.Marshal(frame)
-}
-
-func enqueueProxyError(enqueue func([]byte) bool, message string) {
-	payload, _ := json.Marshal(map[string]string{"type": "proxy.error", "error": message})
-	enqueue(payload)
-}
-
-func writeWSHTTPJSON(w http.ResponseWriter, status int, payload interface{}) {
+func writeWSJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)

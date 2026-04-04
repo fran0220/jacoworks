@@ -63,6 +63,8 @@ type LLMConfig struct {
 	JimengAPIKey      string `yaml:"jimeng_api_key"`
 	AssetGatewayToken string `yaml:"asset_gateway_token"`
 	AssetGatewayURL   string `yaml:"asset_gateway_url"`
+	FeishuAppID       string `yaml:"feishu_app_id"`
+	FeishuAppSecret   string `yaml:"feishu_app_secret"`
 	PrimaryModel      string `yaml:"primary_model"`
 	PrimaryProvider   string `yaml:"primary_provider"`
 }

@@ -116,8 +116,33 @@ export class OpenClawClient {
     });
   }
 
+  sendPrompt(text: string): void {
+    if (!text) return;
+    this.sendChat(text).catch((err) => {
+      this.opts.onFrame({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  sendAbortChat(): void {
+    this.abortChat().catch((err) => {
+      this.opts.onFrame({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.connected) {
+      console.warn("[openclaw] request blocked", {
+        method,
+        hasWs: !!this.ws,
+        readyState: this.ws?.readyState,
+        connected: this.connected,
+      });
       return Promise.reject(new Error("openclaw not connected"));
     }
 
@@ -214,28 +239,23 @@ export class OpenClawClient {
     };
   }
 
-  /** Handle raw OpenClaw protocol frames */
+  /** Handle native OpenClaw protocol frames (direct relay, no envelope) */
   private handleFrame(frame: OpenClawFrame) {
     const record = asRecord(frame);
     const frameType = typeof record.type === "string" ? record.type : "";
 
-    // --- oc-gateway envelope: {seq, event, data} ---
-    if (typeof record.seq === "number" && typeof record.event === "string" && record.data !== undefined) {
-      if (record.event === "proxy.ready") {
-        this.connected = true;
-        this.reconnectAttempt = 0;
-        this.opts.onStateChange("connected", "已连接");
-        this.opts.onFrame({ type: "proxy.ready" });
-        return;
-      }
-      if (record.event === "proxy.error") {
-        const data = asRecord(record.data);
-        const errMsg = typeof data.error === "string" ? data.error : "代理错误";
-        this.opts.onStateChange("disconnected", errMsg);
-        return;
-      }
-      // Unwrap inner data for legacy path
-      this.handleFrame(asRecord(record.data) as OpenClawFrame);
+    // Synthetic frames from oc-gateway thin relay
+    if (frameType === "proxy.ready") {
+      console.debug("[openclaw] proxy.ready received, setting connected=true");
+      this.connected = true;
+      this.reconnectAttempt = 0;
+      this.opts.onStateChange("connected", "已连接");
+      this.opts.onFrame({ type: "proxy.ready" });
+      return;
+    }
+    if (frameType === "proxy.error") {
+      const errMsg = typeof record.error === "string" ? record.error : "代理错误";
+      this.opts.onStateChange("disconnected", errMsg);
       return;
     }
 
@@ -258,7 +278,7 @@ export class OpenClawClient {
       return;
     }
 
-    // All other events → pass to UI
+    // All other frames (event, etc.) → pass to UI
     this.opts.onFrame(frame);
   }
 

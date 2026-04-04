@@ -1,6 +1,6 @@
 # JAcoworks — 企业 AI 协同办公平台
 
-> Tauri 桌面端 local-first sidecar (bundled runtimes: Python/bash/Node.js) 直接读写本地文件。Go gateway (jingao 云主机, OpenResty 反代) 提供桌面端认证、会话存储、配置下发与管理 API。Go oc-gateway (local x86_64, :18700) 现为 chat.jingao.club 的完整后端，承载 auth/session/cron、WebChat SPA 托管、OpenClaw WS/SSE、JaMOSS、teams/cowork 与 Incus VM 管理。Rust 官网 (Axum, 同机部署) 提供公开页面、文档、反馈、管理后台和 Tauri 更新 API。LLM 中转站 (`http://67.230.182.59:8317`) 统一接入 Claude/GPT/Gemini/Grok。
+> Tauri 桌面端 local-first sidecar (bundled runtimes: Python/bash/Node.js) 直接读写本地文件。Go gateway (jingao 云主机, OpenResty 反代) 提供桌面端认证、会话存储、配置下发与管理 API。Go oc-gateway (local x86_64, :18700) 现为 chat.jingao.club 的完整后端，承载 auth/session/cron、WebChat SPA 托管、OpenClaw thin WS relay、JaMOSS、teams/cowork 与 Incus VM 管理。Rust 官网 (Axum, 同机部署) 提供公开页面、文档、反馈、管理后台和 Tauri 更新 API。LLM 中转站 (`http://67.230.182.59:8317`) 统一接入 Claude/GPT/Gemini/Grok。
 
 ## AGENTS.md 层级
 
@@ -33,7 +33,7 @@
   │                 ├─ /static/chat/* → webchat 静态文件
   │                 ├─ /api/auth/* /api/users/me
   │                 ├─ /api/sessions/* /api/cron/*
-  │                 ├─ /ws/oc + /api/oc/* + /api/cowork/*
+  │                 ├─ /ws/oc (thin WS relay → OpenClaw VM) + /api/cowork/*
   │                 ├─ /api/teams* /api/jamoss/* /vnc/*
   │                 └─ Incus VM 管理 (OpenClaw + Desktop)
 
@@ -68,9 +68,9 @@ jingao ──── FRP tunnel ────→ local / fan (192.168.31.162)
 
 **三域部署**: jingao (gateway + website + PostgreSQL + OpenResty) / local (oc-gateway + webchat + OpenClaw Incus VM) / oracle (vm-agent Docker)
 **三种客户端**: 桌面端 (Tauri, local-first sidecar + 本地 SQLite) / Web 聊天 (chat.jingao.club) / 管理后台 (jaco.jingao.club/admin/)
-**双网关拆分**: gateway 保持桌面端管控面 API；oc-gateway 提供 WebChat 完整后端 (auth/session/cron/SPA + WS/SSE + teams/jamoss/vnc + Incus)
+**双网关拆分**: gateway 保持桌面端管控面 API；oc-gateway 提供 WebChat 完整后端 (auth/session/cron/SPA + thin WS relay + teams/jamoss/vnc + Incus)
 **认证共享**: gateway 与 oc-gateway 读写同一个 `auth_sessions` 表，token 互通
-**统一 WS 连接层**: OpenClaw 的 UpstreamDialer + ChannelPool + RingBuffer 统一连接层迁移到 oc-gateway，FRP 隧道出口，降低 WS 链路延迟
+**thin WS relay**: oc-gateway `/ws/oc` 仅做 ticket auth → container lookup → 直连 OpenClaw VM WS → 双向原样帧转发 (~220 行), 浏览器直接收发 OpenClaw 原生协议帧
 **跨机**: vm-agent Docker 容器在 oracle (161.33.13.122, ARM64)；OpenClaw Incus VM 与 oc-gateway 同机在 local/fan (192.168.31.162, x86_64)；oc-gateway 通过 SSH tunnel 访问 jingao PostgreSQL
 **VM 直连**: OpenClaw VM 通过 Incus bridge 网络获取 IP (10.193.112.x)，服务端口直接暴露，不使用 proxy device。oc-gateway 通过 VM bridge IP 访问 OpenClaw (:18789)、noVNC (:6080)、VNC (:5901)
 **团队模板**: OpenClaw VM 支持安装团队模板 (如 JaMOSS), 每个模板创建一组协作 agent (planner/executor/reviewer/patrol), 用户通过 webchat 与 leader agent 对话, 多团队通过 sessionKey 切换 (`agent:<leader-id>:main`)
@@ -202,12 +202,12 @@ make deploy-webchat    # 仅 webchat 前端 (构建 + 同步到 local)
 - **Cron 云端代理**: 本地 sidecar 的 cron_manage 自动代理到 Gateway API，用户无需切换模式
 - **webchat 独立**: `chat.jingao.club` 全部由 oc-gateway 提供，不经 jingao gateway/website
 - **网关仅桌面端管控面**: 认证、会话 CRUD、LLM 配置下发、Memory API、云端定时任务调度与后台管理，不处理 WebChat/OpenClaw 实时链路
-- **oc-gateway = WebChat 完整后端**: auth + users/me + session + cron + SPA 托管 + `/ws/oc` + `/api/oc/*` + Incus + teams + jamoss + VNC
+- **oc-gateway = WebChat 完整后端**: auth + users/me + session + cron + SPA 托管 + `/ws/oc` (thin relay) + Incus + teams + jamoss + VNC
 - **认证共享**: 两个网关读写同一张 `auth_sessions` 表，token 互通
 - **管理后台仅 jingao**: Rust 网站 `/admin/*` 仅部署在 `jaco.jingao.club`
 - **技能本地内置**: `vm-agent/skills/` 跟随代码版本, sidecar 通过 `SKILLS_PATHS` 传入, 不从网关拉取
 - **Session 隔离**: `session_id` + `user_id` 隔离 Pi SDK session 和记忆
-- **协作前端解耦**: webchat 云端协作通过 `CloudAgentWS` → ticket auth → OpenResty 路由到 oc-gateway `/ws/oc` → ChannelPool；与桌面端本地 sidecar 链路完全解耦
+- **协作前端解耦**: webchat 云端协作通过 ticket auth → OpenResty 路由到 oc-gateway `/ws/oc` → thin relay 直连 OpenClaw VM；与桌面端本地 sidecar 链路完全解耦
 - **记忆同步可选**: 本地↔云端记忆同步默认关闭，用户在设置中开启
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，网关启动加载 + 热重载，无本地 fallback
 - **新增配置项四层联动**: 新增 `system_settings` 项必须同时改: ① SQL 迁移 ② 网关 Go ③ 网站 Rust 表单 ④ 线上 DB 执行迁移 (详见 `gateway/AGENTS.md` checklist)
@@ -280,7 +280,7 @@ webchat 支持 Agent 生成的文件预览和下载：
 | 视频/音频 | 播放器 | 原生 video/audio |
 | 其他 | 元信息 + 下载 | — |
 
-**API**: `GET /api/files/:id` (元数据) + `GET /api/files/:id/content` (二进制流)。文件通过 `incus exec cat` 从 VM 代理。上限 50MB，文本预览 1MB。
+**API**: `GET /api/vm/file?path=` (路径直取) + `POST /api/files/upload` (上传)。文件通过 `incus exec cat` 从 VM 代理。上限 50MB，文本预览 1MB。
 
 ## VNC 远程桌面
 

@@ -1,0 +1,104 @@
+{
+  "name": "solo-founder",
+  "displayName": "Solo Founder 创业团队",
+  "description": "4 人 AI 创业团队：战略官统筹方向，分析师跟踪数据，市场官研究趋势，执行者落地实现。基于 Solo Founder Team 社区模式，通过共享记忆文件自主协作。",
+  "version": "1.0.0",
+  "agents": [
+    {
+      "id": "strategist",
+      "name": "战略官",
+      "role": "lead",
+      "prompt": "prompts/strategist.md",
+      "skills": ["strategist-skill"],
+      "model": "proxy/claude-opus-4-6",
+      "isLeader": true,
+      "cron": [
+        {
+          "schedule": { "kind": "cron", "expression": "0 8 * * *" },
+          "sessionTarget": "isolated",
+          "message": "Morning standup: read all agent notes from yesterday, update GOALS.md with today's priorities, update STATUS.md with overnight progress"
+        },
+        {
+          "schedule": { "kind": "cron", "expression": "0 18 * * *" },
+          "sessionTarget": "isolated",
+          "message": "EOD recap: summarize today's progress, update STATUS.md, record important decisions in DECISIONS.md"
+        }
+      ]
+    },
+    {
+      "id": "analyst",
+      "name": "分析师",
+      "role": "analyst",
+      "prompt": "prompts/analyst.md",
+      "skills": ["analyst-skill"],
+      "model": "proxy/claude-sonnet-4-6",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 14400000 },
+        "sessionTarget": "isolated",
+        "message": "Read GOALS.md for current priorities. Search for competitor updates, market data, and industry metrics. Write findings to agents/analyst/output/ and update notes.md"
+      }
+    },
+    {
+      "id": "marketer",
+      "name": "市场官",
+      "role": "marketer",
+      "prompt": "prompts/marketer.md",
+      "skills": ["marketer-skill"],
+      "model": "proxy/gemini-3.1-pro-preview",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 7200000 },
+        "sessionTarget": "isolated",
+        "message": "Read GOALS.md. Scan trending topics on Reddit, X, HN relevant to our space. Surface content ideas and engagement opportunities. Write to agents/marketer/output/ and update notes.md"
+      }
+    },
+    {
+      "id": "builder",
+      "name": "执行者",
+      "role": "builder",
+      "prompt": "prompts/builder.md",
+      "skills": ["builder-skill"],
+      "model": "proxy/gpt-5.3-codex",
+      "isLeader": false,
+      "cron": {
+        "schedule": { "kind": "every", "everyMs": 14400000 },
+        "sessionTarget": "isolated",
+        "message": "Read GOALS.md for development priorities. Work on the highest priority task. Write progress to agents/builder/output/ and update notes.md with technical decisions"
+      }
+    }
+  ],
+  "workspace": {
+    "sharedRoot": "/data/teams/solo-founder",
+    "files": {
+      "GOALS.md": "workspace/GOALS.md",
+      "STATUS.md": "workspace/STATUS.md",
+      "DECISIONS.md": "workspace/DECISIONS.md",
+      "AGENTS.md": "workspace/AGENTS.md"
+    }
+  },
+  "theme": {
+    "sceneKind": "startup-office",
+    "title": "创业团队",
+    "icon": "🚀",
+    "palette": {
+      "primary": "#6366f1",
+      "secondary": "#22d3ee",
+      "accent": "#f59e0b",
+      "background": "#0f172a",
+      "surface": "#1e293b"
+    },
+    "roles": {
+      "lead": { "displayName": "战略官", "color": "#6366f1", "icon": "🎯" },
+      "analyst": { "displayName": "分析师", "color": "#22d3ee", "icon": "📊" },
+      "marketer": { "displayName": "市场官", "color": "#f59e0b", "icon": "📢" },
+      "builder": { "displayName": "执行者", "color": "#10b981", "icon": "⚙️" }
+    },
+    "agents": {
+      "strategist": { "displayName": "战略官", "subtitle": "方向与决策", "color": "#6366f1" },
+      "analyst": { "displayName": "分析师", "subtitle": "数据与洞察", "color": "#22d3ee" },
+      "marketer": { "displayName": "市场官", "subtitle": "趋势与内容", "color": "#f59e0b" },
+      "builder": { "displayName": "执行者", "subtitle": "落地实现", "color": "#10b981" }
+    }
+  }
+}

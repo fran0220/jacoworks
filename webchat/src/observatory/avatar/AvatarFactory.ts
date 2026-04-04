@@ -2,6 +2,8 @@ import * as THREE from "three";
 import type { WorldAgent } from "../types";
 import { getRoleConfig, WORLD } from "../types";
 import { AvatarPool } from "./AvatarPool";
+import type { GLBAvatar } from "./AvatarPool";
+import { fetchAvatar } from "../../lib/avatars";
 
 export interface AgentSummary {
   id: string;
@@ -14,28 +16,36 @@ export interface AgentSummary {
 export class AvatarFactory {
   private pool: AvatarPool;
   private scene: THREE.Scene;
+  private glbAvatars = new Map<string, GLBAvatar>();
 
   constructor(pool: AvatarPool, scene: THREE.Scene) {
     this.pool = pool;
     this.scene = scene;
   }
 
+  getGLBAvatar(agentId: string): GLBAvatar | undefined {
+    return this.glbAvatars.get(agentId);
+  }
+
   async createAgent(summary: AgentSummary): Promise<WorldAgent> {
     const config = getRoleConfig(summary.role);
-
-    // Try VRM first, fallback to placeholder
-    let vrm = await this.pool.createInstance(summary.id, summary.role);
     let root: THREE.Object3D;
 
-    if (vrm) {
-      root = vrm.scene;
-    } else {
-      const fallback = this.pool.getFallbackMesh(summary.role);
-      root = fallback;
-      vrm = null;
+    // Try GLB avatar from API, fallback to capsule mesh
+    try {
+      const profile = await fetchAvatar(summary.role);
+      if (profile && profile.model_url) {
+        const glbAvatar = await this.pool.loadGLBAvatar(summary.id, profile.model_url, profile.anim_urls);
+        this.glbAvatars.set(summary.id, glbAvatar);
+        root = glbAvatar.scene;
+      } else {
+        root = this.pool.getFallbackMesh(summary.role);
+      }
+    } catch (err) {
+      console.warn("[AvatarFactory] GLB load failed, using fallback:", err);
+      root = this.pool.getFallbackMesh(summary.role);
     }
 
-    // Spawn at edge of island, random angle
     const angle = Math.random() * Math.PI * 2;
     const spawnPos = new THREE.Vector3(
       Math.cos(angle) * WORLD.SPAWN_EDGE_RADIUS,
@@ -51,7 +61,6 @@ export class AvatarFactory {
       name: summary.name,
       role: summary.role,
       config,
-      vrm,
       root,
       state: "spawning",
       position: spawnPos,
@@ -70,6 +79,7 @@ export class AvatarFactory {
   removeAgent(agent: WorldAgent): void {
     this.scene.remove(agent.root);
     this.pool.releaseInstance(agent.id);
+    this.glbAvatars.delete(agent.id);
   }
 
   async syncAgents(
@@ -80,7 +90,6 @@ export class AvatarFactory {
     const added: WorldAgent[] = [];
     const removed: WorldAgent[] = [];
 
-    // Remove agents no longer in summaries
     for (const [id, agent] of existing) {
       if (!incomingIds.has(id)) {
         this.removeAgent(agent);
@@ -89,14 +98,12 @@ export class AvatarFactory {
       }
     }
 
-    // Add new agents
     for (const summary of summaries) {
       if (!existing.has(summary.id)) {
         const agent = await this.createAgent(summary);
         existing.set(agent.id, agent);
         added.push(agent);
       } else {
-        // Update existing agent's dynamic fields
         const agent = existing.get(summary.id)!;
         agent.score = summary.total_score;
         agent.currentTask = summary.current_sub_task?.name ?? null;

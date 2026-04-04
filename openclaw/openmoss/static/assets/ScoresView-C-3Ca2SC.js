@@ -1,1 +1,0 @@
-import{_ as t}from"./_plugin-vue_export-helper-DlAUqK2U.js";import{a as o,b as r,e as s}from"./index-mpiYc_FA.js";const c={},a={class:"space-y-4"};function n(d,e){return o(),r("div",a,[...e[0]||(e[0]=[s("h2",{class:"text-lg font-semibold"},"积分排行",-1),s("p",{class:"text-muted-foreground"},"积分排行页面，开发中...",-1)])])}const _=t(c,[["render",n]]);export{_ as default};

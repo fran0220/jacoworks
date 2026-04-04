@@ -64,6 +64,7 @@ const defaultGatewayPort = 18789
 const (
 	skillsHashPath        = "/home/node/.openclaw/skills/.bundle-hash"
 	searchCredentialsPath = "/home/node/.openclaw/credentials/search.json"
+	larkCredentialsPath   = "/home/node/.openclaw/credentials/lark.json"
 	assetAuthPath         = "/home/node/.config/asset-gateway/auth.json"
 	skillEnvDropInPath    = "/etc/systemd/system/openclaw.service.d/skills.conf"
 )
@@ -76,6 +77,7 @@ type skillBundleFile struct {
 type skillBundle struct {
 	Files             []skillBundleFile
 	SearchCredentials []byte
+	LarkCredentials   []byte
 	AssetGatewayAuth  []byte
 	SystemdDropIn     []byte
 	Hash              string
@@ -116,6 +118,8 @@ func (c *Client) ContainerEnvVars() map[string]string {
 	set("ASSET_GATEWAY_URL", llm.AssetGatewayURL)
 	set("EMBEDDING_BASE_URL", llm.EmbeddingBaseURL)
 	set("EMBEDDING_API_KEY", llm.EmbeddingAPIKey)
+	set("LARK_APP_ID", llm.FeishuAppID)
+	set("LARK_APP_SECRET", llm.FeishuAppSecret)
 
 	return envs
 }
@@ -250,7 +254,11 @@ func (c *Client) WriteConfig(containerName, userID, token string, hostPort int) 
 
 	// 5. Create workspace directories
 	c.rt.Exec(ctx, containerName, "mkdir", "-p",
-		"/data/workspace/jamoss/data", "/data/workspace/jamoss/logs")
+		"/data/workspace/jamoss/data", "/data/workspace/jamoss/logs",
+		"/data/workspace/_attachments")
+
+	// 6. Write workspace AGENTS.md (injected into every conversation by OpenClaw)
+	c.rt.WriteFile(ctx, containerName, "/data/workspace/AGENTS.md", []byte(workspaceAgentsMD))
 
 	log.Info().Str("user_id", userID).Str("container", containerName).Msg("openclaw config written to container")
 	return nil
@@ -291,6 +299,10 @@ func (c *Client) SyncConfig(ctx context.Context, info *store.ContainerInfo) (boo
 			log.Warn().Err(err).Str("user_id", info.UserID).Msg("openclaw sync: update applied hash failed")
 		}
 	}
+
+	// Also ensure workspace AGENTS.md is up to date
+	c.rt.Exec(ctx, info.ContainerName, "mkdir", "-p", "/data/workspace/_attachments")
+	c.rt.WriteFile(ctx, info.ContainerName, "/data/workspace/AGENTS.md", []byte(workspaceAgentsMD))
 
 	log.Info().Str("container", info.ContainerName).Str("hash", hash[:12]).Msg("openclaw config synced")
 	return true, nil
@@ -501,6 +513,11 @@ func (c *Client) writeSkillBundle(ctx context.Context, containerName string, bun
 			return fmt.Errorf("write search credentials: %w", err)
 		}
 	}
+	if len(bundle.LarkCredentials) > 0 {
+		if err := c.rt.WriteFile(ctx, containerName, larkCredentialsPath, bundle.LarkCredentials); err != nil {
+			return fmt.Errorf("write lark credentials: %w", err)
+		}
+	}
 	if len(bundle.AssetGatewayAuth) > 0 {
 		if err := c.rt.WriteFile(ctx, containerName, assetAuthPath, bundle.AssetGatewayAuth); err != nil {
 			return fmt.Errorf("write asset gateway auth: %w", err)
@@ -564,6 +581,7 @@ func (c *Client) loadSkillsBundle() (*skillBundle, error) {
 	})
 	llm := c.getLLM()
 	bundle.SearchCredentials = buildSearchCredentials(llm)
+	bundle.LarkCredentials = buildLarkCredentials(llm)
 	bundle.AssetGatewayAuth = buildAssetGatewayAuth(llm)
 	bundle.SystemdDropIn = buildSkillEnvDropIn(llm)
 	bundle.Hash = computeSkillBundleHash(bundle)
@@ -632,6 +650,24 @@ func buildSearchCredentials(llm config.LLMConfig) []byte {
 	return append(data, '\n')
 }
 
+func buildLarkCredentials(llm config.LLMConfig) []byte {
+	if llm.FeishuAppID == "" && llm.FeishuAppSecret == "" {
+		return nil
+	}
+	payload := map[string]string{}
+	if llm.FeishuAppID != "" {
+		payload["app_id"] = llm.FeishuAppID
+	}
+	if llm.FeishuAppSecret != "" {
+		payload["app_secret"] = llm.FeishuAppSecret
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil
+	}
+	return append(data, '\n')
+}
+
 func buildAssetGatewayAuth(llm config.LLMConfig) []byte {
 	payload := map[string]string{}
 	if llm.AssetGatewayToken != "" {
@@ -659,6 +695,8 @@ func buildSkillEnvDropIn(llm config.LLMConfig) []byte {
 		{"GROK_MODEL", llm.GrokModel},
 		{"ASSET_GATEWAY_TOKEN", llm.AssetGatewayToken},
 		{"ASSET_GATEWAY_URL", llm.AssetGatewayURL},
+		{"LARK_APP_ID", llm.FeishuAppID},
+		{"LARK_APP_SECRET", llm.FeishuAppSecret},
 	}
 	var lines []string
 	for _, entry := range entries {
@@ -687,6 +725,7 @@ func computeSkillBundleHash(bundle *skillBundle) string {
 		data []byte
 	}{
 		{name: searchCredentialsPath, data: bundle.SearchCredentials},
+		{name: larkCredentialsPath, data: bundle.LarkCredentials},
 		{name: assetAuthPath, data: bundle.AssetGatewayAuth},
 		{name: skillEnvDropInPath, data: bundle.SystemdDropIn},
 	} {
@@ -761,3 +800,46 @@ func (c *Client) waitForContainerHealthURL(containerName, url string, timeout ti
 
 	return fmt.Errorf("container %s endpoint %s not healthy after %s", containerName, url, timeout)
 }
+
+// workspaceAgentsMD is the bootstrap AGENTS.md written to /data/workspace/.
+// OpenClaw ContextEngine automatically injects workspace AGENTS.md into every
+// conversation turn, so the agent always knows about file handling conventions.
+const workspaceAgentsMD = `# 工作区操作指引
+
+## 文件交互
+
+用户通过 Web 聊天界面（chat.jingao.club）与你对话。界面支持文件上传和下载。
+
+### 读取用户上传的文件
+
+用户上传的文件自动保存到 /data/workspace/_attachments/ 目录。
+当消息中出现 [已上传附件] 标记时，后面会列出文件的 VM 内路径：
+
+    [已上传附件]
+    - report.pdf: /data/workspace/_attachments/fa_xxx-report.pdf
+
+直接用 read 或 exec 工具读取这些路径。对于二进制文件（图片、PDF 等），
+用 exec 配合对应工具处理（如 python、pdftotext、file 等）。
+
+### 生成文件供用户下载
+
+当你用 write 或 exec 工具创建文件时，**在回复中提及文件的完整绝对路径**。
+系统会自动检测路径并在界面中展示下载卡片。
+
+支持自动检测的扩展名：
+docx doc xlsx xls pptx pdf csv png jpg jpeg gif svg webp
+mp4 mov webm mp3 wav m4a ogg flac zip tar gz html md
+
+示例：
+- write 工具写入 /data/workspace/output/report.docx → 自动展示下载卡片
+- exec 运行 python 脚本生成 /data/workspace/chart.png → 在回复中写明路径即可
+
+### 工作区目录结构
+
+- 你的默认工作目录是当前 workspace（通常是 ~/.openclaw/workspace-default/）
+- /data/workspace/_attachments/ — 用户上传文件存放处
+- /data/workspace/memory/ — 记忆日志（如启用）
+
+重要：当你用 write 工具创建文件时，建议使用绝对路径（如 /data/workspace/report.docx），
+这样系统能更可靠地检测文件并展示下载卡片。如果使用相对路径，系统也会尝试定位文件。
+`

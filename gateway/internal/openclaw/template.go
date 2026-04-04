@@ -627,13 +627,17 @@ func (c *Client) InstallTemplate(ctx context.Context, info *store.ContainerInfo,
 		return nil, fmt.Errorf("sync config with template: %w", err)
 	}
 
-	jmosConfigChanged, err := c.SyncJMOSConfig(info.ContainerName, info.UserID, info.ContainerToken)
-	if err != nil {
-		return nil, fmt.Errorf("sync jmos config with template: %w", err)
-	}
-	if jmosConfigChanged {
-		if err := c.RestartJMOS(info.ContainerName); err != nil {
-			return nil, fmt.Errorf("restart jmos after template install: %w", err)
+	// Only sync JMOS config when the template declares jamoss middleware
+	jmosConfigChanged := false
+	if manifest.Middleware.Type == "jamoss" {
+		jmosConfigChanged, err = c.SyncJMOSConfig(info.ContainerName, info.UserID, info.ContainerToken)
+		if err != nil {
+			return nil, fmt.Errorf("sync jmos config with template: %w", err)
+		}
+		if jmosConfigChanged {
+			if err := c.RestartJMOS(info.ContainerName); err != nil {
+				return nil, fmt.Errorf("restart jmos after template install: %w", err)
+			}
 		}
 	}
 

@@ -100,3 +100,18 @@ export type StreamBlock =
       artifact?: FileArtifact;
     }
   | { type: "status"; text: string };
+
+// ===== Channel-based navigation =====
+
+export type ChannelKind = "dashboard" | "agent" | "team" | "observe";
+
+export interface Channel {
+  id: string;
+  kind: ChannelKind;
+  sessionKey: string;
+  label: string;
+  icon?: string;
+  profileName?: string;
+  templateName?: string;
+  agentCount?: number;
+}

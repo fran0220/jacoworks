@@ -144,22 +144,12 @@ func main() {
 	authMiddleware := auth.NewMiddleware(s, cfg.Auth.AdminToken)
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
 
-	// UpstreamDialer map — OpenClaw routes are handled by oc-gateway; gateway only keeps
-	// the channel pool for legacy desktop/feishu WS connections that haven't migrated yet.
-	dialers := map[string]agent.UpstreamDialer{}
-
-	channelPool := agent.NewChannelPool(s, dialers, 5*time.Minute, 1024)
-	defer channelPool.Close()
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
 	defer wsTicketStore.Close()
-	wsHandler := agent.NewWSHandler(channelPool, wsTicketStore, func(userID, event string, properties map[string]interface{}) {
-		ph.CaptureEvent(userID, event, properties)
-	})
-	sseHandler := agent.NewSSEHandler(channelPool)
 
-	// Initialize Feishu Bot handler (shares ChannelPool with desktop for conversation sync)
+	// Initialize Feishu Bot handler (proxies to oc-gateway for OpenClaw routing)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
-	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, channelPool)
+	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s)
 	if cfg.OcGatewayURL != "" {
 		feishuBotHandler.SetOcGatewayURL(cfg.OcGatewayURL)
 		log.Info().Str("url", cfg.OcGatewayURL).Msg("feishu bot: proxying to oc-gateway")
@@ -247,21 +237,12 @@ func main() {
 		}
 	})))
 
-	// Agent browser WebSocket bridge (ticket auth — unified for desktop + webchat)
-	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wsTicketStore.IssueTicket(w, r)
-		if user := auth.GetUser(r.Context()); user != nil {
-			ph.CaptureEvent(user.ID, "ws_ticket_issued", map[string]interface{}{
-				"user_name": user.Name,
-			})
-		}
-	})))
-	mux.Handle("GET /ws/oc", wsHandler)
-
-	// Agent SSE/HTTP bridge
-	mux.Handle("GET /api/oc/stream", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.StreamEvents)))
-	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
-	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
+	// Agent WS/SSE — migrated to oc-gateway
+	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(ocGone))
+	mux.Handle("GET /ws/oc", ocGone)
+	mux.Handle("GET /api/oc/stream", authMiddleware.Authenticate(ocGone))
+	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(ocGone))
+	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(ocGone))
 
 	// User: available teams (templates) — migrated to oc-gateway
 	mux.Handle("GET /api/teams", authMiddleware.Authenticate(ocGone))

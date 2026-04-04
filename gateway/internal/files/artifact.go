@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"mime"
 	"path"
@@ -12,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
+	"github.com/fran0220/jacoworks/gateway/internal/container"
 )
 
 const (
@@ -36,6 +35,7 @@ type FileArtifact struct {
 
 type StatReader interface {
 	StatFile(ctx context.Context, containerName, filePath string) (int64, error)
+	Exec(ctx context.Context, name string, cmd ...string) (*container.ExecResult, error)
 }
 
 type ArtifactStore struct {
@@ -45,12 +45,6 @@ type ArtifactStore struct {
 	stopCh          chan struct{}
 	doneCh          chan struct{}
 	closeOnce       sync.Once
-}
-
-type EventEnricher struct {
-	store            *ArtifactStore
-	statReader       StatReader
-	pendingWritePath map[string]string
 }
 
 func NewArtifactStore(ttl, cleanupInterval time.Duration) *ArtifactStore {
@@ -91,6 +85,13 @@ func (s *ArtifactStore) Register(ctx context.Context, statReader StatReader, use
 	}
 	if userID == "" || containerName == "" {
 		return nil, fmt.Errorf("artifact registration requires user and container")
+	}
+
+	// Resolve relative paths: OpenClaw write tool uses relative paths within
+	// its workspace (typically ~/.openclaw/workspace-default/). Use find to
+	// locate the file if stat on the raw path fails.
+	if statReader != nil && !strings.HasPrefix(cleanPath, "/") {
+		cleanPath = resolveRelativePath(ctx, statReader, containerName, cleanPath)
 	}
 
 	size := int64(0)
@@ -200,158 +201,32 @@ func (s *ArtifactStore) expired(createdAt time.Time) bool {
 	return time.Since(createdAt) > s.ttl
 }
 
-func NewEventEnricher(store *ArtifactStore, statReader StatReader) *EventEnricher {
-	if store == nil || statReader == nil {
-		return nil
+// resolveRelativePath tries to find the absolute path of a relative file inside
+// the container. OpenClaw agents typically write to ~/.openclaw/workspace-default/
+// or /data/workspace/ using relative paths.
+func resolveRelativePath(ctx context.Context, sr StatReader, containerName, relativePath string) string {
+	// Common OpenClaw workspace directories to check
+	candidates := []string{
+		"/home/node/.openclaw/workspace-default/" + relativePath,
+		"/data/workspace/" + relativePath,
 	}
-	return &EventEnricher{
-		store:            store,
-		statReader:       statReader,
-		pendingWritePath: make(map[string]string),
-	}
-}
-
-func (e *EventEnricher) Enrich(ctx context.Context, userID, containerName string, payload []byte) []byte {
-	if e == nil || len(payload) == 0 {
-		return payload
-	}
-
-	var frame map[string]any
-	if err := json.Unmarshal(payload, &frame); err != nil {
-		return payload
-	}
-
-	mutated := false
-	if strings.EqualFold(asString(frame["type"]), "event") {
-		switch strings.ToLower(asString(frame["event"])) {
-		case "agent":
-			mutated = e.enrichAgentEvent(ctx, userID, containerName, frame)
-		case "chat":
-			mutated = e.enrichChatEvent(ctx, userID, containerName, frame)
+	for _, candidate := range candidates {
+		if _, err := sr.StatFile(ctx, containerName, candidate); err == nil {
+			return candidate
 		}
 	}
-
-	if !mutated {
-		return payload
-	}
-
-	encoded, err := json.Marshal(frame)
-	if err != nil {
-		return payload
-	}
-	return encoded
-}
-
-func (e *EventEnricher) enrichAgentEvent(ctx context.Context, userID, containerName string, frame map[string]any) bool {
-	payload := asMap(frame["payload"])
-	if strings.ToLower(asString(payload["stream"])) != "tool" {
-		return false
-	}
-
-	data := asMap(payload["data"])
-	phase := strings.ToLower(asString(data["phase"]))
-	toolName := strings.ToLower(asString(data["name"]))
-	toolCallID := asString(data["toolCallId"])
-
-	if toolName != "write" {
-		return false
-	}
-
-	if phase == "start" {
-		if filePath := extractPath(data["args"]); filePath != "" && toolCallID != "" {
-			e.pendingWritePath[toolCallID] = filePath
+	// Fallback: use find to search common workspace roots
+	result, err := sr.Exec(ctx, containerName, "find",
+		"/home/node/.openclaw", "/data/workspace",
+		"-name", path.Base(relativePath), "-type", "f",
+		"-maxdepth", "5", "-print", "-quit")
+	if err == nil && strings.TrimSpace(result.Stdout) != "" {
+		found := strings.TrimSpace(strings.Split(result.Stdout, "\n")[0])
+		if found != "" {
+			return found
 		}
-		return false
 	}
-
-	if phase != "result" && phase != "error" && phase != "end" && phase != "final" {
-		return false
-	}
-
-	filePath := extractPath(data["args"])
-	if filePath == "" && toolCallID != "" {
-		filePath = e.pendingWritePath[toolCallID]
-	}
-	if filePath == "" {
-		return false
-	}
-
-	artifact, ok := e.registerArtifact(ctx, userID, containerName, filePath)
-	if !ok {
-		return false
-	}
-
-	data["fileArtifact"] = artifact
-	if result := asMap(data["result"]); len(result) > 0 {
-		result["fileArtifact"] = artifact
-		data["result"] = result
-	}
-	payload["data"] = data
-	frame["payload"] = payload
-	if toolCallID != "" {
-		delete(e.pendingWritePath, toolCallID)
-	}
-	return true
-}
-
-func (e *EventEnricher) enrichChatEvent(ctx context.Context, userID, containerName string, frame map[string]any) bool {
-	payload := asMap(frame["payload"])
-	message := asMap(payload["message"])
-	content, ok := message["content"].([]any)
-	if !ok || len(content) == 0 {
-		return false
-	}
-
-	mutated := false
-	for i, rawItem := range content {
-		item := asMap(rawItem)
-		kind := strings.ToLower(asString(item["type"]))
-		toolName := strings.ToLower(asString(item["name"]))
-		if (kind != "tool_result" && kind != "toolresult") || toolName != "write" {
-			continue
-		}
-
-		filePath := extractPath(item["args"])
-		if filePath == "" {
-			filePath = extractPath(item["arguments"])
-		}
-		if filePath == "" {
-			filePath = extractPath(item["output"])
-		}
-		if filePath == "" {
-			continue
-		}
-
-		artifact, ok := e.registerArtifact(ctx, userID, containerName, filePath)
-		if !ok {
-			continue
-		}
-		item["fileArtifact"] = artifact
-		content[i] = item
-		mutated = true
-	}
-
-	if !mutated {
-		return false
-	}
-
-	message["content"] = content
-	payload["message"] = message
-	frame["payload"] = payload
-	return true
-}
-
-func (e *EventEnricher) registerArtifact(ctx context.Context, userID, containerName, filePath string) (*FileArtifact, bool) {
-	artifact, err := e.store.Register(ctx, e.statReader, userID, containerName, filePath)
-	if err != nil {
-		log.Warn().Err(err).
-			Str("user_id", userID).
-			Str("container", containerName).
-			Str("path", strings.TrimSpace(filePath)).
-			Msg("artifact registration failed")
-		return nil, false
-	}
-	return artifact, true
+	return relativePath
 }
 
 func normalizeArtifactPath(filePath string) (string, error) {
@@ -508,26 +383,4 @@ func detectMime(ext, category string) string {
 	return mimeType
 }
 
-func extractPath(value any) string {
-	rec := asMap(value)
-	for _, key := range []string{"path", "filePath", "filepath", "target"} {
-		if pathValue := strings.TrimSpace(asString(rec[key])); pathValue != "" {
-			return pathValue
-		}
-	}
-	return ""
-}
 
-func asMap(value any) map[string]any {
-	if rec, ok := value.(map[string]any); ok {
-		return rec
-	}
-	return map[string]any{}
-}
-
-func asString(value any) string {
-	if text, ok := value.(string); ok {
-		return text
-	}
-	return ""
-}

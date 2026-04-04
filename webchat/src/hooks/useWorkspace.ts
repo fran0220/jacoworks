@@ -131,8 +131,20 @@ function reducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState
   }
 }
 
+/** Derive the OpenClaw session key for a given thread.
+ *  Default workspace threads get per-thread keys so each thread has independent context.
+ *  Team workspace threads share the team session key. */
+export function deriveOcSessionKey(workspaceKey: string, threadId: string | null): string {
+  if (!threadId) return workspaceKey;
+  // Team keys (e.g. "agent:leader:main") are shared — don't split per thread
+  if (workspaceKey !== DEFAULT_OPENCLAW_SESSION_KEY) return workspaceKey;
+  return `agent:default:t-${threadId}`;
+}
+
 export interface UseWorkspaceResult {
   activeWorkspaceKey: string;
+  /** The OpenClaw session key for the current thread (per-thread isolation). */
+  ocSessionKey: string;
   activeThreadId: string | null;
   threads: ThreadMeta[];
   loading: boolean;
@@ -236,7 +248,7 @@ export default function useWorkspace(): UseWorkspaceResult {
           id: session.id,
           workspaceKey,
           title: session.title,
-          updatedAt: session.updatedAt,
+          updatedAt: Date.now(),
         };
 
         rememberThreadWorkspace(session.id, workspaceKey);
@@ -340,9 +352,15 @@ export default function useWorkspace(): UseWorkspaceResult {
     [state.activeWorkspaceKey, state.threads],
   );
 
+  const ocSessionKey = useMemo(
+    () => deriveOcSessionKey(state.activeWorkspaceKey, state.activeThreadId),
+    [state.activeWorkspaceKey, state.activeThreadId],
+  );
+
   return useMemo(
     () => ({
       activeWorkspaceKey: state.activeWorkspaceKey,
+      ocSessionKey,
       activeThreadId: state.activeThreadId,
       threads,
       loading: state.loading,
@@ -367,6 +385,7 @@ export default function useWorkspace(): UseWorkspaceResult {
       state.activeThreadId,
       state.activeWorkspaceKey,
       state.loading,
+      ocSessionKey,
       switchWorkspace,
       threads,
       saveThreadMessages,

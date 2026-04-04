@@ -113,12 +113,10 @@ const LeaderAssistant = forwardRef<LeaderAssistantHandle, LeaderAssistantProps>(
         scene.mount(el);
 
         const pool = new AvatarPool();
-        pool.loadBaseModels().catch(() => {});
-
         const driver = new LeaderDriver(() => scene.getAnimator());
         modulesRef.current = { scene, driver };
 
-        scene.loadLeader(pool, leaderRole).catch(() => {});
+        scene.loadLeader(pool, leaderRole).catch((err) => console.error("[LeaderAssistant] loadLeader failed:", err));
       })();
 
       const ro = new ResizeObserver(() => modulesRef.current?.scene.resize());

@@ -21,12 +21,7 @@ export class LeaderDriver {
   onUserSend(): void {
     this.clearTimers();
     this.state = "listening";
-    const anim = this.getAnimator();
-    if (anim) {
-      anim.setExpression("neutral", 1);
-      anim.setExpression("happy", 0);
-      anim.setExpression("relaxed", 0);
-    }
+    this.getAnimator()?.setState("thinking");
     this.bubble = { text: "收到，让我想想...", type: "status" };
   }
 
@@ -45,11 +40,7 @@ export class LeaderDriver {
     this.clearTimers();
     this.state = "speaking";
     this.textBuffer += text;
-    const anim = this.getAnimator();
-    if (anim) {
-      anim.setState("idle");
-      anim.setExpression("happy", 0.3);
-    }
+    this.getAnimator()?.setState("working");
     const preview = this.textBuffer.length > 40
       ? this.textBuffer.slice(0, 40) + "..."
       : this.textBuffer;
@@ -67,11 +58,7 @@ export class LeaderDriver {
     this.clearTimers();
     const prevState = this.state;
     this.state = this.textBuffer ? "speaking" : "idle";
-    const anim = this.getAnimator();
-    if (anim) {
-      anim.setState(this.textBuffer ? "idle" : "idle");
-      if (this.textBuffer) anim.setExpression("happy", 0.3);
-    }
+    this.getAnimator()?.setState(this.textBuffer ? "working" : "idle");
     this.bubble = { text: `✅ ${toolName} 完成`, type: "status" };
 
     const tid = setTimeout(() => {
@@ -88,11 +75,7 @@ export class LeaderDriver {
   onDone(): void {
     this.clearTimers();
     this.state = "done";
-    const anim = this.getAnimator();
-    if (anim) {
-      anim.setState("celebrating");
-      anim.setExpression("happy", 0.8);
-    }
+    this.getAnimator()?.setState("idle");
 
     if (this.textBuffer) {
       const tail = this.textBuffer.length > 40

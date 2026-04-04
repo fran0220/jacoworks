@@ -243,9 +243,6 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
       const zones = new ZoneManager(threeScene);
       const waypointGraph = new WaypointGraph();
       const pool = new AvatarPool();
-
-      await pool.loadBaseModels();
-
       const factory = new AvatarFactory(pool, threeScene);
       const worldAgents = new Map<string, WorldAgent>();
       const navigators = new Map<string, InstanceType<typeof AvatarNavigator>>();
@@ -288,11 +285,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
           if (!agent) continue;
           animator.setState(agent.state);
           animator.update(delta);
-          // Sync 3D root position for non-VRM fallback agents
-          // (VRM agents are synced by AvatarNavigator via vrm.scene)
-          if (!agent.vrm) {
-            agent.root.position.copy(agent.position);
-          }
+          agent.root.position.copy(agent.position);
         }
       });
 
@@ -355,7 +348,8 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         ]);
         for (const agent of added) {
           navigators.set(agent.id, new AvatarNavigator(agent));
-          animators.set(agent.id, new AvatarAnimator(agent.vrm, agent.root));
+          const glb = factory.getGLBAvatar(agent.id);
+          animators.set(agent.id, new AvatarAnimator(agent.root, glb?.clips));
         }
 
         // Cleanup removed

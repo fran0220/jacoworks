@@ -8,6 +8,37 @@ import Markdown from "./Markdown";
 import FileCard from "./FileCard";
 import VirtualMessageList from "./VirtualMessageList";
 
+function StreamingActivity({ blocks }: { blocks: StreamBlock[] }) {
+  const lastBlock = blocks[blocks.length - 1];
+  if (!lastBlock) return null;
+
+  // Show activity indicator when:
+  // 1. A tool is currently running
+  // 2. Last block is a completed tool (waiting for next LLM response)
+  const hasRunningTool = blocks.some(
+    (b) => b.type === "tool" && b.status === "running",
+  );
+  const lastIsCompletedTool =
+    lastBlock.type === "tool" && lastBlock.status !== "running";
+
+  // If last block is streaming text, cursor is already shown by StreamingCursor
+  if (lastBlock.type === "text") return null;
+  // If a tool is actively running, ToolStatus already shows a spinner
+  if (hasRunningTool) return null;
+
+  // After tool completes, show "thinking" indicator while waiting for next LLM turn
+  if (lastIsCompletedTool) {
+    return (
+      <div className="streaming-activity">
+        <span className="spinner" />
+        <span className="streaming-activity-label">正在处理…</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function Welcome({ agentCount }: { agentCount: number }) {
   return (
     <div className="welcome">
@@ -116,7 +147,12 @@ export default function ChatView({
           </div>
         </div>
       )}
-      {streaming && blocks.length > 0 && blocks.map((block, i) => renderBlock(block, i, blocks, true, onPreview))}
+      {streaming && blocks.length > 0 && (
+        <>
+          {blocks.map((block, i) => renderBlock(block, i, blocks, true, onPreview))}
+          <StreamingActivity blocks={blocks} />
+        </>
+      )}
 
       {error && <div className="error-msg">错误: {error}</div>}
     </div>

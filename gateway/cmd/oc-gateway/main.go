@@ -30,7 +30,6 @@ import (
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
 	"github.com/fran0220/jacoworks/gateway/internal/auth/feishu"
 	"github.com/fran0220/jacoworks/gateway/internal/config"
-	"github.com/fran0220/jacoworks/gateway/internal/feishubot"
 	filespkg "github.com/fran0220/jacoworks/gateway/internal/files"
 	incuspkg "github.com/fran0220/jacoworks/gateway/internal/incus"
 	"github.com/fran0220/jacoworks/gateway/internal/middleware"
@@ -127,6 +126,9 @@ func main() {
 				llm.PrimaryProvider = setting.Value
 			}
 		}
+		// Copy feishu app credentials into LLM config so DeploySkills can push them to VMs
+		llm.FeishuAppID = cfg.Auth.FeishuClientID
+		llm.FeishuAppSecret = cfg.Auth.FeishuClientSecret
 		cfg.UpdateLLM(llm)
 		log.Info().Msg("loaded settings from database")
 	} else {
@@ -151,8 +153,6 @@ func main() {
 		log.Fatal().Err(err).Msg("init incus client")
 	}
 	ocClient := ocpkg.NewClient(incusRT, cfg.OpenClaw.DataRoot, cfg.OpenClaw.HostIP, cfg.OpenClaw.Image, cfg.GetLLM, s)
-	artifactStore := filespkg.NewArtifactStore(24*time.Hour, time.Hour)
-	defer artifactStore.Close()
 
 	// Freeze disabled: VMs stay running permanently for instant WS connection.
 	// Previously: freeze after 1h idle → unpause + health poll added 5-30s to every reconnect.
@@ -173,25 +173,10 @@ func main() {
 		log.Fatal().Err(err).Msg("load login template")
 	}
 
-	ocDialer := agent.NewOpenClawDialer(s, ocClient, nil)
-	ocDialer.SetAutoPairEnabled(true)
-	dialers := map[string]agent.UpstreamDialer{
-		store.ContainerTypeOpenClaw: ocDialer,
-	}
-
-	channelPool := agent.NewChannelPool(s, dialers, 5*time.Minute, 1024)
-	channelPool.ConfigureArtifacts(artifactStore, incusRT)
-	defer channelPool.Close()
-
-	// Initialize Feishu Bot handler (shares ChannelPool with webchat for conversation sync)
-	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
-	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s, channelPool)
-
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
 	defer wsTicketStore.Close()
 
-	wsHandler := agent.NewWSHandler(channelPool, wsTicketStore, func(userID, event string, properties map[string]interface{}) {})
-	sseHandler := agent.NewSSEHandler(channelPool)
+	wsHandler := agent.NewWSHandler(s, wsTicketStore, ocClient, func(userID, event string, properties map[string]interface{}) {})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -236,17 +221,27 @@ func main() {
 
 	mux.Handle("GET /ws/oc", wsHandler)
 
-	mux.Handle("GET /api/oc/stream", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.StreamEvents)))
-	mux.Handle("POST /api/oc/send", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.SendCommand)))
-	mux.Handle("GET /api/oc/status", authMiddleware.Authenticate(http.HandlerFunc(sseHandler.GetStatus)))
-	mux.Handle("GET /api/files/{id}", authMiddleware.Authenticate(http.HandlerFunc(filespkg.GetFileMetaHandler(artifactStore))))
-	mux.Handle("GET /api/files/{id}/content", authMiddleware.Authenticate(http.HandlerFunc(filespkg.GetFileContentHandler(artifactStore, incusRT))))
+	containerLookup := func(ctx context.Context, userID string) (string, error) {
+		info, err := s.GetContainerInfo(ctx, userID, store.ContainerTypeOpenClaw)
+		if err != nil {
+			return "", err
+		}
+		return info.ContainerName, nil
+	}
+	mux.Handle("POST /api/files/upload", authMiddleware.Authenticate(http.HandlerFunc(filespkg.UploadHandler(nil, incusRT, containerLookup))))
+	mux.Handle("GET /api/vm/file", authMiddleware.Authenticate(http.HandlerFunc(filespkg.ReadByPathHandler(incusRT, containerLookup))))
 
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
 	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, ocClient, auditLogger))))
 
 	mux.Handle("GET /api/teams", authMiddleware.Authenticate(http.HandlerFunc(userTeamsHandler(s, ocClient))))
 	mux.Handle("POST /api/teams/install", authMiddleware.Authenticate(http.HandlerFunc(installUserTeamHandler(s, ocClient, auditLogger))))
+
+	// Avatar CRUD (user-level)
+	mux.Handle("GET /api/avatars", authMiddleware.Authenticate(http.HandlerFunc(listAvatarsHandler(s))))
+	mux.Handle("GET /api/avatars/{role}", authMiddleware.Authenticate(http.HandlerFunc(getAvatarHandler(s))))
+	mux.Handle("PUT /api/avatars/{role}", authMiddleware.Authenticate(http.HandlerFunc(upsertAvatarHandler(s))))
+	mux.Handle("DELETE /api/avatars/{role}", authMiddleware.Authenticate(http.HandlerFunc(deleteAvatarHandler(s))))
 
 	jamossProxy := authMiddleware.Authenticate(http.HandlerFunc(jamossProxyHandler(s, ocClient)))
 	mux.Handle("GET /api/jamoss", jamossProxy)
@@ -283,11 +278,7 @@ func main() {
 	mux.Handle("PUT /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateTemplateHandler(s, ocClient, auditLogger)))))
 	mux.Handle("DELETE /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(deleteTemplateHandler(s, ocClient, auditLogger)))))
 
-	// Feishu bot chat proxy endpoint (called by gateway's feishu webhook handler)
-	mux.HandleFunc("POST /api/feishu/chat", feishuBotHandler.HandleChatProxy)
-
-	// Feishu webhook (can also be called directly if configured)
-	mux.HandleFunc("POST /api/feishu/webhook", feishuBotHandler.HandleWebhook)
+	// TODO: Feishu bot routes removed — needs refactor to work without ChannelPool (direct OpenClaw connection)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1721,6 +1712,112 @@ func proxyVncWebSocket(w http.ResponseWriter, r *http.Request, hostIP string, po
 		}
 	}()
 	<-done
+}
+
+func listAvatarsHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		avatars, err := s.ListAvatars(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if avatars == nil {
+			avatars = []store.AgentAvatar{}
+		}
+		writeJSON(w, http.StatusOK, avatars)
+	}
+}
+
+func getAvatarHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		role := r.PathValue("role")
+		if role == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role is required"})
+			return
+		}
+		avatar, err := s.GetAvatar(r.Context(), user.ID, role)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "avatar not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, avatar)
+	}
+}
+
+func upsertAvatarHandler(s *store.Store) http.HandlerFunc {
+	type upsertBody struct {
+		ModelURL string            `json:"model_url"`
+		AnimURLs map[string]string `json:"anim_urls"`
+		Style    string            `json:"style"`
+		Source   string            `json:"source"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		role := r.PathValue("role")
+		if role == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role is required"})
+			return
+		}
+		var body upsertBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if body.ModelURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model_url is required"})
+			return
+		}
+		if body.Style == "" {
+			body.Style = "cartoon"
+		}
+		if body.Source == "" {
+			body.Source = "tripo"
+		}
+		if body.AnimURLs == nil {
+			body.AnimURLs = map[string]string{}
+		}
+		avatar, err := s.UpsertAvatar(r.Context(), user.ID, role, body.ModelURL, body.AnimURLs, body.Style, body.Source)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, avatar)
+	}
+}
+
+func deleteAvatarHandler(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		role := r.PathValue("role")
+		if role == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role is required"})
+			return
+		}
+		if err := s.DeleteAvatar(r.Context(), user.ID, role); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	}
 }
 
 func isTerminal() bool {

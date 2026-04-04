@@ -16,20 +16,15 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/fran0220/jacoworks/gateway/internal/agent"
 	"github.com/fran0220/jacoworks/gateway/internal/auth"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
 
 const (
-	maxReplyLength        = 3000
-	responseTimeout       = 120 * time.Second
-	channelReadyWait      = 30 * time.Second
-	openClawChallengeWait = 5 * time.Second
-	openClawConnectWait   = 10 * time.Second
-	defaultSessionKey     = "agent:default:main"
-	dedupTTL              = 30 * time.Minute
-	dedupCleanInterval    = 10 * time.Minute
+	maxReplyLength     = 3000
+	responseTimeout    = 120 * time.Second
+	dedupTTL           = 30 * time.Minute
+	dedupCleanInterval = 10 * time.Minute
 )
 
 var mentionPattern = regexp.MustCompile(`@_user_\d+\s*`)
@@ -40,15 +35,12 @@ type imageAttachment struct {
 }
 
 // Handler processes Feishu webhook events and routes messages to OpenClaw containers
-// via the shared ChannelPool (WebSocket protocol), enabling conversation sync with webchat.
+// via oc-gateway HTTP proxy, enabling conversation sync with webchat.
 type Handler struct {
-	client      *Client
-	store       *store.Store
-	channelPool *agent.ChannelPool
+	client *Client
+	store  *store.Store
 
 	// ocGatewayURL is the base URL of oc-gateway for proxying chat messages.
-	// When set, messages are forwarded to oc-gateway's /api/feishu/chat instead
-	// of routing through the local ChannelPool (which has no OpenClaw dialer on gateway).
 	ocGatewayURL string
 	httpClient   *http.Client
 
@@ -56,12 +48,11 @@ type Handler struct {
 	processedEvents sync.Map // event_id → time.Time (webhook dedup)
 }
 
-func NewHandler(client *Client, s *store.Store, channelPool *agent.ChannelPool) *Handler {
+func NewHandler(client *Client, s *store.Store) *Handler {
 	h := &Handler{
-		client:      client,
-		store:       s,
-		channelPool: channelPool,
-		httpClient:  &http.Client{Timeout: responseTimeout},
+		client:     client,
+		store:      s,
+		httpClient: &http.Client{Timeout: responseTimeout},
 	}
 	go h.cleanupLoop()
 	return h
@@ -161,52 +152,6 @@ type ChatProxyResponse struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// HandleChatProxy accepts a message from the gateway's feishu webhook and routes it
-// through the local ChannelPool to the OpenClaw container. This enables the gateway
-// (on jingao) to proxy feishu messages to oc-gateway (on local) which has the
-// OpenClaw dialers.
-func (h *Handler) HandleChatProxy(w http.ResponseWriter, r *http.Request) {
-	var req ChatProxyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ChatProxyResponse{Error: "invalid json"})
-		return
-	}
-
-	if req.UserID == "" || req.Text == "" {
-		writeJSON(w, http.StatusBadRequest, ChatProxyResponse{Error: "user_id and text are required"})
-		return
-	}
-
-	log.Info().
-		Str("user_id", req.UserID).
-		Str("open_id", req.OpenID).
-		Str("message_id", req.MessageID).
-		Msg("feishu chat proxy: received message")
-
-	// Single-flight: one chat at a time per user
-	lock := h.getChatLock(req.UserID)
-	lock.Lock()
-	defer lock.Unlock()
-
-	// Route message via agent channel
-	response, err := h.routeViaChannel(r.Context(), req.UserID, req.Text, nil)
-	if err != nil {
-		log.Error().Err(err).Str("user_id", req.UserID).Msg("feishu chat proxy: route failed")
-		writeJSON(w, http.StatusInternalServerError, ChatProxyResponse{Error: err.Error()})
-		return
-	}
-
-	// Save to DB session
-	h.syncSessionMessages(r.Context(), req.UserID, req.Text, response)
-
-	log.Info().
-		Str("user_id", req.UserID).
-		Int("response_len", len(response)).
-		Msg("feishu chat proxy: success")
-
-	writeJSON(w, http.StatusOK, ChatProxyResponse{Response: response})
-}
-
 // --- Message processing (runs async in goroutine) ---
 
 func (h *Handler) handleMessage(raw json.RawMessage) {
@@ -304,23 +249,11 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 		actualMessage = sb.String()
 	}
 
-	var response string
-
-	// Route: proxy to oc-gateway if configured, otherwise use local ChannelPool
-	if h.ocGatewayURL != "" {
-		response, err = h.routeViaOcGateway(user.ID, openID, messageID, actualMessage)
-	} else {
-		response, err = h.routeViaChannel(ctx, user.ID, text, attachments)
-	}
+	response, err := h.routeViaOcGateway(user.ID, openID, messageID, actualMessage)
 	if err != nil {
-		log.Error().Err(err).Str("user_id", user.ID).Bool("proxied", h.ocGatewayURL != "").Msg("feishu bot: route failed")
+		log.Error().Err(err).Str("user_id", user.ID).Msg("feishu bot: route failed")
 		h.client.ReplyText(messageID, "AI 处理消息时出错，请稍后重试。")
 		return
-	}
-
-	// Save to DB session for desktop visibility (skip if proxied — oc-gateway already saved)
-	if h.ocGatewayURL == "" {
-		h.syncSessionMessages(ctx, user.ID, text, response)
 	}
 
 	// Truncate if too long
@@ -380,366 +313,6 @@ func (h *Handler) routeViaOcGateway(userID, openID, messageID, text string) (str
 	}
 
 	return proxyResp.Response, nil
-}
-
-// --- Channel routing (replaces HTTP routeToContainer) ---
-
-// routeViaChannel sends a message through the shared agent ChannelPool and
-// collects the streaming response. This uses the same WS protocol as the desktop,
-// ensuring conversation context is shared between both channels.
-func (h *Handler) routeViaChannel(ctx context.Context, userID, message string, attachments []imageAttachment) (string, error) {
-	channel, info, err := h.channelPool.GetOrCreate(ctx, userID, store.ContainerTypeOpenClaw)
-	if err != nil {
-		return "", fmt.Errorf("get channel: %w", err)
-	}
-	if info == nil || strings.TrimSpace(info.ContainerToken) == "" {
-		return "", fmt.Errorf("openclaw token unavailable")
-	}
-
-	// Subscribe to events (lastSeq=0 → no replay required for request/response flow).
-	_, updates, unsubscribe := channel.Subscribe(0)
-	defer unsubscribe()
-
-	wasConnected := channel.Status().Connected
-
-	// Wait for channel to be connected if not already
-	if !wasConnected {
-		if !channel.Status().Connected {
-			if err := waitForReady(updates); err != nil {
-				return "", err
-			}
-		}
-		if err := completeOpenClawHandshake(channel, updates, info.ContainerToken); err != nil {
-			return "", err
-		}
-	}
-
-	// Generate unique request ID for correlation
-	requestID := generateRequestID()
-
-	// Build OpenClaw chat.send payload
-	actualMessage := message
-	if len(attachments) > 0 {
-		var sb strings.Builder
-		sb.WriteString(message)
-		for _, att := range attachments {
-			sb.WriteString(fmt.Sprintf("\n[图片: %s]", att.URL))
-		}
-		actualMessage = sb.String()
-	}
-
-	chatReq := map[string]interface{}{
-		"type":   "req",
-		"id":     requestID,
-		"method": "chat.send",
-		"params": map[string]interface{}{
-			"sessionKey":     defaultSessionKey,
-			"message":        actualMessage,
-			"idempotencyKey": fmt.Sprintf("feishu-%s-%s", userID, requestID),
-		},
-	}
-	payload, _ := json.Marshal(chatReq)
-
-	// Send the request through the shared channel
-	if err := channel.SendRequest("req", payload, requestID); err != nil {
-		return "", fmt.Errorf("send chat.send: %w", err)
-	}
-
-	// Collect streaming response
-	return collectOpenClawResponse(updates, requestID)
-}
-
-// waitForReady blocks until the channel emits proxy.ready or times out.
-func waitForReady(updates <-chan agent.Event) error {
-	timeout := time.After(channelReadyWait)
-	for {
-		select {
-		case event, ok := <-updates:
-			if !ok {
-				return fmt.Errorf("channel closed while waiting for ready")
-			}
-			if event.Event == "proxy.ready" {
-				return nil
-			}
-			if event.Event == "proxy.error" {
-				return fmt.Errorf("channel error while connecting")
-			}
-		case <-timeout:
-			return fmt.Errorf("channel ready timeout (%v)", channelReadyWait)
-		}
-	}
-}
-
-func completeOpenClawHandshake(channel *agent.UserChannel, updates <-chan agent.Event, token string) error {
-	timeout := time.After(openClawChallengeWait)
-
-	for {
-		select {
-		case event, ok := <-updates:
-			if !ok {
-				return fmt.Errorf("channel closed while waiting for openclaw challenge")
-			}
-			if event.Event == "proxy.error" {
-				return fmt.Errorf("channel error while waiting for openclaw challenge")
-			}
-
-			frame, ok := decodeOpenClawFrame(event)
-			if !ok {
-				continue
-			}
-			if frame.Type == "event" && frame.Event == "connect.challenge" {
-				return sendOpenClawConnect(channel, updates, token)
-			}
-		case <-timeout:
-			// No challenge means the shared channel was already authenticated.
-			return nil
-		}
-	}
-}
-
-func sendOpenClawConnect(channel *agent.UserChannel, updates <-chan agent.Event, token string) error {
-	connectID := generateRequestID()
-	connectReq := map[string]interface{}{
-		"type":   "req",
-		"id":     connectID,
-		"method": "connect",
-		"params": map[string]interface{}{
-			"minProtocol": 3,
-			"maxProtocol": 3,
-			"client": map[string]string{
-				"id":       "feishu-bot",
-				"version":  "1.0.0",
-				"platform": "gateway",
-				"mode":     "backend",
-			},
-			"role":   "operator",
-			"scopes": []string{"operator.admin"},
-			"caps":   []string{"tool-events"},
-			"auth": map[string]string{
-				"token": token,
-			},
-		},
-	}
-
-	payload, _ := json.Marshal(connectReq)
-	if err := channel.SendRequest("req", payload, connectID); err != nil {
-		return fmt.Errorf("send openclaw connect: %w", err)
-	}
-
-	timeout := time.After(openClawConnectWait)
-	for {
-		select {
-		case event, ok := <-updates:
-			if !ok {
-				return fmt.Errorf("channel closed during openclaw connect")
-			}
-			if event.Event == "proxy.error" {
-				return fmt.Errorf("channel error during openclaw connect")
-			}
-
-			frame, ok := decodeOpenClawFrame(event)
-			if !ok || frame.Type != "res" || frame.ID != connectID {
-				continue
-			}
-
-			if frame.OK != nil && *frame.OK {
-				return nil
-			}
-			errMsg := decodeOpenClawError(frame.Error)
-			if errMsg == "" {
-				errMsg = "unknown error"
-			}
-			return fmt.Errorf("openclaw connect rejected: %s", errMsg)
-		case <-timeout:
-			return fmt.Errorf("openclaw connect timeout (%v)", openClawConnectWait)
-		}
-	}
-}
-
-// collectOpenClawResponse waits for OpenClaw stream events and collects assistant text.
-func collectOpenClawResponse(updates <-chan agent.Event, requestID string) (string, error) {
-	var response strings.Builder
-	timeout := time.After(responseTimeout)
-
-	for {
-		select {
-		case event, ok := <-updates:
-			if !ok {
-				if response.Len() > 0 {
-					return strings.TrimSpace(response.String()), nil
-				}
-				return "", fmt.Errorf("channel closed during response collection")
-			}
-			if event.Event == "proxy.error" {
-				if response.Len() > 0 {
-					return strings.TrimSpace(response.String()), nil
-				}
-				return "", fmt.Errorf("channel error while collecting response")
-			}
-
-			frame, ok := decodeOpenClawFrame(event)
-			if !ok {
-				continue
-			}
-
-			switch frame.Type {
-			case "res":
-				if frame.ID != requestID {
-					continue
-				}
-				if frame.OK != nil && *frame.OK {
-					continue
-				}
-				errMsg := decodeOpenClawError(frame.Error)
-				if response.Len() > 0 {
-					return strings.TrimSpace(response.String()), nil
-				}
-				if errMsg == "" {
-					errMsg = "request failed"
-				}
-				return "", fmt.Errorf("openclaw request failed: %s", errMsg)
-
-			case "event":
-				switch frame.Event {
-				case "agent":
-					var payload struct {
-						Stream string `json:"stream"`
-						Data   struct {
-							Delta   string `json:"delta"`
-							Text    string `json:"text"`
-							Phase   string `json:"phase"`
-							Error   string `json:"error"`
-							Message string `json:"message"`
-						} `json:"data"`
-					}
-					if json.Unmarshal(frame.Payload, &payload) == nil {
-						switch payload.Stream {
-						case "text", "assistant":
-							delta := payload.Data.Delta
-							if delta == "" {
-								delta = payload.Data.Text
-							}
-							response.WriteString(delta)
-						case "lifecycle":
-							if strings.EqualFold(payload.Data.Phase, "error") && response.Len() == 0 {
-								errMsg := strings.TrimSpace(payload.Data.Error)
-								if errMsg == "" {
-									errMsg = strings.TrimSpace(payload.Data.Message)
-								}
-								if errMsg != "" {
-									return "", fmt.Errorf("openclaw stream error: %s", errMsg)
-								}
-							}
-						}
-					}
-
-				case "chat":
-					var payload struct {
-						State        string          `json:"state"`
-						ErrorMessage string          `json:"errorMessage"`
-						Message      json.RawMessage `json:"message"`
-					}
-					if json.Unmarshal(frame.Payload, &payload) != nil {
-						continue
-					}
-
-					state := strings.ToLower(strings.TrimSpace(payload.State))
-					switch state {
-					case "final", "aborted":
-						if response.Len() == 0 {
-							response.WriteString(extractOpenClawMessageText(payload.Message))
-						}
-						return strings.TrimSpace(response.String()), nil
-					case "error":
-						if response.Len() > 0 {
-							return strings.TrimSpace(response.String()), nil
-						}
-						errMsg := strings.TrimSpace(payload.ErrorMessage)
-						if errMsg == "" {
-							errMsg = "openclaw chat error"
-						}
-						return "", fmt.Errorf("%s", errMsg)
-					}
-				}
-			}
-
-		case <-timeout:
-			if response.Len() > 0 {
-				return strings.TrimSpace(response.String()), nil
-			}
-			return "", fmt.Errorf("response timeout (%v)", responseTimeout)
-		}
-	}
-}
-
-type openClawFrame struct {
-	Type    string          `json:"type"`
-	ID      string          `json:"id,omitempty"`
-	Event   string          `json:"event,omitempty"`
-	Payload json.RawMessage `json:"payload,omitempty"`
-	OK      *bool           `json:"ok,omitempty"`
-	Error   json.RawMessage `json:"error,omitempty"`
-}
-
-func decodeOpenClawFrame(event agent.Event) (openClawFrame, bool) {
-	if event.Event != "message" {
-		return openClawFrame{}, false
-	}
-	var frame openClawFrame
-	if err := json.Unmarshal(event.Data, &frame); err != nil || frame.Type == "" {
-		return openClawFrame{}, false
-	}
-	return frame, true
-}
-
-func decodeOpenClawError(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var payload struct {
-		Message string `json:"message"`
-	}
-	if json.Unmarshal(raw, &payload) == nil && strings.TrimSpace(payload.Message) != "" {
-		return strings.TrimSpace(payload.Message)
-	}
-	var msg string
-	if json.Unmarshal(raw, &msg) == nil {
-		return strings.TrimSpace(msg)
-	}
-	return strings.TrimSpace(string(raw))
-}
-
-func extractOpenClawMessageText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var direct string
-	if json.Unmarshal(raw, &direct) == nil {
-		return strings.TrimSpace(direct)
-	}
-
-	var message struct {
-		Text    string `json:"text"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if json.Unmarshal(raw, &message) != nil {
-		return ""
-	}
-
-	if strings.TrimSpace(message.Text) != "" {
-		return strings.TrimSpace(message.Text)
-	}
-
-	parts := make([]string, 0, len(message.Content))
-	for _, item := range message.Content {
-		if strings.EqualFold(item.Type, "text") && strings.TrimSpace(item.Text) != "" {
-			parts = append(parts, strings.TrimSpace(item.Text))
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 // --- DB session sync ---

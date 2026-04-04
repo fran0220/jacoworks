@@ -136,6 +136,12 @@ incus exec "${BUILD_INSTANCE}" -- bash -c "
 npm install -g @doufunao123/asset-gateway
 "
 
+# ── 7e. Lark CLI (飞书集成) ───────────────────────────
+echo "📥 Installing Lark CLI..."
+incus exec "${BUILD_INSTANCE}" -- bash -c "
+npm install -g @larksuite/cli
+"
+
 # ── 7d. Agent Reach (互联网能力) ─────────────────────
 echo "📥 Installing Agent Reach and internet tools..."
 incus exec "${BUILD_INSTANCE}" -- bash -c "
@@ -326,6 +332,7 @@ echo "  agent-reach: $(agent-reach --version 2>&1 | head -1 || echo installed)"
 echo "  yt-dlp: $(yt-dlp --version 2>&1 | head -1)"
 echo "  bird: $(bird --version 2>&1 | head -1 || echo installed)"
 echo "  mcporter: $(mcporter --version 2>&1 | head -1 || echo installed)"
+echo "  lark-cli: $(lark-cli --version 2>&1 | head -1 || echo installed)"
 echo "  gh: $(gh --version 2>&1 | head -1)"
 
 python3 - <<"PY"

@@ -1,7 +1,11 @@
 import { useRef, useCallback, useMemo, useEffect, useState } from "react";
+import { Paperclip, X, Loader2 } from "lucide-react";
 import type { AgentSummary } from "../lib/feed";
+import { uploadFile, validateFileSize, buildMessageWithAttachments } from "../lib/upload";
+import { formatSize } from "../lib/file-utils";
 import MentionPopover, { type MentionOption } from "./MentionPopover";
 import { usePretextFont, calcTextHeight } from "../hooks/usePretext";
+import type { FileArtifact } from "../types";
 
 const ROLE_LABELS: Record<string, string> = {
   planner: "规划师",
@@ -18,6 +22,16 @@ const TEAM_MENTION: MentionOption = {
   role: "team",
   roleLabel: "广播",
 };
+
+interface PendingUpload {
+  localId: string;
+  name: string;
+  size: number;
+  status: "uploading" | "ready" | "error";
+  vmPath?: string;
+  artifact?: FileArtifact;
+  error?: string;
+}
 
 function buildMentionOptions(agents: AgentSummary[]): MentionOption[] {
   return agents.map((agent) => ({
@@ -50,6 +64,8 @@ function findMentionQuery(value: string, cursor: number) {
   return { start: atIndex, end, query };
 }
 
+let uploadCounter = 0;
+
 export default function Composer({
   disabled,
   streaming,
@@ -65,9 +81,11 @@ export default function Composer({
 }) {
   const composerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const [mentionRange, setMentionRange] = useState<{ start: number; end: number; query: string } | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
 
   const fontInfo = usePretextFont(textareaRef);
 
@@ -83,6 +101,9 @@ export default function Composer({
       return haystacks.some((value) => value.toLowerCase().includes(normalizedQuery));
     });
   }, [mentionOptions, mentionRange]);
+
+  const hasUploading = uploads.some((u) => u.status === "uploading");
+  const readyUploads = uploads.filter((u) => u.status === "ready" && u.vmPath);
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
@@ -111,14 +132,66 @@ export default function Composer({
 
   const handleSend = useCallback(() => {
     const el = textareaRef.current;
-    if (!el) return;
-    const text = el.value.trim();
-    if (!text || disabled || streaming) return;
-    onSend(text);
+    if (!el || hasUploading) return;
+    const rawText = el.value.trim();
+    if ((!rawText && readyUploads.length === 0) || disabled || streaming) return;
+
+    const finalText = buildMessageWithAttachments(
+      rawText,
+      readyUploads.map((u) => ({ name: u.name, vmPath: u.vmPath! })),
+    );
+    if (!finalText) return;
+
+    onSend(finalText);
     el.value = "";
     setMentionRange(null);
+    setUploads([]);
     autoResize();
-  }, [disabled, streaming, onSend, autoResize]);
+  }, [disabled, streaming, onSend, autoResize, hasUploading, readyUploads]);
+
+  const handleFileSelect = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    for (const file of Array.from(files)) {
+      const error = validateFileSize(file);
+      const localId = `upload-${++uploadCounter}`;
+      const pending: PendingUpload = {
+        localId,
+        name: file.name,
+        size: file.size,
+        status: error ? "error" : "uploading",
+        error: error ?? undefined,
+      };
+
+      setUploads((prev) => [...prev, pending]);
+
+      if (!error) {
+        uploadFile(file)
+          .then((result) => {
+            setUploads((prev) =>
+              prev.map((u) =>
+                u.localId === localId
+                  ? { ...u, status: "ready" as const, vmPath: result.vmPath, artifact: result.artifact }
+                  : u,
+              ),
+            );
+          })
+          .catch((err: Error) => {
+            setUploads((prev) =>
+              prev.map((u) =>
+                u.localId === localId ? { ...u, status: "error" as const, error: err.message } : u,
+              ),
+            );
+          });
+      }
+    }
+
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
+  const removeUpload = useCallback((localId: string) => {
+    setUploads((prev) => prev.filter((u) => u.localId !== localId));
+  }, []);
 
   const handleMentionSelect = useCallback(
     (option: MentionOption) => {
@@ -204,39 +277,74 @@ export default function Composer({
   return (
     <div className="composer">
       <div className="composer-inner" ref={composerRef}>
-        <div className="composer-input-wrap">
-          <textarea
-            ref={textareaRef}
-            placeholder="输入消息... (输入 @ 可提及角色，Shift+Enter 换行)"
-            rows={1}
-            disabled={disabled}
-            onInput={() => {
-              autoResize();
-              syncMentionState();
-            }}
-            onSelect={syncMentionState}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => {
-              isComposingRef.current = true;
-              setMentionRange(null);
-            }}
-            onCompositionEnd={() => {
-              isComposingRef.current = false;
-              syncMentionState();
-            }}
-          />
-          <MentionPopover
-            open={mentionRange !== null}
-            options={filteredOptions}
-            selectedIndex={activeIndex}
-            onSelect={handleMentionSelect}
-          />
-        </div>
-        {streaming ? (
-          <button className="abort-btn" onClick={onAbort}>停止</button>
-        ) : (
-          <button className="send-btn" disabled={disabled} onClick={handleSend}>发送</button>
+        {uploads.length > 0 && (
+          <div className="composer-uploads">
+            {uploads.map((u) => (
+              <div
+                key={u.localId}
+                className={`upload-chip ${u.status === "error" ? "upload-chip-error" : ""}`}
+              >
+                {u.status === "uploading" && <Loader2 size={14} className="upload-chip-spinner" />}
+                <span className="upload-chip-name">{u.name}</span>
+                <span className="upload-chip-size">{formatSize(u.size)}</span>
+                {u.status === "error" && <span className="upload-chip-error-text">{u.error}</span>}
+                <button className="upload-chip-remove" onClick={() => removeUpload(u.localId)} title="移除">
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
         )}
+        <div className="composer-row">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="sr-only"
+            onChange={(e) => handleFileSelect(e.target.files)}
+          />
+          <button
+            className="attach-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled || streaming}
+            title="上传附件"
+          >
+            <Paperclip size={18} />
+          </button>
+          <div className="composer-input-wrap">
+            <textarea
+              ref={textareaRef}
+              placeholder="输入消息... (输入 @ 可提及角色，Shift+Enter 换行)"
+              rows={1}
+              disabled={disabled}
+              onInput={() => {
+                autoResize();
+                syncMentionState();
+              }}
+              onSelect={syncMentionState}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+                setMentionRange(null);
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+                syncMentionState();
+              }}
+            />
+            <MentionPopover
+              open={mentionRange !== null}
+              options={filteredOptions}
+              selectedIndex={activeIndex}
+              onSelect={handleMentionSelect}
+            />
+          </div>
+          {streaming ? (
+            <button className="abort-btn" onClick={onAbort}>停止</button>
+          ) : (
+            <button className="send-btn" disabled={disabled || hasUploading} onClick={handleSend}>发送</button>
+          )}
+        </div>
       </div>
     </div>
   );

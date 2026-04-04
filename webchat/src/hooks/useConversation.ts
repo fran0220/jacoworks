@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, type MutableRefObject } from "react";
-import type { ConnectionState } from "../lib/openclaw-client";
+import { OpenClawClient, type OpenClawFrame, type ConnectionState } from "../lib/openclaw-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "../lib/event-parser";
 import { contentToBlocks, extractText, streamBlocksToContent, toContentItems } from "../lib/message-extract";
 import { extractFileArtifact } from "../lib/file-artifacts";
 import { generateTitle } from "../lib/sessions";
 import { posthog } from "../lib/posthog";
-import { WSClient, type WSFrame } from "../lib/ws-client";
 import type { ChatMessage, FileArtifact, StreamBlock } from "../types";
 import type { UseWorkspaceResult } from "./useWorkspace";
 
@@ -135,7 +134,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
 
   const activeThreadRef = useRef<string | null>(workspace.activeThreadId);
-  const currentWorkspaceKeyRef = useRef(workspace.activeWorkspaceKey);
+  const currentWorkspaceKeyRef = useRef(workspace.ocSessionKey);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const blocksRef = useRef<StreamBlock[]>([]);
@@ -145,8 +144,9 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
   const streamingRef = useRef(false);
   const contentStartedRef = useRef(false);
   const threadLoadRequestId = useRef(0);
-  const wsRef = useRef<WSClient | null>(null);
+  const wsRef = useRef<OpenClawClient | null>(null);
   const observatoryEventRef = useRef<((event: { kind: string; text?: string; toolName?: string }) => void) | null>(null);
+  const streamTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setMessages = useCallback((messages: ChatMessage[]) => {
     messagesRef.current = messages;
@@ -171,6 +171,13 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
     dispatch({ type: "set_conn_state", connState });
   }, []);
 
+  const clearStreamTimeout = useCallback(() => {
+    if (streamTimeoutRef.current !== null) {
+      window.clearTimeout(streamTimeoutRef.current as unknown as number);
+      streamTimeoutRef.current = null;
+    }
+  }, []);
+
   const clearRenderTimer = useCallback(() => {
     if (renderTimer.current !== null) {
       window.clearTimeout(renderTimer.current);
@@ -193,6 +200,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
     (finalMessage?: unknown) => {
       if (!streamingRef.current) return;
       streamingRef.current = false;
+      clearStreamTimeout();
 
       const streamedBlocks = [...blocksRef.current];
       const fallbackText = streamedBlocks
@@ -237,49 +245,51 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       setBlocks([]);
       setStreaming(false);
     },
-    [clearRenderTimer, setBlocks, setMessages, setStreaming],
+    [clearRenderTimer, clearStreamTimeout, setBlocks, setMessages, setStreaming],
   );
+
+  // No client-side stream timeout — OpenClaw manages its own agent timeouts.
+  // The frontend is a transparent relay; it should never kill a running agent.
+  const resetStreamTimeout = useCallback(() => {
+    clearStreamTimeout();
+  }, [clearStreamTimeout]);
 
   useEffect(
     () => () => {
       clearRenderTimer();
+      clearStreamTimeout();
     },
-    [clearRenderTimer],
+    [clearRenderTimer, clearStreamTimeout],
   );
 
   useEffect(() => {
     const previousWorkspaceKey = currentWorkspaceKeyRef.current;
-    currentWorkspaceKeyRef.current = workspace.activeWorkspaceKey;
+    currentWorkspaceKeyRef.current = workspace.ocSessionKey;
 
-    if (previousWorkspaceKey !== workspace.activeWorkspaceKey) {
-      if (streamingRef.current) {
-        wsRef.current?.sendAbort();
-        finishStream();
-      }
-
+    if (previousWorkspaceKey !== workspace.ocSessionKey) {
+      // Reset local UI state for the new workspace view, but do NOT abort
+      // any in-progress OpenClaw work — the agent keeps running server-side.
       clearRenderTimer();
+      clearStreamTimeout();
       streamTextRef.current = "";
+      contentStartedRef.current = false;
       setMessages([]);
       setBlocks([]);
       setStreaming(false);
       setError(null);
-      wsRef.current?.setSessionKey(workspace.activeWorkspaceKey);
+      wsRef.current?.setSessionKey(workspace.ocSessionKey);
       return;
     }
 
-    wsRef.current?.setSessionKey(workspace.activeWorkspaceKey);
-  }, [clearRenderTimer, finishStream, setBlocks, setError, setMessages, setStreaming, workspace.activeWorkspaceKey]);
+    wsRef.current?.setSessionKey(workspace.ocSessionKey);
+  }, [clearRenderTimer, clearStreamTimeout, finishStream, setBlocks, setError, setMessages, setStreaming, workspace.ocSessionKey]);
 
   useEffect(() => {
-    const previousThreadId = activeThreadRef.current;
-    if (previousThreadId !== workspace.activeThreadId && streamingRef.current) {
-      wsRef.current?.sendAbort();
-      finishStream();
-    }
     activeThreadRef.current = workspace.activeThreadId;
 
     const requestId = ++threadLoadRequestId.current;
     clearRenderTimer();
+    clearStreamTimeout();
     streamTextRef.current = "";
     setBlocks([]);
     setError(null);
@@ -294,7 +304,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       if (requestId !== threadLoadRequestId.current) return;
       setMessages(messages);
     });
-  }, [clearRenderTimer, finishStream, setBlocks, setError, setMessages, setStreaming, workspace.activeThreadId, workspace.loadThreadMessages]);
+  }, [clearRenderTimer, clearStreamTimeout, finishStream, setBlocks, setError, setMessages, setStreaming, workspace.activeThreadId, workspace.loadThreadMessages]);
 
   useEffect(() => {
     if (!ocToken) {
@@ -302,12 +312,11 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       return;
     }
 
-    const ws = new WSClient({
-      sessionKey: currentWorkspaceKeyRef.current,
+    const ws = new OpenClawClient({
       onStateChange(nextState) {
         setConnState(nextState);
       },
-      onFrame(frame: WSFrame) {
+      onFrame(frame: OpenClawFrame) {
         let parsed = parseFrame(frame);
 
         if (parsed.kind !== "ignore") {
@@ -349,15 +358,18 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
           return;
         }
 
-        if (!contentStartedRef.current && isContentEvent(parsed)) {
-          contentStartedRef.current = true;
-          streamTextRef.current = "";
-          blocksRef.current = [];
-          if (!streamingRef.current) {
-            streamingRef.current = true;
-            dispatch({ type: "set_streaming", streaming: true });
+        if (isContentEvent(parsed)) {
+          if (!contentStartedRef.current) {
+            contentStartedRef.current = true;
+            streamTextRef.current = "";
+            blocksRef.current = [];
+            if (!streamingRef.current) {
+              streamingRef.current = true;
+              dispatch({ type: "set_streaming", streaming: true });
+            }
+            setError(null);
           }
-          setError(null);
+          if (streamingRef.current) resetStreamTimeout();
         }
 
         const applied = applyEvent(blocksRef.current, parsed);
@@ -367,18 +379,25 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       },
     });
 
+    ws.setSessionKey(currentWorkspaceKeyRef.current);
     wsRef.current = ws;
     ws.connect();
 
     return () => {
       ws.dispose();
       wsRef.current = null;
+      clearStreamTimeout();
     };
-  }, [finishStream, ocToken, scheduleRender, setConnState, setError]);
+  }, [clearStreamTimeout, finishStream, ocToken, resetStreamTimeout, scheduleRender, setConnState, setError]);
 
   const send = useCallback(
     async (text: string) => {
-      if (!wsRef.current?.isConnected) return;
+      const ws = wsRef.current;
+      if (!ws || !ws.isConnected) {
+        console.warn("[chat] send blocked", { hasWs: !!ws, isConnected: ws?.isConnected });
+        setError("连接尚未就绪，请稍候");
+        return;
+      }
 
       let threadId = activeThreadRef.current;
       if (!threadId) {
@@ -400,19 +419,20 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       blocksRef.current = [];
       streamTextRef.current = "";
       setStreaming(true);
+      resetStreamTimeout();
       void workspaceRef.current.saveThreadMessages(threadId, updated);
 
-      wsRef.current.send("prompt", text);
+      ws.sendPrompt(text);
       posthog.capture("chat_message_sent", {
         session_id: threadId,
-        session_key: currentWorkspaceKeyRef.current,
+        session_key: workspaceRef.current.ocSessionKey,
       });
     },
-    [setError, setMessages],
+    [resetStreamTimeout, setError, setMessages],
   );
 
   const abort = useCallback(() => {
-    wsRef.current?.sendAbort();
+    wsRef.current?.sendAbortChat();
     finishStream();
   }, [finishStream]);
 

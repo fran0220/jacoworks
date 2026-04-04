@@ -1,5 +1,4 @@
 import type * as THREE from "three";
-import type { VRM } from "@pixiv/three-vrm";
 
 const ROLE_OVERRIDES_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ROLE_OVERRIDES__";
 const ZONE_LABELS_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ZONE_LABELS__";
@@ -138,7 +137,6 @@ export interface WorldAgent {
   name: string;
   role: string;
   config: RoleConfig;
-  vrm: VRM | null;
   root: THREE.Object3D;
   state: AgentState;
   position: THREE.Vector3;

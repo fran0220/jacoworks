@@ -96,24 +96,30 @@ export function normalizeFileArtifact(value: unknown): FileArtifact | null {
   if (!looksLikeArtifact(record)) return null;
 
   const id = asString(record.id || record.artifactId);
-  if (!id) return null;
+  const filePath = asString(record.path || record.filePath || record.pathLabel);
+  if (!id && !filePath) return null;
 
-  const path = asString(record.path || record.filePath);
-  const pathLabel = asString(record.pathLabel || path) || undefined;
-  const name = asString(record.name || record.filename) || pathLabel || id;
-  const ext = asString(record.ext) || inferExt(name, path);
+  const pathLabel = asString(record.pathLabel || filePath) || undefined;
+  const name = asString(record.name || record.filename) || pathLabel || id || "file";
+  const ext = asString(record.ext) || inferExt(name, filePath);
   const mime = asString(record.mime || record.mimeType);
   const categoryInput = asString(record.category).toLowerCase() as FileCategory;
   const category = categoryInput || inferCategory(name, ext, mime);
-  const baseContentUrl = `/api/files/${encodeURIComponent(id)}/content`;
-  const contentUrl = asString(record.contentUrl) || baseContentUrl;
-  const downloadUrl = asString(record.downloadUrl) || `${baseContentUrl}?download=1`;
+
+  // Prefer path-based URL (persistent, survives gateway restart) over artifact ID URL (ephemeral).
+  const pathUrl = filePath ? `/api/vm/file?path=${encodeURIComponent(filePath)}` : "";
+  const idUrl = id ? `/api/files/${encodeURIComponent(id)}/content` : "";
+  const contentUrl = asString(record.contentUrl) || pathUrl || idUrl;
+  const downloadUrl = asString(record.downloadUrl) || (contentUrl ? `${contentUrl}${contentUrl.includes("?") ? "&" : "?"}download=1` : "");
   const size = asNumber(record.size);
   const containerName = asString(record.containerName);
   const thumbnailUrl = asString(record.thumbnailUrl) || (category === "image" ? contentUrl : "");
 
+  // Use artifact ID if available, otherwise derive a stable ID from the path.
+  const stableId = id || `path:${filePath}`;
+
   return {
-    id,
+    id: stableId,
     name,
     pathLabel,
     ext: ext || undefined,
@@ -123,9 +129,9 @@ export function normalizeFileArtifact(value: unknown): FileArtifact | null {
     contentUrl,
     downloadUrl,
     createdAt: asTimestamp(record.createdAt),
-    artifactId: id,
+    artifactId: id || undefined,
     filename: name,
-    path: path || undefined,
+    path: filePath || undefined,
     mimeType: mime || undefined,
     containerName: containerName || undefined,
     thumbnailUrl: thumbnailUrl || undefined,

@@ -1,105 +1,88 @@
 {
   "name": "agent-city",
-  "displayName": "数字之城 — 电竞城市团队",
-  "description": "以「亦城」为核心的数字城市运营团队。亦城统筹城市运营，电竞官追踪赛事，生活官发掘周边，应援官激发粉丝，督导官把控质量，巡城官维护秩序。通过 JaMOSS 持续协调，为北京智慧电竞赛事中心提供全方位数字服务。",
-  "version": "1.0.0",
+  "displayName": "数字之城 — 电竞城市 AI 团队",
+  "description": "Solo Founder Team 协作模式：5 位 AI Agent 通过共享文件（GOALS.md / STATUS.md / DECISIONS.md）自主协作，无需任务管理中间件。亦城统筹全局，电竞官追踪赛事，生活官发掘周边，应援官点燃粉丝，舆情官全网嗅探——围绕北京智慧电竞赛事中心，打造 7×24 数字城市运营团队。",
+  "version": "2.0.0",
   "agents": [
     {
       "id": "yicheng",
       "name": "亦城",
-      "role": "planner",
+      "role": "lead",
       "prompt": "prompts/yicheng.md",
-      "skills": ["city-planner-skill"],
-      "model": "proxy/gpt-5.4",
+      "skills": ["city-lead-skill"],
+      "model": "proxy/claude-sonnet-4-6",
       "isLeader": true,
       "cron": {
-        "schedule": { "kind": "every", "everyMs": 900000 },
+        "schedule": { "kind": "crontab", "crontab": "0 8,21 * * *" },
         "sessionTarget": "isolated",
-        "message": "检查城市运营状态，监控赛事与生活资讯，协调团队任务，汇总产出"
+        "message": "晨会/日报时间。8AM: 读取所有 agent notes → 更新 GOALS.md → 发布今日优先级。9PM: 汇总所有 output → 生成 city-daily.md → 更新 STATUS.md"
       }
     },
     {
       "id": "esports",
       "name": "电竞官",
-      "role": "executor",
+      "role": "specialist",
       "prompt": "prompts/esports.md",
       "skills": ["city-esports-skill"],
-      "model": "proxy/gpt-5.4",
+      "model": "proxy/claude-sonnet-4-6",
       "isLeader": false,
       "cron": {
-        "schedule": { "kind": "every", "everyMs": 900000 },
+        "schedule": { "kind": "every", "everyMs": 10800000 },
         "sessionTarget": "isolated",
-        "message": "领取赛事任务，搜索最新赛事资讯，产出赛事内容，提交审查"
+        "message": "赛事扫描周期。读取 GOALS.md → 读取 agents/sentinel/output/trends.md → web_search LPL/KPL/JDG 最新赛事 → 产出分析写入 agents/esports/output/ → 更新 agents/esports/notes.md"
       }
     },
     {
       "id": "lifestyle",
       "name": "生活官",
-      "role": "executor",
+      "role": "specialist",
       "prompt": "prompts/lifestyle.md",
       "skills": ["city-lifestyle-skill"],
-      "model": "proxy/gpt-5.4",
+      "model": "proxy/gemini-3.1-pro-preview",
       "isLeader": false,
       "cron": {
-        "schedule": { "kind": "every", "everyMs": 1800000 },
+        "schedule": { "kind": "crontab", "crontab": "0 11,17 * * *" },
         "sessionTarget": "isolated",
-        "message": "领取生活任务，搜索周边优惠和美食，产出推荐内容，提交审查"
+        "message": "午餐/晚餐推荐时间。读取 GOALS.md → web_search 亦庄美食/优惠/团购 → 产出推荐写入 agents/lifestyle/output/ → 更新 agents/lifestyle/notes.md"
       }
     },
     {
       "id": "cheerleader",
       "name": "应援官",
-      "role": "executor",
+      "role": "specialist",
       "prompt": "prompts/cheerleader.md",
       "skills": ["city-cheerleader-skill"],
-      "model": "proxy/gpt-5.4",
+      "model": "proxy/claude-sonnet-4-6",
       "isLeader": false,
       "cron": {
-        "schedule": { "kind": "every", "everyMs": 900000 },
+        "schedule": { "kind": "every", "everyMs": 14400000 },
         "sessionTarget": "isolated",
-        "message": "领取应援任务，搜索赛事舆情，产出应援内容，提交审查"
+        "message": "应援内容更新。读取 GOALS.md → 读取 agents/sentinel/output/trends.md + agents/esports/output/ → 创作应援内容 → 写入 agents/cheerleader/output/ → 更新 agents/cheerleader/notes.md"
       }
     },
     {
-      "id": "inspector",
-      "name": "督导官",
-      "role": "reviewer",
-      "prompt": "prompts/inspector.md",
-      "skills": ["city-reviewer-skill"],
-      "model": "proxy/gpt-5.4",
+      "id": "sentinel",
+      "name": "舆情官",
+      "role": "specialist",
+      "prompt": "prompts/sentinel.md",
+      "skills": ["city-sentinel-skill"],
+      "model": "proxy/gemini-3.1-pro-preview",
       "isLeader": false,
       "cron": {
-        "schedule": { "kind": "every", "everyMs": 1800000 },
+        "schedule": { "kind": "every", "everyMs": 7200000 },
         "sessionTarget": "isolated",
-        "message": "审查已提交内容，评分反馈，确保质量标准"
-      }
-    },
-    {
-      "id": "patroller",
-      "name": "巡城官",
-      "role": "patrol",
-      "prompt": "prompts/patroller.md",
-      "skills": ["city-patrol-skill"],
-      "model": "proxy/gpt-5.4",
-      "isLeader": false,
-      "cron": {
-        "schedule": { "kind": "every", "everyMs": 1800000 },
-        "sessionTarget": "isolated",
-        "message": "巡检城市运营状态，检测超时任务，清理过期信息"
+        "message": "全网舆情扫描。读取 GOALS.md → web_search 微博热搜/B站/电竞论坛/小红书 → 更新 agents/sentinel/output/trends.md → 重大事件写入 alerts.md → 更新 agents/sentinel/notes.md"
       }
     }
   ],
   "workspace": {
     "sharedRoot": "/data/teams/agent-city",
     "files": {
-      "AGENTS.md": "workspace/AGENTS.md",
-      "RULES.md": "rules/city-rules.md"
+      "GOALS.md": "workspace/GOALS.md",
+      "STATUS.md": "workspace/STATUS.md",
+      "DECISIONS.md": "workspace/DECISIONS.md",
+      "AGENTS.md": "workspace/AGENTS.md"
     }
-  },
-  "middleware": {
-    "type": "jamoss",
-    "port": 6565,
-    "database": "sqlite:///data/teams/agent-city/tasks.db"
   },
   "theme": {
     "sceneKind": "esports-city",
@@ -113,26 +96,22 @@
       "surface": "#1a1e2e"
     },
     "roles": {
-      "planner": { "displayName": "城市主理人", "color": "#ff6b35", "icon": "🏙️" },
-      "executor": { "displayName": "城务官", "color": "#3b82f6", "icon": "⚡" },
-      "reviewer": { "displayName": "督导官", "color": "#22c55e", "icon": "🔍" },
-      "patrol": { "displayName": "巡城官", "color": "#a855f7", "icon": "🛤️" }
+      "lead": { "displayName": "城市主理人", "color": "#ff6b35", "icon": "🏙️" },
+      "specialist": { "displayName": "城务专员", "color": "#3b82f6", "icon": "⚡" }
     },
     "agents": {
       "yicheng": { "displayName": "亦城", "subtitle": "城市主理人", "color": "#ff6b35" },
       "esports": { "displayName": "电竞官", "subtitle": "赛事情报", "color": "#e74c3c" },
-      "lifestyle": { "displayName": "生活官", "subtitle": "生活服务", "color": "#2ecc71" },
+      "lifestyle": { "displayName": "生活官", "subtitle": "本地生活", "color": "#2ecc71" },
       "cheerleader": { "displayName": "应援官", "subtitle": "粉丝互动", "color": "#f39c12" },
-      "inspector": { "displayName": "督导官", "subtitle": "质量审查", "color": "#22c55e" },
-      "patroller": { "displayName": "巡城官", "subtitle": "城市巡检", "color": "#a855f7" }
+      "sentinel": { "displayName": "舆情官", "subtitle": "全网嗅探", "color": "#8b5cf6" }
     },
     "zones": {
       "tower": { "label": "指挥中心", "icon": "🏙️" },
-      "forge": { "label": "工作坊", "icon": "⚡" },
-      "court": { "label": "审查厅", "icon": "⚖️" },
-      "lounge": { "label": "城市广场", "icon": "🏛" },
-      "hub": { "label": "中央枢纽", "icon": "🎯" },
-      "patrol_path": { "label": "巡城环路", "icon": "🛤️" }
+      "arena": { "label": "电竞场", "icon": "⚔️" },
+      "street": { "label": "美食街", "icon": "🍜" },
+      "square": { "label": "应援广场", "icon": "📢" },
+      "radar": { "label": "舆情雷达", "icon": "🔍" }
     }
   }
 }

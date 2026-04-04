@@ -1,0 +1,8 @@
+{
+  "name": "writer",
+  "displayName": "写作助手",
+  "description": "专业写作与内容创作，支持多种风格和格式",
+  "icon": "pen-tool",
+  "model": "proxy/claude-sonnet-4-6",
+  "workspace": "/data/workspace"
+}

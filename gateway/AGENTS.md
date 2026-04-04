@@ -1,6 +1,6 @@
 # Gateway — Go 管理网关
 
-> gateway (jingao :8847) 作为桌面端/后台管控面，保留 LLM 配置下发、memory/skills/feedback/games/feishu 等能力。oc-gateway (local :18700) 现为 **webchat 完整后端**：认证、会话 CRUD、cron、SPA 托管，以及 OpenClaw 容器管理、WS/SSE、JaMOSS、teams/cowork。
+> gateway (jingao :8847) 作为桌面端/后台管控面，保留 LLM 配置下发、memory/skills/feedback/games/feishu 等能力。oc-gateway (local :18700) 现为 **webchat 完整后端**：认证、会话 CRUD、cron、SPA 托管，以及 OpenClaw 容器管理、thin WS relay、JaMOSS、teams/cowork。
 
 ## 代码结构
 
@@ -20,14 +20,8 @@ internal/
     bot_config.go              容器级配置管理 (config JSONB + hash 追踪 + 配对状态)
   proxy/handler.go             ReverseProxy (ChatAgent 代理)
   cowork/handler.go            文件操作 (upload/download/changes)
-  agent/dialer.go              UpstreamDialer 接口 (策略模式: 连接/握手/消息映射抽象)
-  agent/dialer_vmagent.go      VMAgentDialer (vm-agent 容器拨号/ensureRunning/消息格式)
-  agent/dialer_openclaw.go     OpenClawDialer (OpenClaw 容器拨号/消息透传/AutoPairer)
-  agent/channel.go             ChannelPool + UserChannel (持久上游连接 + 复合 key)
-  agent/ring_buffer.go         RingBuffer (Last-Event-ID replay, 从 channel.go 提取)
-  agent/types.go               Event, ContainerBackend, Freezer 类型定义
-  agent/sse_handler.go         SSE/HTTP bridge (StreamEvents + SendCommand + GetStatus, 桌面端用)
-  agent/ws_handler.go          统一 WS 入口 (ticket auth → resolveContainerType → ChannelPool → 信封帧)
+  agent/types.go               EventCallback 类型定义
+  agent/ws_handler.go          thin WS relay (ticket auth → container lookup → 直连 OpenClaw VM WS → server-side handshake → 双向原样帧转发, ~220 行)
   agent/ws_ticket.go           WS ticket 签发/验证 (HMAC-SHA256, 30s TTL, 桌面端/飞书 Bot 用)
   openclaw/                    OpenClaw WS 协议客户端
     protocol.go                WS 帧类型定义 (req/res/event, challenge, pairing)
@@ -64,10 +58,7 @@ internal/
 | GET | `/api/cowork/container-status` | 容器状态（已迁移至 oc-gateway） |
 | POST | `/api/cowork/provision` | 自助分配 OpenClaw VM（已迁移至 oc-gateway） |
 | POST | `/api/agent/ws-ticket` | 桌面端 WS ticket 签发 (30s TTL, ticket auth 替代 Bearer) |
-| GET | `/ws/oc` | 统一 WS 入口 (ticket auth → `type` 参数指定容器类型 → ChannelPool + RingBuffer + lastSeq 续传；已迁移至 oc-gateway) |
-| GET | `/api/oc/stream` | SSE 事件流 (15s keepalive，已迁移至 oc-gateway) |
-| POST | `/api/oc/send` | 通过 channel 发送命令到 agent (HTTP POST，已迁移至 oc-gateway) |
-| GET | `/api/oc/status` | Channel 连接状态（已迁移至 oc-gateway） |
+| GET | `/ws/oc` | thin WS relay (ticket auth → OpenClaw VM 直连, 双向原样转发, 仅合成 proxy.ready/proxy.error；已迁移至 oc-gateway) |
 | GET | `/ws/exec` | WebSocket exec (容器内执行命令, 需认证) |
 | POST | `/api/cowork/{sid}/upload` | 上传项目（已迁移至 oc-gateway） |
 | POST | `/api/memory/sync` | 记忆双向同步 (manifest + push/pull) |
@@ -83,7 +74,7 @@ internal/
 | GET | `/api/games` | 游戏列表 (公开) |
 | DELETE | `/api/games/{id}` | 删除游戏 (作者或管理员) |
 | POST | `/api/feedback` | 提交桌面端反馈并同步 GitHub Issue (支持最多 3 张截图) |
-| POST | `/api/feishu/webhook` | 飞书 Bot webhook (无需认证) |
+| POST | `/api/feishu/webhook` | 飞书 Bot webhook (无需认证, 通过 HTTP 代理到 oc-gateway) |
 | POST | `/api/cron/jobs` | 创建云端定时任务 (oc-gateway 独立提供) |
 | GET | `/api/cron/jobs` | 列出用户的定时任务 (oc-gateway 独立提供) |
 | DELETE | `/api/cron/jobs/{id}` | 删除定时任务 (oc-gateway 独立提供) |
@@ -179,7 +170,7 @@ cd ../vm-agent && npm run test:gateway-e2e
 
 - **Go 标准** + golangci-lint
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，启动加载 + 热重载
-- **双网关拆分**: gateway 负责桌面端/后台管控面；oc-gateway 负责 webchat 认证 + 会话 + cron + SPA + OpenClaw 实时链路
+- **双网关拆分**: gateway 负责桌面端/后台管控面；oc-gateway 负责 webchat 认证 + 会话 + cron + SPA + OpenClaw thin WS relay
 - 本地开发: `make dev-gateway` → localhost:8847
 - 本地开发 (OpenClaw): `make dev-oc-gateway` → localhost:18700
 - 部署: `make deploy-jingao` (gateway + website) / `make deploy-local` (oc-gateway + webchat + openclaw) / `make deploy-oracle` (vm-agent)
