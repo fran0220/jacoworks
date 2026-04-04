@@ -1,8 +1,7 @@
 ---
-name: content-extract
-display-name: 内容提取
-display-description: URL 内容提取与转换
+name: 内容提取
 description: >
+  URL 内容提取与转换。
   Robust URL-to-Markdown extraction. Use when the user wants to
   "read a webpage", "extract content from URL", "fetch this link",
   or when you need to retrieve full content from a specific URL.

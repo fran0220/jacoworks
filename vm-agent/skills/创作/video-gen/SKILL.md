@@ -1,8 +1,7 @@
 ---
-name: video-gen
-display-name: 视频生成
-display-description: 生成高质量视频 (文生视频 / 图生视频 / 首尾帧动画)
+name: 视频生成
 description: >
+  生成高质量视频 (文生视频 / 图生视频 / 首尾帧动画)。
   Generate high-quality videos. Supports text-to-video, image-to-video,
   and first-last-frame animation with multiple model options.
   Use when user asks to create, generate, or make a video, animation, or motion clip.

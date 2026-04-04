@@ -818,26 +818,6 @@ export function getCronService(): CronService | null {
 
 // ─── Skill Discovery (Pi SDK native) ─────────────────
 
-// TODO(pi-sdk): remove this fallback once Skill exposes display-name/display-description
-// metadata from frontmatter. Pi SDK 0.65 only surfaces canonical name/description.
-function readDisplayFields(filePath: string): { displayName?: string; displayDesc?: string } {
-  try {
-    const content = readFileSync(filePath, "utf-8");
-    const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    if (!m) return {};
-    const result: Record<string, string> = {};
-    for (const line of m[1].split("\n")) {
-      const idx = line.indexOf(":");
-      if (idx < 0) continue;
-      const key = line.slice(0, idx).trim();
-      let val = line.slice(idx + 1).trim();
-      if (/^["'].*["']$/.test(val)) val = val.slice(1, -1);
-      result[key] = val;
-    }
-    return { displayName: result["display-name"], displayDesc: result["display-description"] };
-  } catch { return {}; }
-}
-
 export interface SkillInfo {
   id: string;
   name: string;
@@ -848,15 +828,14 @@ export interface SkillInfo {
 }
 
 function toSkillInfo(skill: Skill, dir: string): SkillInfo {
-  const { displayName, displayDesc } = readDisplayFields(skill.filePath);
   const rel = relative(dir, skill.filePath);
   const parts = rel.split(/[\\/]+/).filter(Boolean);
   const source = skill.sourceInfo?.source === "user" ? "user" : "builtin";
 
   return {
     id: skill.name,
-    name: displayName || skill.name,
-    description: displayDesc || skill.description,
+    name: skill.name,
+    description: skill.description,
     group: parts.length >= 3 && parts[0] !== ".." ? parts[0] : undefined,
     source,
     editable: source === "user",

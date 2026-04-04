@@ -1,8 +1,7 @@
 ---
-name: game-dev-ai
-display-name: 游戏开发助手
-display-description: 使用 Godot 引擎开发游戏，支持创建、调试、导出和发布
+name: 游戏开发助手
 description: >
+  使用 Godot 引擎开发游戏，支持创建、调试、导出和发布。
   Game development with Godot Engine. Creates scenes, scripts, generates
   assets (images, SFX and music via built-in generation tools),
   runs and debugs games using Godot CLI. Exports to Web and deploys to

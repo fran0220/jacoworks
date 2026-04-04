@@ -1,8 +1,7 @@
 ---
-name: infographic
-display-name: 信息图生成
-display-description: 生成专业信息图，21种布局×20种视觉风格
+name: 信息图生成
 description: >
+  生成专业信息图，21种布局×20种视觉风格。
   Generates professional infographics with 21 layout types and 20 visual styles.
   Analyzes content, recommends layout×style combinations, and generates publication-ready infographics.
   Use when user asks to create "infographic", "信息图", "visual summary", "可视化", or "高密度信息大图".

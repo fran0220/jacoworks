@@ -1,8 +1,8 @@
 ---
-name: building-skills
-description: "创建和管理 Agent 技能包。当用户要求创建技能、新建 skill、编写 SKILL.md 时使用。Triggers on: 创建技能, 新建skill, create skill, build skill."
-display-name: "技能构建器"
-display-description: "创建和管理 Agent 技能包"
+name: 技能构建器
+description: >
+  创建和管理 Agent 技能包。
+  创建和管理 Agent 技能包。当用户要求创建技能、新建 skill、编写 SKILL.md 时使用。Triggers on: 创建技能, 新建skill, create skill, build skill.
 ---
 
 # 技能构建器
@@ -45,8 +45,6 @@ Instructions go here.
 - "查询 BigQuery 数据集。用于数据分析、SQL 查询任务。"
 
 ### 可选字段
-- `display-name`: 显示名称（中文友好）
-- `display-description`: 显示描述
 - `allowed-tools`: 技能可使用的工具列表
 - `argument-hint`: 参数提示
 

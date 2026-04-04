@@ -1,8 +1,8 @@
 ---
-name: marketing
-display-name: 营销助手
-display-description: 营销文案与策略生成
-description: "Create marketing content, review brand voice consistency, plan campaigns, and analyze SEO. Use when the user asks to write blog posts, draft emails, create social media content, plan marketing campaigns, review brand voice, audit SEO, or generate marketing copy."
+name: 营销助手
+description: >
+  营销文案与策略生成。
+  Create marketing content, review brand voice consistency, plan campaigns, and analyze SEO. Use when the user asks to write blog posts, draft emails, create social media content, plan marketing campaigns, review brand voice, audit SEO, or generate marketing copy.
 ---
 
 # Marketing Skill

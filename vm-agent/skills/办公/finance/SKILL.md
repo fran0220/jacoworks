@@ -1,8 +1,8 @@
 ---
-name: finance
-display-name: 财务分析
-display-description: 财务报表分析与建议
-description: "Analyze financial data from local spreadsheets, perform variance analysis, prepare journal entries, reconciliations, and generate financial reports. Use when the user asks to analyze budgets, compare actuals vs forecast, reconcile accounts, prepare financial statements, or generate finance reports from Excel/CSV files."
+name: 财务分析
+description: >
+  财务报表分析与建议。
+  Analyze financial data from local spreadsheets, perform variance analysis, prepare journal entries, reconciliations, and generate financial reports. Use when the user asks to analyze budgets, compare actuals vs forecast, reconcile accounts, prepare financial statements, or generate finance reports from Excel/CSV files.
 ---
 
 # Finance Skill

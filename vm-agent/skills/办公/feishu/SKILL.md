@@ -1,8 +1,7 @@
 ---
-name: feishu
-display-name: 飞书集成
-display-description: 飞书消息、日历、审批、通讯录、多维表格
+name: 飞书集成
 description: >
+  飞书消息、日历、审批、通讯录、多维表格。
   Feishu (Lark) platform integration. Send messages, manage calendar events,
   query contacts, create approvals, and operate bitable records.
   Use when the user asks about schedules, meetings, colleagues, approvals,

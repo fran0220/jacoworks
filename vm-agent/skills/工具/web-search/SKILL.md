@@ -1,8 +1,7 @@
 ---
-name: web-search
-display-name: 网络搜索
-display-description: 多源智能搜索与内容提取
+name: 网络搜索
 description: >
+  多源智能搜索与内容提取。
   Multi-source search with intent-aware scoring.
   Provides high-coverage, high-quality results from multiple search engines.
   Automatically classifies query intent and adjusts search strategy, scoring

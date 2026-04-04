@@ -1,8 +1,7 @@
 ---
-name: poster
-display-name: 海报生成
-display-description: 生成专业海报，12种类型×25种视觉风格，含 VLM 审查
+name: 海报生成
 description: >
+  生成专业海报，12种类型×25种视觉风格，含 VLM 审查。
   Generates professional posters with 12 poster types and 25 visual styles.
   Analyzes content, recommends type×style combinations, generates publication-ready posters,
   and reviews output with Gemini Flash vision model for text accuracy and aesthetic quality.

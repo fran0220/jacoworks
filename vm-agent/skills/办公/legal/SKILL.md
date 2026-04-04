@@ -1,8 +1,8 @@
 ---
-name: legal
-display-name: 法律助手
-display-description: 法律文书审查与建议
-description: "Review contracts, triage NDAs, assess legal risks, and draft legal memos from local document files. Use when the user asks to review a contract, check an NDA, analyze legal terms, flag risks, suggest redlines, or prepare legal summaries."
+name: 法律助手
+description: >
+  法律文书审查与建议。
+  Review contracts, triage NDAs, assess legal risks, and draft legal memos from local document files. Use when the user asks to review a contract, check an NDA, analyze legal terms, flag risks, suggest redlines, or prepare legal summaries.
 ---
 
 # Legal Skill

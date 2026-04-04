@@ -1,8 +1,8 @@
 ---
-name: document-processing
-display-name: 文档处理
-display-description: 文档格式转换与内容提取
-description: "Read, create, and modify office documents (Word, Excel, PDF, CSV). Use when the user asks to read, summarize, create, generate, modify, or analyze .docx, .xlsx, .xls, .pdf, .csv, or .tsv files."
+name: 文档处理
+description: >
+  文档格式转换与内容提取。
+  Read, create, and modify office documents (Word, Excel, PDF, CSV). Use when the user asks to read, summarize, create, generate, modify, or analyze .docx, .xlsx, .xls, .pdf, .csv, or .tsv files.
 ---
 
 # Document Processing Skill

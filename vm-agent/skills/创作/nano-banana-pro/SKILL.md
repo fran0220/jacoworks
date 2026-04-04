@@ -1,8 +1,7 @@
 ---
-name: nano-banana-pro
-display-name: 图片生成
-display-description: 生成或编辑高质量图片
+name: 图片生成
 description: >
+  生成或编辑高质量图片。
   Generate or edit images using the built-in generate_image tool.
   Supports text-to-image and image-to-image editing.
   Use when user asks to create, generate, draw, or edit an image.
