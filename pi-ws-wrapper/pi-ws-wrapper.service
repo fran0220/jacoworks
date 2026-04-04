@@ -1,0 +1,17 @@
+[Unit]
+Description=Pi WS Wrapper
+After=network.target
+
+[Service]
+Type=simple
+User=node
+WorkingDirectory=/home/node
+Environment=HOME=/home/node
+Environment=LLM_PROXY_KEY=__PLACEHOLDER__
+Environment=WS_WRAPPER_TOKEN=__PLACEHOLDER__
+ExecStart=/usr/local/bin/bun /opt/pi-ws-wrapper/server.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
