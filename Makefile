@@ -5,7 +5,7 @@
 .PHONY: help dev dev-gateway dev-oc-gateway dev-website dev-webchat dev-agent dev-desktop \
         build build-gateway build-oc-gateway build-website build-webchat build-agent build-desktop \
         compile-agent prepare-win-deps \
-        deploy deploy-jingao deploy-local deploy-oracle \
+        deploy deploy-jingao deploy-local deploy-pi-config deploy-oracle \
         deploy-gateway deploy-oc-gateway deploy-website deploy-webchat deploy-webchat-static deploy-agent push-skills \
         check check-gateway check-website check-webchat check-agent check-desktop \
         check-gateway-e2e check-journeys check-all \
@@ -106,17 +106,27 @@ build-desktop: compile-agent ## 构建 Desktop 安装包 (Windows 需先 make pr
 # ═══════════════════════════════════════════
 #  部署 — 三域分离
 #  deploy-jingao : 桌面端管控面 (gateway + website)
-#  deploy-local  : WebChat + OpenClaw (oc-gateway + webchat + openclaw)
-#  deploy-oracle : vm-agent Docker
+#  deploy-local  : WebChat + Pi VM 资产 (oc-gateway + webchat + pi-config + skills)
+#  deploy-oracle : retired (legacy vm-agent Docker)
 # ═══════════════════════════════════════════
 
 deploy: deploy-jingao deploy-local push-skills ## 部署所有服务
 
 deploy-jingao: deploy-gateway deploy-website ## 部署桌面端管控面到 jingao
 
-deploy-local: deploy-oc-gateway ## 部署 WebChat + OpenClaw 到 local
+deploy-local: deploy-oc-gateway deploy-pi-config ## 部署 WebChat + Pi VM 资产到 local
 
-deploy-oracle: deploy-agent ## 部署 vm-agent 到 oracle
+deploy-oracle: ## 已退役：vm-agent Docker 不再是正式部署链路
+	@echo "⚠️  deploy-oracle 已退役；当前正式链路为 Desktop 本地 Pi CLI 与 local 上的 pi-ready VM"
+	@echo "   如需查看旧 vm-agent 部署，请阅读 vm-agent/DEPRECATED.md"
+
+deploy-pi-config: ## 同步 pi-config/ 与顶层 skills/ 到 local
+	@echo "📂 同步 pi-config/ 与 skills/ ..."
+	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/pi-config /opt/jacoworks/skills /opt/jacoworks/openclaw/templates"
+	rsync -a --delete pi-config/ $(LOCAL_HOST):/opt/jacoworks/pi-config/
+	rsync -a --delete skills/ $(LOCAL_HOST):/opt/jacoworks/skills/
+	rsync -a --delete openclaw/templates/ $(LOCAL_HOST):/opt/jacoworks/openclaw/templates/
+	@echo "✅ Pi 配置与技能已同步"
 
 push-skills: ## 推送 vm-agent/skills/ 到网关 (system skills)
 	./deploy/push-skills.sh
@@ -143,14 +153,11 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		curl -sf http://localhost:8847/health"
 	@echo "✅ Gateway 已部署"
 
-deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64 + 同步 openclaw/ + webchat + data)
+deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64 + 同步 webchat + data)
 	@echo "📦 部署 OC Gateway → $(LOCAL_HOST)..."
 	cd gateway && CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags='-s -w' -o /tmp/oc-gateway ./cmd/oc-gateway
 	scp /tmp/oc-gateway $(LOCAL_HOST):/opt/jacoworks/oc-gateway.new
-	@echo "📂 同步 openclaw/ 目录..."
-	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/openclaw /opt/jacoworks/data /opt/jacoworks/www/static"
-	rsync -a --delete openclaw/templates/ $(LOCAL_HOST):/opt/jacoworks/openclaw/templates/
-	rsync -a --delete openclaw/skills/ $(LOCAL_HOST):/opt/jacoworks/openclaw/skills/
+	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/data /opt/jacoworks/www/static"
 	@echo "📂 同步 HTML 模板..."
 	scp gateway/data/chat.html gateway/data/login.html $(LOCAL_HOST):/opt/jacoworks/data/
 	@echo "📂 同步 webchat 静态文件..."
@@ -283,7 +290,7 @@ redeploy-agent: docker-build-agent ## 强制重建所有 vm-agent 容器 (有停
 		echo "✅ 旧容器已清理，新容器将由网关按需创建"'
 
 # ═══════════════════════════════════════════
-#  Incus (OpenClaw VM → local)
+#  Incus (Pi VM → local)
 # ═══════════════════════════════════════════
 
 setup-incus: ## 初始化 local 服务器 Incus 环境
@@ -291,12 +298,12 @@ setup-incus: ## 初始化 local 服务器 Incus 环境
 	ssh $(LOCAL_HOST) "chmod +x /tmp/setup-incus.sh && /tmp/setup-incus.sh"
 	@echo "✅ Incus 环境已初始化"
 
-build-openclaw-image: ## 构建 OpenClaw Incus VM 基础镜像
+build-openclaw-image: ## 构建 pi-ready Incus VM 基础镜像
 	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
 	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh"
-	@echo "✅ OpenClaw 镜像已构建"
+	@echo "✅ pi-ready 镜像已构建"
 
-rebuild-openclaw-image: ## 重建 OpenClaw Incus VM 基础镜像
+rebuild-openclaw-image: ## 重建 pi-ready Incus VM 基础镜像
 	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
 	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh --force"
-	@echo "✅ OpenClaw 镜像已重建"
+	@echo "✅ pi-ready 镜像已重建"
