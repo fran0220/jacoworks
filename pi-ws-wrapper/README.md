@@ -54,4 +54,4 @@ WS_WRAPPER_TOKEN=dev-token LLM_PROXY_KEY=test bun server.ts
 
 ## Deployment
 
-The golden image / provision flow should copy this directory to `/opt/pi-ws-wrapper/` and install [`pi-ws-wrapper.service`](./pi-ws-wrapper.service) as a systemd unit.
+The golden image / provision flow should copy this directory to `/opt/pi-ws-wrapper/` and install [`pi-ws-wrapper.service`](./pi-ws-wrapper.service) as a systemd unit. The service reads dynamic secrets from `/home/node/.pi/agent/runtime.env`, which `gateway/internal/pi/config.go` writes before `oc-gateway` starts or restarts the wrapper.

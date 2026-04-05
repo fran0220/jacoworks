@@ -1,21 +1,31 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
 const PORT = Number(process.env.PORT || 18789);
 const TOKEN = process.env.WS_WRAPPER_TOKEN || "";
 const SESSION_IDLE_MS = 30 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_CWD = process.env.PI_WORKSPACE_DIR || "/data/workspace";
+const AGENT_PRESETS_PATH = process.env.PI_AGENT_PRESETS_PATH || "/home/node/.pi/agent/agents.json";
+const TEAM_TEMPLATES_DIR = process.env.PI_TEAM_TEMPLATES_DIR || "/home/node/.pi/agent/team-templates";
+const BOOTSTRAP_COMMAND_DELAY_MS = 350;
 
 type ClientSocket = ServerWebSocket<undefined>;
 type PiProcess = ReturnType<typeof Bun.spawn>;
 
 interface SessionState {
+  bootstrapped: boolean;
   client: ClientSocket | null;
   id: string;
+  initPromise: Promise<void> | null;
   lastAccess: number;
+  pendingPrompts: string[];
   process: PiProcess;
   ready: boolean;
   stdin: NonNullable<PiProcess["stdin"]>;
   stopping: boolean;
   suppressExitErrorsUntil: number;
+  team: TeamConfig | null;
 }
 
 interface WrapperCommand {
@@ -24,7 +34,77 @@ interface WrapperCommand {
   type?: string;
 }
 
+interface AgentPreset {
+  id?: string;
+  workspaceKey?: string;
+  systemPrompt?: string | null;
+}
+
+interface TeamConfig {
+  bootstrapCommands?: string[];
+  id: string;
+  leaderSystemPrompt?: string | null;
+}
+
 const sessions = new Map<string, SessionState>();
+
+function getAgentWorkspaceKey(sessionId: string): string | null {
+  const normalized = sessionId.trim();
+  if (normalized === "agent:default:main") {
+    return "agent:default";
+  }
+  if (/^agent:[^:]+$/.test(normalized)) {
+    return normalized;
+  }
+  if (/^agent:[^:]+:t-[^:]+$/.test(normalized)) {
+    return normalized.replace(/:t-[^:]+$/, "");
+  }
+  return null;
+}
+
+function loadAgentPresets(): AgentPreset[] {
+  try {
+    const raw = readFileSync(AGENT_PRESETS_PATH, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as AgentPreset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function getAgentPrompt(sessionId: string): string | null {
+  const workspaceKey = getAgentWorkspaceKey(sessionId);
+  if (!workspaceKey) return null;
+
+  const preset = loadAgentPresets().find((item) => item.workspaceKey?.trim() === workspaceKey);
+  const prompt = typeof preset?.systemPrompt === "string" ? preset.systemPrompt.trim() : "";
+  return prompt || null;
+}
+
+function getTeamTemplateID(sessionId: string): string | null {
+  const match = sessionId.trim().match(/^team:([^:]+)(?::|$)/);
+  return match ? match[1] : null;
+}
+
+function getTeamConfig(sessionId: string): TeamConfig | null {
+  const teamTemplateID = getTeamTemplateID(sessionId);
+  if (!teamTemplateID) return null;
+
+  try {
+    for (const fileName of readdirSync(TEAM_TEMPLATES_DIR)) {
+      if (!fileName.endsWith(".json")) continue;
+      const raw = readFileSync(join(TEAM_TEMPLATES_DIR, fileName), "utf8");
+      const parsed = JSON.parse(raw) as TeamConfig;
+      if (parsed.id === teamTemplateID) {
+        return parsed;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
 
 function send(ws: ClientSocket, payload: Record<string, unknown>) {
   try {
@@ -41,6 +121,54 @@ function sendSessionError(session: SessionState, error: string) {
 
 function touch(session: SessionState) {
   session.lastAccess = Date.now();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function writeRPCCommand(session: SessionState, payload: Record<string, unknown>) {
+  session.stdin.write(`${JSON.stringify(payload)}\n`);
+}
+
+async function ensureSessionInitialized(session: SessionState) {
+  if (session.initPromise) {
+    await session.initPromise;
+    return;
+  }
+
+  session.initPromise = (async () => {
+    if (session.team && !session.bootstrapped) {
+      session.bootstrapped = true;
+      for (const command of session.team.bootstrapCommands || []) {
+        writeRPCCommand(session, { type: "prompt", message: command });
+        await sleep(BOOTSTRAP_COMMAND_DELAY_MS);
+      }
+    }
+
+    if (session.pendingPrompts.length === 0) {
+      return;
+    }
+
+    const queuedPrompts = [...session.pendingPrompts];
+    session.pendingPrompts = [];
+    for (const message of queuedPrompts) {
+      writeRPCCommand(session, { type: "prompt", message });
+    }
+  })().finally(() => {
+    session.initPromise = null;
+  });
+
+  await session.initPromise;
+}
+
+function queuePrompt(session: SessionState, message: string) {
+  session.pendingPrompts.push(message);
+  void ensureSessionInitialized(session).catch((error) => {
+    const text = error instanceof Error ? error.message : "failed to initialize session";
+    sendSessionError(session, text);
+    session.pendingPrompts = [];
+  });
 }
 
 function terminateSession(session: SessionState, reason: "idle" | "shutdown") {
@@ -107,7 +235,18 @@ async function pumpLines(
 }
 
 function spawnSession(sessionId: string, ws: ClientSocket): SessionState {
-  const processRef = Bun.spawn(["pi", "--mode", "json"], {
+  const teamConfig = getTeamConfig(sessionId);
+  if (sessionId.startsWith("team:") && !teamConfig) {
+    throw new Error(`team template not found for session ${sessionId}`);
+  }
+
+  const args = ["pi", "--mode", "rpc"];
+  const systemPrompt = teamConfig?.leaderSystemPrompt?.trim() || getAgentPrompt(sessionId);
+  if (systemPrompt) {
+    args.push("--system-prompt", systemPrompt);
+  }
+
+  const processRef = Bun.spawn(args, {
     cwd: DEFAULT_CWD,
     env: {
       ...process.env,
@@ -132,14 +271,18 @@ function spawnSession(sessionId: string, ws: ClientSocket): SessionState {
   }
 
   const state: SessionState = {
+    bootstrapped: !teamConfig,
     client: ws,
     id: sessionId,
+    initPromise: null,
     lastAccess: Date.now(),
+    pendingPrompts: [],
     process: processRef,
     ready: false,
     stdin: processRef.stdin,
     stopping: false,
     suppressExitErrorsUntil: 0,
+    team: teamConfig,
   };
 
   sessions.set(sessionId, state);
@@ -233,12 +376,17 @@ const server = Bun.serve({
         }
 
         session.client = ws;
+        session.pendingPrompts = [];
         touch(session);
         session.suppressExitErrorsUntil = Date.now() + 5_000;
         try {
-          process.kill(session.process.pid, "SIGINT");
-        } catch (error) {
-          sendSessionError(session, error instanceof Error ? error.message : "failed to abort session");
+          writeRPCCommand(session, { type: "abort" });
+        } catch {
+          try {
+            process.kill(session.process.pid, "SIGINT");
+          } catch (error) {
+            sendSessionError(session, error instanceof Error ? error.message : "failed to abort session");
+          }
         }
         return;
       }
@@ -250,7 +398,7 @@ const server = Bun.serve({
 
       try {
         const session = getOrCreateSession(sessionId, ws);
-        session.stdin.write(`${command.message}\n`);
+        queuePrompt(session, command.message);
         touch(session);
       } catch (error) {
         const message = error instanceof Error ? error.message : "failed to start pi session";
