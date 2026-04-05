@@ -1,10 +1,23 @@
 {
-  "defaultProvider": "proxy-anthropic",
-  "defaultModel": "claude-sonnet-4-6",
+  "defaultProvider": "proxy-gpt",
+  "defaultModel": "gpt-5.4",
   "defaultThinkingLevel": "off",
   "compaction": {
     "enabled": true,
     "reserveTokens": 32768,
     "keepRecentTokens": 40000
-  }
+  },
+  "packages": [
+    "npm:pi-subagents",
+    "npm:@tmustier/pi-agent-teams",
+    "npm:taskplane",
+    "npm:pi-web-access",
+    "npm:@apmantza/greedysearch-pi",
+    "npm:pi-mcp-adapter",
+    "npm:@aliou/pi-guardrails",
+    "npm:@aliou/pi-processes",
+    "npm:pi-rtk"
+  ],
+  "extensions": ["./extensions"],
+  "skills": ["./skills"]
 }

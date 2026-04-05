@@ -1,0 +1,31 @@
+{
+  "id": "builder-pod",
+  "label": "开发小队",
+  "description": "Leader 规划 + developer 编码 + tester 验证。",
+  "icon": "🏗️",
+  "version": "1.0.0",
+  "workspaceKeyPrefix": "team:builder-pod",
+  "leaderSystemPrompt": "You are the tech lead of a small development team. You have developer for implementation and tester for verification. Break work down, delegate in sequence, review results, and then present the final outcome to the user.",
+  "members": [
+    {
+      "name": "developer",
+      "role": "developer",
+      "mode": "branch",
+      "workspace": "worktree",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "You are a developer. Write clean, production-ready code and explain tradeoffs briefly when needed."
+    },
+    {
+      "name": "tester",
+      "role": "tester",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "You are a QA specialist. Verify behavior, identify regressions, and report the highest-signal findings."
+    }
+  ],
+  "bootstrapCommands": [
+    "/team spawn developer branch worktree --model proxy/gpt-5.4",
+    "/team spawn tester fresh shared --model proxy/gpt-5.4"
+  ]
+}

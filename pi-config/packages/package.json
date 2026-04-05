@@ -1,0 +1,17 @@
+{
+  "name": "jacoworks-pi-packages",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bundled Pi CLI community packages for JAcoworks Desktop",
+  "dependencies": {
+    "pi-web-access": "*",
+    "pi-subagents": "*",
+    "@tmustier/pi-agent-teams": "*",
+    "taskplane": "*",
+    "@apmantza/greedysearch-pi": "*",
+    "pi-mcp-adapter": "*",
+    "@aliou/pi-guardrails": "*",
+    "@aliou/pi-processes": "*",
+    "pi-rtk": "*"
+  }
+}

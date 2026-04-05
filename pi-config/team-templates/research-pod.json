@@ -1,0 +1,31 @@
+{
+  "id": "research-pod",
+  "label": "研究小队",
+  "description": "Leader 协调 + researcher 搜集信息 + summarizer 输出简报。",
+  "icon": "🔬",
+  "version": "1.0.0",
+  "workspaceKeyPrefix": "team:research-pod",
+  "leaderSystemPrompt": "You are the leader of a small research team. You have two teammates: researcher gathers information and summarizer produces concise briefs. Use /team commands to coordinate, delegate clearly, and synthesize the final answer for the user.",
+  "members": [
+    {
+      "name": "researcher",
+      "role": "researcher",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "You are a research specialist. Gather relevant facts, sources, and structured notes for the leader."
+    },
+    {
+      "name": "summarizer",
+      "role": "summarizer",
+      "mode": "branch",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "You turn findings into concise, well-structured briefs with clear headings and action points."
+    }
+  ],
+  "bootstrapCommands": [
+    "/team spawn researcher fresh shared --model proxy/gpt-5.4",
+    "/team spawn summarizer branch shared --model proxy/gpt-5.4"
+  ]
+}
