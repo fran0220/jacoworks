@@ -4953,7 +4953,7 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   }
 }
 
-/* ===== NavRail v2 — Channel-based ===== */
+/* ===== NavRail v2 — 4 tabs ===== */
 
 .nav-rail-v2 {
   width: 56px;
@@ -4993,9 +4993,8 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   align-items: center;
   gap: 0.5rem;
   padding: 0.625rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
-
-/* ── Fixed nav items (dashboard, observe) ── */
 
 .nav-rail-v2-item {
   width: 36px;
@@ -5018,164 +5017,137 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   background: var(--accent);
 }
 
-/* Mobile variant: show label next to icon */
-.nav-rail-v2-item.mobile {
-  width: auto;
-  justify-content: flex-start;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border-radius: 0.75rem;
-  font-size: 0.875rem;
+
+.nav-mobile-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 15, 13, 0.42);
+  backdrop-filter: blur(4px);
+  z-index: 94;
 }
 
-/* ── Expandable sections (agents, teams) ── */
+.nav-mobile-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 95;
+  padding: 0.75rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(180deg, rgba(42, 37, 32, 0.98), rgba(24, 21, 19, 0.98));
+  border-radius: 1.25rem 1.25rem 0 0;
+  box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.28);
+  transform: translateY(100%);
+  transition: transform 0.24s ease;
+}
 
-.nav-rail-v2-section {
-  position: relative;
+.nav-mobile-sheet.open {
+  transform: translateY(0);
+}
+
+.nav-mobile-sheet-handle {
+  width: 42px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 0 auto 0.875rem;
+}
+
+.nav-mobile-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.nav-mobile-sheet-head strong {
+  display: block;
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.nav-mobile-sheet-head span {
+  display: block;
+  margin-top: 0.25rem;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 0.8rem;
+}
+
+.nav-mobile-sheet-actions {
   display: flex;
   flex-direction: column;
-  align-items: center;
-}
-
-.nav-rail-v2-section-header {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0.5rem;
-  color: rgba(255, 255, 255, 0.45);
-  transition: all 0.15s;
-}
-
-.nav-rail-v2-section-header:hover {
-  color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.nav-rail-v2-section.expanded > .nav-rail-v2-section-header {
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.1);
-}
-
-/* ── Desktop flyout panel ── */
-
-.nav-rail-v2-flyout {
-  position: absolute;
-  left: 100%;
-  top: 0;
-  width: 180px;
-  background: #2a2520;
-  border-radius: 0 0.75rem 0.75rem 0;
-  box-shadow: 4px 2px 16px rgba(0, 0, 0, 0.25);
-  padding: 0.375rem;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.nav-rail-v2-flyout-title {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.4);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0.375rem 0.625rem 0.25rem;
-}
-
-/* ── Sub-items (agents / teams inside section) ── */
-
-.nav-rail-v2-sub-item {
-  display: flex;
-  align-items: center;
   gap: 0.5rem;
-  padding: 0.375rem 0.625rem;
-  border-radius: 0.375rem;
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.8125rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: all 0.15s;
-  width: 100%;
+}
+
+.nav-mobile-sheet-action {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 48px;
+  padding: 0.9rem 1rem;
+  border-radius: 0.95rem;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.05);
   text-align: left;
 }
 
-.nav-rail-v2-sub-item:hover {
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.nav-rail-v2-sub-item.active {
+.nav-mobile-sheet-action:hover,
+.nav-mobile-sheet-action.active {
   color: #fff;
-  background: var(--accent);
+  background: rgba(196, 114, 74, 0.88);
 }
 
-.nav-rail-v2-badge {
-  margin-left: auto;
-  font-size: 0.6875rem;
-  color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.08);
-  padding: 0.0625rem 0.375rem;
-  border-radius: 0.75rem;
-}
-
-/* ── Add button ── */
-
-.nav-rail-v2-add-btn {
+.nav-mobile-sheet-user {
+  margin-top: 1rem;
   display: flex;
+  justify-content: flex-end;
+}
+
+.nav-mobile-sheet-status {
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.375rem 0.625rem;
-  border-radius: 0.375rem;
-  color: rgba(255, 255, 255, 0.35);
-  font-size: 0.75rem;
-  transition: all 0.15s;
-  width: 100%;
+  margin-top: 1rem;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 0.8rem;
 }
 
-.nav-rail-v2-add-btn:hover {
-  color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.06);
+.nav-mobile-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 93;
+  display: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0.65rem 0.875rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(250, 247, 244, 0.94);
+  border-top: 1px solid rgba(31, 24, 19, 0.08);
+  box-shadow: 0 -10px 28px rgba(32, 22, 13, 0.08);
+  backdrop-filter: blur(18px);
 }
 
-/* ── Mobile overrides for sections inside drawer ── */
-
-.nav-rail-v2-section.mobile {
-  align-items: stretch;
-  padding: 0 0.5rem;
-}
-
-.nav-rail-v2-section.mobile .nav-rail-v2-section-header {
-  width: auto;
-  justify-content: flex-start;
-  gap: 0.75rem;
-  padding: 0.75rem 0.5rem;
-  border-radius: 0.75rem;
-  font-size: 0.875rem;
-}
-
-.nav-rail-v2-section.mobile .nav-rail-v2-section-header > :last-child {
-  margin-left: auto;
-}
-
-.nav-rail-v2-section.mobile .nav-rail-v2-section-items {
-  padding-left: 1rem;
+.nav-mobile-tab {
+  min-height: 52px;
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border-radius: 0.95rem;
+  color: rgba(75, 85, 99, 0.82);
+  font-size: 0.74rem;
+  font-weight: 600;
 }
 
-.nav-rail-v2-section.mobile .nav-rail-v2-sub-item {
-  padding: 0.625rem 0.75rem;
-  font-size: 0.875rem;
-  border-radius: 0.625rem;
+.nav-mobile-tab:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 
-.nav-rail-v2-section.mobile .nav-rail-v2-add-btn {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8125rem;
+.nav-mobile-tab.active {
+  color: var(--accent);
+  background: rgba(196, 114, 74, 0.12);
 }
 
 /* Observe placeholder */
@@ -5186,4 +5158,18 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   height: 100%;
   color: var(--text-muted);
   font-size: 1.125rem;
+}
+
+@media (max-width: 768px) {
+  .nav-rail-v2 {
+    display: none;
+  }
+
+  .nav-mobile-bar {
+    display: grid;
+  }
+
+  .app-layout {
+    padding-bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+  }
 }

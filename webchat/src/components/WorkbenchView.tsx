@@ -1,6 +1,6 @@
 import { Activity, Menu, SlidersHorizontal } from "lucide-react";
 import type { AgentSummary } from "../lib/feed";
-import type { DashboardStats } from "../lib/jamoss";
+import type { DashboardStats } from "../lib/ops-types";
 import type { TranslatedActivity } from "../lib/feed-translate";
 import type { ChatMessage, FileArtifact, StreamBlock } from "../types";
 import ChatView from "./ChatView";

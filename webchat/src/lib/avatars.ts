@@ -10,6 +10,14 @@ export interface AvatarProfile {
   source: string;
 }
 
+function normalizeRole(role: string): string {
+  const trimmed = role.trim();
+  if (!trimmed) return "default";
+  // VM-first role aliases that should reuse the default avatar profile.
+  if (trimmed === "leader" || trimmed === "member") return "default";
+  return trimmed;
+}
+
 export async function fetchAvatars(): Promise<AvatarProfile[]> {
   const res = await fetch(`${GATEWAY_URL}/api/avatars`, {
     method: "GET",
@@ -22,7 +30,8 @@ export async function fetchAvatars(): Promise<AvatarProfile[]> {
 }
 
 export async function fetchAvatar(role: string): Promise<AvatarProfile | null> {
-  const res = await fetch(`${GATEWAY_URL}/api/avatars/${encodeURIComponent(role)}`, {
+  const resolvedRole = normalizeRole(role);
+  const res = await fetch(`${GATEWAY_URL}/api/avatars/${encodeURIComponent(resolvedRole)}`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${AUTH_TOKEN}`,

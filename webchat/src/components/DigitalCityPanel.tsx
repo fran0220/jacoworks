@@ -100,7 +100,7 @@ export default function DigitalCityPanel({ mapboxToken }: DigitalCityPanelProps)
             new mapboxgl.Popup({ offset: 15, className: "city-popup" }).setHTML(
               `<div class="city-popup-content">
                 <h3>🤖 ${node.name}</h3>
-                <p>OpenClaw 状态: ${node.status === "active" ? "🟢 活跃" : "⚪ 空闲"}</p>
+                <p>AI 工作区状态: ${node.status === "active" ? "🟢 活跃" : "⚪ 空闲"}</p>
                 <div class="city-popup-tag">Agent 团队运行中</div>
               </div>`
             )

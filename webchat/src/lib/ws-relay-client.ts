@@ -1,15 +1,15 @@
-import { AUTH_TOKEN, DEFAULT_OPENCLAW_SESSION_KEY, GATEWAY_URL } from "./config";
+import { AUTH_TOKEN, DEFAULT_SESSION_KEY, GATEWAY_URL } from "./config";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected";
 
-export interface OpenClawEventFrame {
+export interface RelayEventFrame {
   type: "event";
   event: string;
   payload?: unknown;
   seq?: number;
 }
 
-export interface OpenClawResponseFrame {
+export interface RelayResponseFrame {
   type: "res";
   id: string;
   ok: boolean;
@@ -21,16 +21,16 @@ export interface OpenClawResponseFrame {
   };
 }
 
-export type OpenClawFrame = OpenClawEventFrame | OpenClawResponseFrame | Record<string, unknown>;
+export type RelayFrame = RelayEventFrame | RelayResponseFrame | Record<string, unknown>;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
 }
 
-export interface OpenClawClientOptions {
+export interface WSRelayClientOptions {
   onStateChange: (state: ConnectionState, message: string) => void;
-  onFrame: (frame: OpenClawFrame) => void;
+  onFrame: (frame: RelayFrame) => void;
 }
 
 
@@ -46,24 +46,24 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Browser → oc-gateway WS client.
+ * Browser → oc-gateway WS relay client.
  *
  * Connects via ticket auth: POST /api/oc/ws-ticket → wss://.../ws/oc?ticket=xxx
- * The oc-gateway performs the OpenClaw challenge-response handshake server-side
+ * The oc-gateway performs the challenge-response handshake server-side
  * and sends a `proxy.ready` envelope event when the upstream is connected.
  */
-export class OpenClawClient {
+export class WSRelayClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, PendingRequest>();
   private connected = false;
-  private sessionKey = DEFAULT_OPENCLAW_SESSION_KEY;
+  private sessionKey = DEFAULT_SESSION_KEY;
   private disposed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private opts: OpenClawClientOptions;
+  private opts: WSRelayClientOptions;
 
-  constructor(opts: OpenClawClientOptions) {
+  constructor(opts: WSRelayClientOptions) {
     this.opts = opts;
   }
 
@@ -85,7 +85,7 @@ export class OpenClawClient {
       this.ws.close();
       this.ws = null;
     }
-    this.rejectPending(new Error("openclaw client stopped"));
+    this.rejectPending(new Error("ws relay client stopped"));
   }
 
   get isConnected() {
@@ -137,13 +137,13 @@ export class OpenClawClient {
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.connected) {
-      console.warn("[openclaw] request blocked", {
+      console.warn("[ws-relay] request blocked", {
         method,
         hasWs: !!this.ws,
         readyState: this.ws?.readyState,
         connected: this.connected,
       });
-      return Promise.reject(new Error("openclaw not connected"));
+      return Promise.reject(new Error("ws relay not connected"));
     }
 
     const id = makeID("req");
@@ -204,17 +204,17 @@ export class OpenClawClient {
     this.ws = ws;
 
     ws.onopen = () => {
-      this.opts.onStateChange("connecting", "等待 OpenClaw 就绪...");
+      this.opts.onStateChange("connecting", "等待 Pi 就绪...");
       this.startHeartbeat();
     };
 
     ws.onmessage = (evt) => {
       try {
         const raw = evt.data as string;
-        // Filter out plain-text heartbeat frames from OpenClaw
+        // Filter out plain-text heartbeat frames
         if (raw === "HEARTBEAT_OK" || raw === "HEARTBEAT" || raw === "PONG") return;
         const parsed = JSON.parse(raw) as Record<string, unknown>;
-        this.handleFrame(parsed as OpenClawFrame);
+        this.handleFrame(parsed as RelayFrame);
       } catch {
         // ignore malformed frames
       }
@@ -239,14 +239,14 @@ export class OpenClawClient {
     };
   }
 
-  /** Handle native OpenClaw protocol frames (direct relay, no envelope) */
-  private handleFrame(frame: OpenClawFrame) {
+  /** Handle native protocol frames (direct relay, no envelope) */
+  private handleFrame(frame: RelayFrame) {
     const record = asRecord(frame);
     const frameType = typeof record.type === "string" ? record.type : "";
 
     // Synthetic frames from oc-gateway thin relay
     if (frameType === "proxy.ready") {
-      console.debug("[openclaw] proxy.ready received, setting connected=true");
+      console.debug("[ws-relay] proxy.ready received, setting connected=true");
       this.connected = true;
       this.reconnectAttempt = 0;
       this.opts.onStateChange("connected", "已连接");
@@ -283,9 +283,8 @@ export class OpenClawClient {
   }
 
   private startHeartbeat() {
-    // In direct mode, OpenClaw manages its own connection timeout.
+    // In direct mode, Pi manages its own connection timeout.
     // Only send heartbeats if connected via legacy gateway proxy.
-    // The native OC protocol doesn't accept {type:"ping"} frames.
     this.stopHeartbeat();
   }
 

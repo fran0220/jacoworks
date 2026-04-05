@@ -1,7 +1,7 @@
 import { Activity, LayoutDashboard, ListTodo, X } from "lucide-react";
 import type { AgentSummary } from "../lib/feed";
 import type { TranslatedActivity } from "../lib/feed-translate";
-import type { DashboardStats } from "../lib/jamoss";
+import type { DashboardStats } from "../lib/ops-types";
 import OpsOverview from "./OpsOverview";
 import OpsTaskSummary from "./OpsTaskSummary";
 import OpsTimeline from "./OpsTimeline";

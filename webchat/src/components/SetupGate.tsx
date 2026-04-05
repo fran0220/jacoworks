@@ -129,7 +129,7 @@ export default function SetupGate({ onReady, wsState }: SetupGateProps) {
           <Bot size={24} />
         </div>
         <h1>正在初始化 AI 工作区...</h1>
-        <p className="setup-gate-subtitle">首次进入需要准备 OpenClaw 容器，通常在 10-30 秒内完成。</p>
+        <p className="setup-gate-subtitle">首次进入需要准备 AI 工作区，通常在 10-30 秒内完成。</p>
 
         <div className="setup-gate-status">
           <Loader size={16} className="spin-icon" />

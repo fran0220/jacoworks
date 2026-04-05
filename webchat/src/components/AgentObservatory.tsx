@@ -3,9 +3,13 @@ import { fetchAgentSummary, fetchFeedLogs } from "../lib/feed";
 import type { AgentSummary, FeedLog } from "../lib/feed";
 import type { WorldAgent } from "../observatory/types";
 import { setRoleLabels } from "../lib/feed-translate";
-import { fetchTeams } from "../lib/teams";
-import type { TeamsResponse, TemplateTheme } from "../lib/teams";
-import { buildTeamOptions, resolveLeaderInfo } from "../lib/team-utils";
+import { fetchAgentPresets, fetchTeams } from "../lib/teams";
+import type { AgentPreset, TeamsResponse, TemplateTheme } from "../lib/teams";
+import {
+  buildTeamOptions,
+  matchesTemplateSessionKey,
+  resolveLeaderInfo,
+} from "../lib/team-utils";
 import LeaderAssistant from "../observatory/hud/LeaderAssistant";
 import type { LeaderAssistantHandle } from "../observatory/hud/LeaderAssistant";
 
@@ -46,7 +50,8 @@ const DEFAULT_ROLE_COLORS: Record<string, string> = {
 
 function hashStringToHue(str: string): number {
   let hash = 0;
-  for (let i = 0; i < str.length; i += 1) hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  for (let i = 0; i < str.length; i += 1)
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
   return ((hash % 360) + 360) % 360;
 }
 
@@ -78,17 +83,27 @@ function hslToHex(h: number, s: number, l: number): string {
     b = x;
   }
 
-  const toHex = (value: number) => Math.round((value + m) * 255).toString(16).padStart(2, "0");
+  const toHex = (value: number) =>
+    Math.round((value + m) * 255)
+      .toString(16)
+      .padStart(2, "0");
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
 function roleColor(role: string, theme?: TemplateTheme): string {
   const themedColor = theme?.roles?.[role]?.color;
   if (themedColor) return themedColor;
-  return DEFAULT_ROLE_COLORS[role] ?? hslToHex(hashStringToHue(role), 0.7, 0.55);
+  return (
+    DEFAULT_ROLE_COLORS[role] ?? hslToHex(hashStringToHue(role), 0.7, 0.55)
+  );
 }
 
-function setObservatoryRoleOverrides(overrides: Record<string, { color: number; emissive: number; namePrefix: string }> | null): void {
+function setObservatoryRoleOverrides(
+  overrides: Record<
+    string,
+    { color: number; emissive: number; namePrefix: string }
+  > | null,
+): void {
   const globalState = globalThis as Record<string, unknown>;
   globalState[ROLE_OVERRIDES_GLOBAL_KEY] = overrides;
 }
@@ -99,21 +114,47 @@ function setObservatoryZoneLabels(labels: Record<string, string> | null): void {
 }
 
 interface SceneRefs {
-  scene: InstanceType<typeof import("../observatory/world/ObservatoryScene").ObservatoryScene>;
+  scene: InstanceType<
+    typeof import("../observatory/world/ObservatoryScene").ObservatoryScene
+  >;
   env: { update(time: number): void };
-  zones: InstanceType<typeof import("../observatory/world/ZoneManager").ZoneManager>;
-  pool: InstanceType<typeof import("../observatory/avatar/AvatarPool").AvatarPool>;
-  factory: InstanceType<typeof import("../observatory/avatar/AvatarFactory").AvatarFactory>;
-  waypointGraph: InstanceType<typeof import("../observatory/world/WaypointGraph").WaypointGraph>;
-  stateManager: InstanceType<typeof import("../observatory/bridge/AgentStateManager").AgentStateManager>;
-  eventBridge: InstanceType<typeof import("../observatory/bridge/EventBridge").EventBridge>;
+  zones: InstanceType<
+    typeof import("../observatory/world/ZoneManager").ZoneManager
+  >;
+  pool: InstanceType<
+    typeof import("../observatory/avatar/AvatarPool").AvatarPool
+  >;
+  factory: InstanceType<
+    typeof import("../observatory/avatar/AvatarFactory").AvatarFactory
+  >;
+  waypointGraph: InstanceType<
+    typeof import("../observatory/world/WaypointGraph").WaypointGraph
+  >;
+  stateManager: InstanceType<
+    typeof import("../observatory/bridge/AgentStateManager").AgentStateManager
+  >;
+  eventBridge: InstanceType<
+    typeof import("../observatory/bridge/EventBridge").EventBridge
+  >;
   worldAgents: Map<string, WorldAgent>;
-  navigators: Map<string, InstanceType<typeof import("../observatory/avatar/AvatarNavigator").AvatarNavigator>>;
-  animators: Map<string, InstanceType<typeof import("../observatory/avatar/AvatarAnimator").AvatarAnimator>>;
+  navigators: Map<
+    string,
+    InstanceType<
+      typeof import("../observatory/avatar/AvatarNavigator").AvatarNavigator
+    >
+  >;
+  animators: Map<
+    string,
+    InstanceType<
+      typeof import("../observatory/avatar/AvatarAnimator").AvatarAnimator
+    >
+  >;
 }
 
 interface AgentObservatoryProps {
-  onWsEvent?: React.MutableRefObject<((event: { kind: string; text?: string; toolName?: string }) => void) | null>;
+  onWsEvent?: React.MutableRefObject<
+    ((event: { kind: string; text?: string; toolName?: string }) => void) | null
+  >;
   activeTeamSessionKey: string;
   onTeamChange: (sessionKey: string) => void;
   onSend: (text: string) => void;
@@ -129,6 +170,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [teamsData, setTeamsData] = useState<TeamsResponse | null>(null);
+  const [presets, setPresets] = useState<AgentPreset[]>([]);
   const lastLogIdRef = useRef<string | undefined>(undefined);
   const sceneRef = useRef<SceneRefs | null>(null);
   const leaderRef = useRef<LeaderAssistantHandle>(null);
@@ -143,11 +185,18 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
     if (theme) {
       // Apply role color overrides
       if (theme.roles) {
-        const overrides: Record<string, { color: number; emissive: number; namePrefix: string }> = {};
+        const overrides: Record<
+          string,
+          { color: number; emissive: number; namePrefix: string }
+        > = {};
         for (const [role, cfg] of Object.entries(theme.roles)) {
           const hex = parseInt(cfg.color.replace("#", ""), 16);
           const darkerHex = Math.floor(hex * 0.6);
-          overrides[role] = { color: hex, emissive: darkerHex, namePrefix: cfg.displayName.slice(0, 1) };
+          overrides[role] = {
+            color: hex,
+            emissive: darkerHex,
+            namePrefix: cfg.displayName.slice(0, 1),
+          };
         }
         setObservatoryRoleOverrides(overrides);
       }
@@ -177,13 +226,20 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
   // Fetch teams data (re-fetch when team changes)
   const loadTeams = useCallback(async () => {
     try {
-      const data = await fetchTeams();
+      const [data, agentPresets] = await Promise.all([
+        fetchTeams(),
+        fetchAgentPresets(),
+      ]);
       setTeamsData(data);
-      applyTheme(data.theme);
+      setPresets(agentPresets);
+      const activeTemplate = data.templates.find((template) =>
+        matchesTemplateSessionKey(template, props.activeTeamSessionKey),
+      );
+      applyTheme(activeTemplate?.theme ?? data.theme);
     } catch {
       // silent
     }
-  }, [applyTheme]);
+  }, [applyTheme, props.activeTeamSessionKey]);
 
   useEffect(() => {
     void loadTeams();
@@ -192,14 +248,37 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
   // Derive leader info from teams data + active session key + agent summaries
   const leaderInfo = useMemo(() => {
     if (!teamsData) return null;
-    return resolveLeaderInfo(teamsData, props.activeTeamSessionKey, agents);
-  }, [teamsData, props.activeTeamSessionKey, agents]);
+    return resolveLeaderInfo(
+      teamsData,
+      props.activeTeamSessionKey,
+      agents,
+      presets,
+    );
+  }, [teamsData, props.activeTeamSessionKey, agents, presets]);
 
   // Build team selector options
   const teamOptions = useMemo(() => {
     if (!teamsData) return [];
-    return buildTeamOptions(teamsData);
-  }, [teamsData]);
+    const options = buildTeamOptions(teamsData, presets);
+    if (
+      options.some((option) => option.sessionKey === props.activeTeamSessionKey)
+    ) {
+      return options;
+    }
+
+    const activeTemplate = teamsData.templates.find((template) =>
+      matchesTemplateSessionKey(template, props.activeTeamSessionKey),
+    );
+    const activeLabel = activeTemplate?.label || props.activeTeamSessionKey;
+    return [
+      {
+        sessionKey: props.activeTeamSessionKey,
+        label: activeLabel,
+        source: "default" as const,
+      },
+      ...options,
+    ];
+  }, [teamsData, presets, props.activeTeamSessionKey]);
 
   const leaderSummary = useMemo(() => {
     if (!leaderInfo) return undefined;
@@ -237,7 +316,8 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
       const scene = new ObservatoryScene();
       const threeScene = scene.getScene();
 
-      const { IslandEnvironment } = await import("../observatory/world/IslandEnvironment");
+      const { IslandEnvironment } =
+        await import("../observatory/world/IslandEnvironment");
       const env = new IslandEnvironment(threeScene);
 
       const zones = new ZoneManager(threeScene);
@@ -245,10 +325,17 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
       const pool = new AvatarPool();
       const factory = new AvatarFactory(pool, threeScene);
       const worldAgents = new Map<string, WorldAgent>();
-      const navigators = new Map<string, InstanceType<typeof AvatarNavigator>>();
+      const navigators = new Map<
+        string,
+        InstanceType<typeof AvatarNavigator>
+      >();
       const animators = new Map<string, InstanceType<typeof AvatarAnimator>>();
 
-      const stateManager = new AgentStateManager(worldAgents, zones, waypointGraph);
+      const stateManager = new AgentStateManager(
+        worldAgents,
+        zones,
+        waypointGraph,
+      );
 
       const eventBridge = new EventBridge((event) => {
         stateManager.handleEvent(event);
@@ -290,7 +377,19 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
       });
 
       scene.mount(containerRef.current);
-      sceneRef.current = { scene, env, zones, pool, factory, waypointGraph, stateManager, eventBridge, worldAgents, navigators, animators };
+      sceneRef.current = {
+        scene,
+        env,
+        zones,
+        pool,
+        factory,
+        waypointGraph,
+        stateManager,
+        eventBridge,
+        worldAgents,
+        navigators,
+        animators,
+      };
       setLoading(false);
     } catch (err) {
       console.error("Observatory init failed:", err);
@@ -339,7 +438,10 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
           current_sub_task: a.current_sub_task,
         }));
 
-        const { added, removed } = await factory.syncAgents(summaries, worldAgents);
+        const { added, removed } = await factory.syncAgents(
+          summaries,
+          worldAgents,
+        );
 
         // Create navigators + animators for new agents
         const [{ AvatarNavigator }, { AvatarAnimator }] = await Promise.all([
@@ -363,7 +465,10 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
     };
     poll();
     const timer = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   // Poll feed logs incrementally every 5s
@@ -385,7 +490,10 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
     };
     poll();
     const timer = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   // Wire WS events to LeaderAssistant
@@ -395,15 +503,29 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
       const ref = leaderRef.current;
       if (!ref) return;
       switch (event.kind) {
-        case "thinking_start": ref.onThinkingStart(); break;
-        case "thinking_delta": ref.onThinkingDelta(event.text || ""); break;
-        case "text_delta": ref.onTextDelta(event.text || ""); break;
-        case "tool_start": ref.onToolStart(event.toolName || "tool"); break;
-        case "tool_end": ref.onToolEnd(event.toolName || "tool"); break;
-        case "done": ref.onDone(); break;
+        case "thinking_start":
+          ref.onThinkingStart();
+          break;
+        case "thinking_delta":
+          ref.onThinkingDelta(event.text || "");
+          break;
+        case "text_delta":
+          ref.onTextDelta(event.text || "");
+          break;
+        case "tool_start":
+          ref.onToolStart(event.toolName || "tool");
+          break;
+        case "tool_end":
+          ref.onToolEnd(event.toolName || "tool");
+          break;
+        case "done":
+          ref.onDone();
+          break;
       }
     };
-    return () => { if (props.onWsEvent) props.onWsEvent.current = null; };
+    return () => {
+      if (props.onWsEvent) props.onWsEvent.current = null;
+    };
   }, [props.onWsEvent]);
 
   if (error) {
@@ -418,7 +540,11 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
 
   return (
     <div className="observatory">
-      <div className="observatory-canvas" ref={containerRef} aria-hidden="true" />
+      <div
+        className="observatory-canvas"
+        ref={containerRef}
+        aria-hidden="true"
+      />
       {loading && (
         <div className="observatory-loading">
           <span className="spinner" />
@@ -429,7 +555,8 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         {/* Top-left: title + agent count + team selector */}
         <div className="observatory-top-bar">
           <div className="observatory-title">
-            {teamsData?.theme?.icon ?? "🌌"} {teamsData?.theme?.title ?? "观测站"}
+            {teamsData?.theme?.icon ?? "🌌"}{" "}
+            {teamsData?.theme?.title ?? "观测站"}
             <span className="badge">{agents.length} 位智能体</span>
           </div>
           {teamOptions.length > 1 && (
@@ -441,7 +568,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
             >
               {teamOptions.map((opt) => (
                 <option key={opt.sessionKey} value={opt.sessionKey}>
-                  {opt.source === "installed" ? `👥 ${opt.label}` : opt.label}
+                  {opt.source === "preset" ? `🤖 ${opt.label}` : opt.label}
                 </option>
               ))}
             </select>
@@ -454,7 +581,13 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
             <div className="observatory-activity-item" key={item.id}>
               <span
                 className="dot"
-                style={{ width: 6, height: 6, borderRadius: "50%", background: roleColor(item.agentRole, teamsData?.theme), flexShrink: 0 }}
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: roleColor(item.agentRole, teamsData?.theme),
+                  flexShrink: 0,
+                }}
               />
               <span className="agent-name">{item.agentName}</span>
               <span>{item.action}</span>
@@ -466,7 +599,10 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         <div className="observatory-scorebar">
           {agents.map((a) => (
             <div className="observatory-score-chip" key={a.id}>
-              <span className="dot" style={{ background: roleColor(a.role, teamsData?.theme) }} />
+              <span
+                className="dot"
+                style={{ background: roleColor(a.role, teamsData?.theme) }}
+              />
               <span>{a.name}</span>
               <span className="score">{a.total_score}</span>
             </div>

@@ -10,11 +10,11 @@ declare global {
     __GATEWAY_URL__?: string;
     __AUTH_TOKEN__?: string;
     __USER_NAME__?: string;
-    __OPENCLAW_TOKEN__?: string;
-    __OPENCLAW_GATEWAY_TOKEN__?: string;
-    __OPENCLAW_WS_PORT__?: number;
-    __OPENCLAW_VNC_URL__?: string;
-    __OPENCLAW_SESSION_KEY__?: string;
+    __PI_TOKEN__?: string;
+    __PIVM_TOKEN__?: string;
+    __PI_WS_PORT__?: number;
+    __PI_VNC_URL__?: string;
+    __PI_SESSION_KEY__?: string;
     __POSTHOG_KEY__?: string;
     __POSTHOG_HOST__?: string;
     __MAPBOX_TOKEN__?: string;

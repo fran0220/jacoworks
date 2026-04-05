@@ -1,6 +1,6 @@
 import { AlertTriangle, Sparkles, Target, Trophy, Users } from "lucide-react";
 import type { AgentSummary } from "../lib/feed";
-import type { DashboardStats } from "../lib/jamoss";
+import type { DashboardStats } from "../lib/ops-types";
 
 const ROLE_LABELS: Record<string, string> = {
   planner: "规划师",

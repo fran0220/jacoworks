@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { fetchAgentSummary, fetchFeedLogs, fetchFeedStatus, type AgentSummary, type FeedLog } from "../lib/feed";
+import { fetchAgentSummary, fetchFeedLogs, type AgentSummary, type FeedLog } from "../lib/feed";
 import { translateFeedLog, type TranslatedActivity } from "../lib/feed-translate";
-import { fetchDashboardStats, type DashboardStats } from "../lib/jamoss";
+import type { DashboardStats } from "../lib/ops-types";
 
 const MAX_FEED_ITEMS = 200;
 
@@ -147,7 +147,15 @@ export default function useOperations(_workspaceKey: string): UseOperationsResul
 
   const loadDashboard = useCallback(async (silent = true) => {
     try {
-      const dashboardStats = await fetchDashboardStats();
+      const agentSummaries = await fetchAgentSummary();
+      const activeTasks = agentSummaries.filter((item) => item.current_sub_task !== null).length;
+      const topScore = agentSummaries.reduce((max, item) => Math.max(max, item.total_score), 0);
+      const dashboardStats: DashboardStats = {
+        totalTasks: activeTasks,
+        activeTasks,
+        totalAgents: agentSummaries.length,
+        topScore,
+      };
       dispatch({ type: "set_dashboard", dashboardStats });
       return dashboardStats;
     } catch (error) {
@@ -169,31 +177,17 @@ export default function useOperations(_workspaceKey: string): UseOperationsResul
     let cancelled = false;
     dispatch({ type: "set_loading", loading: true });
     dispatch({ type: "reset_filters" });
+    dispatch({ type: "set_status", enabled: true, statusMessage: "VM 运营数据" });
+    dispatch({ type: "set_error", error: null });
 
-    void fetchFeedStatus()
-      .then(async (status) => {
-        if (cancelled) return;
-        dispatch({ type: "set_status", enabled: status.enabled, statusMessage: status.message ?? "" });
-        dispatch({ type: "set_error", error: null });
-
-        if (!status.enabled) {
-          dispatch({ type: "set_loading", loading: false });
-          dispatch({ type: "set_agents", agentSummaries: [] });
-          dispatch({ type: "set_activities", activities: [] });
-          dispatch({ type: "set_dashboard", dashboardStats: null });
-          return;
-        }
-
-        await Promise.all([loadActivities(false, false), loadAgentSummaries(false), loadDashboard(false)]);
-        if (!cancelled) {
-          dispatch({ type: "set_loading", loading: false });
-        }
-      })
+    void Promise.all([loadActivities(false, false), loadAgentSummaries(false), loadDashboard(false)])
       .catch(() => {
         if (cancelled) return;
+        dispatch({ type: "set_error", error: "无法获取运营数据" });
+      })
+      .finally(() => {
+        if (cancelled) return;
         dispatch({ type: "set_loading", loading: false });
-        dispatch({ type: "set_status", enabled: false, statusMessage: "" });
-        dispatch({ type: "set_error", error: "无法获取动态流数据" });
       });
 
     return () => {

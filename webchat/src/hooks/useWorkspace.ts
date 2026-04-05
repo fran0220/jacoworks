@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { ChatMessage } from "../types";
-import { DEFAULT_OPENCLAW_SESSION_KEY } from "../lib/config";
+import { DEFAULT_SESSION_KEY } from "../lib/config";
 import { createSession, deleteSession, getSession, listSessions, updateSession } from "../lib/sessions";
 import { posthog } from "../lib/posthog";
 
@@ -35,12 +35,19 @@ function sortThreads(threads: ThreadMeta[]): ThreadMeta[] {
   return [...threads].sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
+function normalizeWorkspaceKey(workspaceKey: string): string {
+  const normalized = workspaceKey.trim();
+  if (!normalized || normalized === "agent:default:main") {
+    return DEFAULT_SESSION_KEY;
+  }
+  return normalized;
+}
+
 function readStoredWorkspaceKey(): string {
   try {
-    const value = (window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY) || "").trim();
-    return value || DEFAULT_OPENCLAW_SESSION_KEY;
+    return normalizeWorkspaceKey(window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY) || "");
   } catch {
-    return DEFAULT_OPENCLAW_SESSION_KEY;
+    return DEFAULT_SESSION_KEY;
   }
 }
 
@@ -61,7 +68,7 @@ function readThreadWorkspaceMap(): Record<string, string> {
     return Object.fromEntries(
       Object.entries(parsed as Record<string, unknown>).filter(
         ([id, workspaceKey]) => typeof id === "string" && typeof workspaceKey === "string" && workspaceKey.trim().length > 0,
-      ),
+      ).map(([id, workspaceKey]) => [id, normalizeWorkspaceKey(workspaceKey as string)]),
     ) as Record<string, string>;
   } catch {
     return {};
@@ -131,19 +138,19 @@ function reducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState
   }
 }
 
-/** Derive the OpenClaw session key for a given thread.
- *  Default workspace threads get per-thread keys so each thread has independent context.
- *  Team workspace threads share the team session key. */
+/** Derive the session key for a given thread.
+ *  Agent workspaces isolate per thread; team workspaces stay shared.
+ *  Legacy `agent:*:main` team keys remain shared until the user switches away. */
 export function deriveOcSessionKey(workspaceKey: string, threadId: string | null): string {
   if (!threadId) return workspaceKey;
-  // Team keys (e.g. "agent:leader:main") are shared — don't split per thread
-  if (workspaceKey !== DEFAULT_OPENCLAW_SESSION_KEY) return workspaceKey;
-  return `agent:default:t-${threadId}`;
+  if (workspaceKey.startsWith("team:")) return workspaceKey;
+  if (workspaceKey.endsWith(":main")) return workspaceKey;
+  return `${workspaceKey}:t-${threadId}`;
 }
 
 export interface UseWorkspaceResult {
   activeWorkspaceKey: string;
-  /** The OpenClaw session key for the current thread (per-thread isolation). */
+  /** The session key for the current thread (per-thread isolation). */
   ocSessionKey: string;
   activeThreadId: string | null;
   threads: ThreadMeta[];
@@ -223,7 +230,7 @@ export default function useWorkspace(): UseWorkspaceResult {
   }, [rememberThreadWorkspace]);
 
   const switchWorkspace = useCallback((workspaceKey: string) => {
-    const normalized = workspaceKey.trim() || DEFAULT_OPENCLAW_SESSION_KEY;
+    const normalized = normalizeWorkspaceKey(workspaceKey);
     if (normalized === stateRef.current.activeWorkspaceKey) return;
     dispatch({ type: "set_workspace", workspaceKey: normalized });
   }, []);

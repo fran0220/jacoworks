@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, type MutableRefObject } from "react";
-import { OpenClawClient, type OpenClawFrame, type ConnectionState } from "../lib/openclaw-client";
+import { WSRelayClient, type RelayFrame, type ConnectionState } from "../lib/ws-relay-client";
 import { parseFrame, applyEvent, type ParsedEvent } from "../lib/event-parser";
 import { contentToBlocks, extractText, streamBlocksToContent, toContentItems } from "../lib/message-extract";
 import { extractFileArtifact } from "../lib/file-artifacts";
@@ -144,7 +144,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
   const streamingRef = useRef(false);
   const contentStartedRef = useRef(false);
   const threadLoadRequestId = useRef(0);
-  const wsRef = useRef<OpenClawClient | null>(null);
+  const wsRef = useRef<WSRelayClient | null>(null);
   const observatoryEventRef = useRef<((event: { kind: string; text?: string; toolName?: string }) => void) | null>(null);
   const streamTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -248,7 +248,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
     [clearRenderTimer, clearStreamTimeout, setBlocks, setMessages, setStreaming],
   );
 
-  // No client-side stream timeout — OpenClaw manages its own agent timeouts.
+  // No client-side stream timeout — Pi manages its own agent timeouts.
   // The frontend is a transparent relay; it should never kill a running agent.
   const resetStreamTimeout = useCallback(() => {
     clearStreamTimeout();
@@ -268,7 +268,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
 
     if (previousWorkspaceKey !== workspace.ocSessionKey) {
       // Reset local UI state for the new workspace view, but do NOT abort
-      // any in-progress OpenClaw work — the agent keeps running server-side.
+      // any in-progress work — the agent keeps running server-side.
       clearRenderTimer();
       clearStreamTimeout();
       streamTextRef.current = "";
@@ -312,11 +312,11 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       return;
     }
 
-    const ws = new OpenClawClient({
+    const ws = new WSRelayClient({
       onStateChange(nextState) {
         setConnState(nextState);
       },
-      onFrame(frame: OpenClawFrame) {
+      onFrame(frame: RelayFrame) {
         let parsed = parseFrame(frame);
 
         if (parsed.kind !== "ignore") {
