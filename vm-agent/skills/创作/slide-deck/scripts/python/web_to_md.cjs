@@ -3,10 +3,10 @@
  * web_to_md.cjs - Web Page to Markdown Converter (Enhanced)
  *
  * Usage:
- *   node skills/ppt-master/scripts/web_to_md.cjs <url>              # Single URL
- *   node skills/ppt-master/scripts/web_to_md.cjs <url1> <url2> ...  # Multiple URLs
- *   node skills/ppt-master/scripts/web_to_md.cjs -f urls.txt        # Read URLs from file
- *   node skills/ppt-master/scripts/web_to_md.cjs <url> -o output.md # Specify output filename
+ *   node scripts/python/web_to_md.cjs <url>              # Single URL
+ *   node scripts/python/web_to_md.cjs <url1> <url2> ...  # Multiple URLs
+ *   node scripts/python/web_to_md.cjs -f urls.txt        # Read URLs from file
+ *   node scripts/python/web_to_md.cjs <url> -o output.md # Specify output filename
  */
 
 const fs = require("fs").promises;
@@ -16,7 +16,7 @@ const http = require("http");
 
 // ============ Config ============
 const CONFIG = {
-  outputDir: "./projects",
+  outputDir: path.join(process.env.WORKSPACE_DIR || ".", "slide-deck"),
   timeout: 30000,
   userAgent:
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -740,10 +740,10 @@ async function main() {
     console.log("=".repeat(60));
     console.log("");
     console.log("  Usage:");
-    console.log("    node skills/ppt-master/scripts/web_to_md.cjs <url>");
-    console.log("    node skills/ppt-master/scripts/web_to_md.cjs <url1> <url2> ...");
-    console.log("    node skills/ppt-master/scripts/web_to_md.cjs -f urls.txt");
-    console.log("    node skills/ppt-master/scripts/web_to_md.cjs <url> -o output.md");
+    console.log("    node scripts/python/web_to_md.cjs <url>");
+    console.log("    node scripts/python/web_to_md.cjs <url1> <url2> ...");
+    console.log("    node scripts/python/web_to_md.cjs -f urls.txt");
+    console.log("    node scripts/python/web_to_md.cjs <url> -o output.md");
     console.log("");
     console.log("  Options:");
     console.log("    -f, --file <file>    Read URLs from file (one per line)");

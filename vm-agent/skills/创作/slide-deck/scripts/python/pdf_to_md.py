@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 PDF to Markdown Converter
 Uses PyMuPDF to extract PDF text content and convert to Markdown format.

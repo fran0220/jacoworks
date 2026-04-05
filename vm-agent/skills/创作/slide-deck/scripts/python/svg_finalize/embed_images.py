@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 SVG Image Embedding Tool
 Converts externally referenced images in SVG files to Base64 inline format.

@@ -47,8 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Preinstall common CLI tooling for sandboxed bash commands
 RUN npm install -g typescript tsx prettier @types/node && \
     pip3 install --no-cache-dir --break-system-packages \
-      requests beautifulsoup4 markdown \
+      requests beautifulsoup4 markdown lxml \
       pandas numpy matplotlib Pillow openpyxl \
+      python-pptx PyMuPDF svglib reportlab \
       flask fastapi uvicorn \
       scipy sympy
 

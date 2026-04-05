@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 PPT Master - Project Utilities Module
 
@@ -73,6 +75,10 @@ CANVAS_FORMAT_ALIASES = {
     'wechat-moment': 'moments',
     '朋友圈': 'moments',
     '小红书': 'xiaohongshu',
+    '16:9': 'ppt169',
+    '16x9': 'ppt169',
+    '4:3': 'ppt43',
+    '4x3': 'ppt43',
 }
 
 

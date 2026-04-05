@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 PPT Master - SVG Rounded Rectangle to Path Tool
 

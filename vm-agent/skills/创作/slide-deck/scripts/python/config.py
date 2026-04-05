@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 PPT Master - Unified Configuration Management Module
 
@@ -14,6 +16,7 @@ Usage:
     colors = Config.get_color_scheme('consulting')
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import json
@@ -23,19 +26,21 @@ import json
 # Path Configuration
 # ============================================================
 
-# Project root directory
-PROJECT_ROOT = Path(__file__).parent.parent
+# Skill root directory (`.../slide-deck`)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Core directories
-SCRIPTS_DIR = PROJECT_ROOT / 'scripts'
+SCRIPTS_DIR = PROJECT_ROOT / 'scripts' / 'python'
 REFERENCES_DIR = PROJECT_ROOT / 'references'
 TEMPLATES_DIR = PROJECT_ROOT / 'templates'
 WORKFLOWS_DIR = PROJECT_ROOT / 'workflows'
 
-# Repository root directory
-REPO_ROOT = PROJECT_ROOT.parent.parent
-EXAMPLES_DIR = REPO_ROOT / 'examples'
-PROJECTS_DIR = REPO_ROOT / 'projects'
+# Runtime workspace directory.
+# The migrated scripts are expected to run from the user's workspace, not from the
+# original ppt-master repository layout.
+REPO_ROOT = Path(os.environ.get("WORKSPACE_DIR", os.getcwd())).resolve()
+EXAMPLES_DIR = REPO_ROOT / 'slide-deck'
+PROJECTS_DIR = REPO_ROOT / 'slide-deck'
 
 # Template subdirectories
 CHART_TEMPLATES_DIR = TEMPLATES_DIR / 'charts'
@@ -555,11 +560,11 @@ def main() -> None:
     if len(sys.argv) < 2:
         print("PPT Master - Configuration Management Tool\n")
         print("Usage:")
-        print("  python3 scripts/config.py list-formats     # List all canvas formats")
-        print("  python3 scripts/config.py list-colors      # List all color schemes")
-        print("  python3 scripts/config.py list-industries  # List all industry colors")
-        print("  python3 scripts/config.py export           # Export configuration to JSON")
-        print("  python3 scripts/config.py format <key>     # View a specific canvas format")
+        print("  python3 scripts/python/config.py list-formats     # List all canvas formats")
+        print("  python3 scripts/python/config.py list-colors      # List all color schemes")
+        print("  python3 scripts/python/config.py list-industries  # List all industry colors")
+        print("  python3 scripts/python/config.py export           # Export configuration to JSON")
+        print("  python3 scripts/python/config.py format <key>     # View a specific canvas format")
         return
 
     command = sys.argv[1]

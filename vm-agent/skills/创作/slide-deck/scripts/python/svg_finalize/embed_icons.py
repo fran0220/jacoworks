@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 SVG Icon Embedding Tool
 
@@ -30,7 +32,7 @@ from pathlib import Path
 
 
 # Default icon directory
-DEFAULT_ICONS_DIR = Path(__file__).parent.parent.parent / 'templates' / 'icons'
+DEFAULT_ICONS_DIR = Path(__file__).resolve().parents[3] / 'templates' / 'icons'
 
 # Icon base size
 ICON_BASE_SIZE = 16

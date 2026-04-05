@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 # -*- coding: utf-8 -*-
 """
 web_to_md.py - Web Page to Markdown Converter (Python Version)
@@ -46,7 +48,7 @@ except ImportError:
 
 # ============ Config ============
 CONFIG = {
-    "output_dir": "./projects",
+    "output_dir": os.path.join(os.environ.get("WORKSPACE_DIR", "."), "slide-deck"),
     "timeout": 30,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     # Specific content identifiers often found in Chinese CMS (Gov/News)

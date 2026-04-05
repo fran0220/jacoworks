@@ -8,14 +8,14 @@ individual steps via arguments.
 
 Usage:
     # Execute all processing steps (recommended)
-    python3 scripts/finalize_svg.py <project_directory>
+    python3 scripts/python/finalize_svg.py <project_directory>
 
     # Execute only specific steps
-    python3 scripts/finalize_svg.py <project_directory> --only embed-icons fix-rounded
+    python3 scripts/python/finalize_svg.py <project_directory> --only embed-icons fix-rounded
 
 Examples:
-    python3 scripts/finalize_svg.py projects/my_project
-    python3 scripts/finalize_svg.py examples/ppt169_demo --only embed-icons
+    python3 scripts/python/finalize_svg.py slide-deck/my_project
+    python3 scripts/python/finalize_svg.py slide-deck/ppt169_demo --only embed-icons
 
 Processing options:
     embed-icons   - Replace <use data-icon="..."/> with actual icon SVG
@@ -109,7 +109,7 @@ def finalize_project(
     """
     svg_output = project_dir / 'svg_output'
     svg_final = project_dir / 'svg_final'
-    icons_dir = Path(__file__).parent.parent / 'templates' / 'icons'
+    icons_dir = Path(__file__).resolve().parents[2] / 'templates' / 'icons'
 
     # Check if svg_output exists
     if not svg_output.exists():
@@ -231,7 +231,7 @@ def finalize_project(
         safe_print("[OK] Done!")
         print()
         print("Next steps:")
-        print(f"  python scripts/svg_to_pptx.py \"{project_dir}\" -s final")
+        print(f"  python3 scripts/python/svg_to_pptx.py \"{project_dir}\" -s final")
 
     return True
 

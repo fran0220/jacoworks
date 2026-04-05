@@ -2,15 +2,16 @@
 """PPT Master project management helpers.
 
 Usage:
-    python3 scripts/project_manager.py init <project_name> [--format ppt169] [--dir projects]
-    python3 scripts/project_manager.py import-sources <project_path> <source1> [<source2> ...] [--move]
-    python3 scripts/project_manager.py validate <project_path>
-    python3 scripts/project_manager.py info <project_path>
+    python3 scripts/python/project_manager.py init <project_name> [--format ppt169] [--dir slide-deck]
+    python3 scripts/python/project_manager.py import-sources <project_path> <source1> [<source2> ...] [--move]
+    python3 scripts/python/project_manager.py validate <project_path>
+    python3 scripts/python/project_manager.py info <project_path>
 """
 
 from __future__ import annotations
 
 import re
+import os
 import shutil
 import subprocess
 import sys
@@ -39,8 +40,8 @@ except ImportError:
     )
 
 TOOLS_DIR = Path(__file__).resolve().parent
-SKILL_DIR = TOOLS_DIR.parent
-REPO_ROOT = SKILL_DIR.parent.parent
+SKILL_DIR = TOOLS_DIR.parents[1]
+WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_DIR", os.getcwd())).resolve()
 SOURCE_DIRNAME = "sources"
 TEXT_SOURCE_SUFFIXES = {".md", ".markdown", ".txt"}
 PDF_SUFFIXES = {".pdf"}
@@ -94,8 +95,9 @@ class ProjectManager:
 
     CANVAS_FORMATS = CANVAS_FORMATS
 
-    def __init__(self, base_dir: str = "projects") -> None:
-        self.base_dir = Path(base_dir)
+    def __init__(self, base_dir: str = "slide-deck") -> None:
+        path = Path(base_dir)
+        self.base_dir = path if path.is_absolute() else WORKSPACE_ROOT / path
 
     def init_project(
         self,
@@ -103,7 +105,12 @@ class ProjectManager:
         canvas_format: str = "ppt169",
         base_dir: str | None = None,
     ) -> str:
-        base_path = Path(base_dir) if base_dir else self.base_dir
+        if base_dir:
+            base_path = Path(base_dir)
+            if not base_path.is_absolute():
+                base_path = WORKSPACE_ROOT / base_path
+        else:
+            base_path = self.base_dir
 
         normalized_format = normalize_canvas_format(canvas_format)
         if normalized_format not in self.CANVAS_FORMATS:
@@ -202,7 +209,7 @@ class ProjectManager:
         try:
             result = subprocess.run(
                 args,
-                cwd=REPO_ROOT,
+                cwd=WORKSPACE_ROOT,
                 check=True,
                 capture_output=True,
                 text=True,
@@ -402,7 +409,7 @@ class ProjectManager:
                 summary["skipped"].append(f"{item}: directories are not supported")
                 continue
 
-            effective_move = move or is_within_path(source_path, REPO_ROOT)
+            effective_move = move or is_within_path(source_path, WORKSPACE_ROOT)
             suffix = source_path.suffix.lower()
 
             if suffix in {".md", ".markdown"}:
@@ -522,7 +529,7 @@ def parse_init_args(argv: list[str]) -> tuple[str, str, str]:
 
     project_name = argv[2]
     canvas_format = "ppt169"
-    base_dir = "projects"
+    base_dir = "slide-deck"
 
     i = 3
     while i < len(argv):
