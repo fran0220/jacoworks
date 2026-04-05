@@ -11,10 +11,11 @@ import (
 )
 
 type Config struct {
-	llmMu        sync.RWMutex    `yaml:"-"`
-	Server       ServerConfig    `yaml:"server"`
-	Auth         AuthConfig      `yaml:"auth"`
-	OpenClaw     OpenClawConfig  `yaml:"openclaw"`
+	llmMu  sync.RWMutex `yaml:"-"`
+	Server ServerConfig `yaml:"server"`
+	Auth   AuthConfig   `yaml:"auth"`
+	// Keep the legacy key for config-file compatibility during the Pi migration.
+	PiVM         PiVMConfig      `yaml:"openclaw"`
 	LLM          LLMConfig       `yaml:"llm"`
 	Database     DatabaseConfig  `yaml:"database"`
 	GitHub       GitHubConfig    `yaml:"github"`
@@ -23,7 +24,7 @@ type Config struct {
 	OcGatewayURL string          `yaml:"oc_gateway_url"`
 }
 
-type OpenClawConfig struct {
+type PiVMConfig struct {
 	Image    string `yaml:"image"`
 	Port     int    `yaml:"port"`
 	HostIP   string `yaml:"host_ip"`
@@ -110,17 +111,17 @@ func Load(path string) (*Config, error) {
 	if cfg.Auth.SessionTTLHours == 0 {
 		cfg.Auth.SessionTTLHours = 720
 	}
-	if cfg.OpenClaw.Port == 0 {
-		cfg.OpenClaw.Port = 18789
+	if cfg.PiVM.Port == 0 {
+		cfg.PiVM.Port = 18789
 	}
-	if cfg.OpenClaw.BasePort == 0 {
-		cfg.OpenClaw.BasePort = 18800
+	if cfg.PiVM.BasePort == 0 {
+		cfg.PiVM.BasePort = 18800
 	}
-	if cfg.OpenClaw.Image == "" {
-		cfg.OpenClaw.Image = "ghcr.io/openclaw/openclaw:latest"
+	if cfg.PiVM.Image == "" {
+		cfg.PiVM.Image = "pi-ready"
 	}
-	if cfg.OpenClaw.DataRoot == "" {
-		cfg.OpenClaw.DataRoot = "/srv/jacoworks/openclaw"
+	if cfg.PiVM.DataRoot == "" {
+		cfg.PiVM.DataRoot = "/srv/jacoworks/openclaw"
 	}
 
 	applyEnvOverrides(cfg)
@@ -168,24 +169,38 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Auth.SessionTTLHours = ttl
 		}
 	}
-	if v := os.Getenv("GATEWAY_OPENCLAW_IMAGE"); v != "" {
-		cfg.OpenClaw.Image = v
+	if v := os.Getenv("GATEWAY_PIVM_IMAGE"); v != "" {
+		cfg.PiVM.Image = v
+	} else if v := os.Getenv("GATEWAY_OPENCLAW_IMAGE"); v != "" {
+		cfg.PiVM.Image = v
 	}
-	if v := os.Getenv("GATEWAY_OPENCLAW_PORT"); v != "" {
+	if v := os.Getenv("GATEWAY_PIVM_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
-			cfg.OpenClaw.Port = port
+			cfg.PiVM.Port = port
+		}
+	} else if v := os.Getenv("GATEWAY_OPENCLAW_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.PiVM.Port = port
 		}
 	}
-	if v := os.Getenv("GATEWAY_OPENCLAW_HOST_IP"); v != "" {
-		cfg.OpenClaw.HostIP = v
+	if v := os.Getenv("GATEWAY_PIVM_HOST_IP"); v != "" {
+		cfg.PiVM.HostIP = v
+	} else if v := os.Getenv("GATEWAY_OPENCLAW_HOST_IP"); v != "" {
+		cfg.PiVM.HostIP = v
 	}
-	if v := os.Getenv("GATEWAY_OPENCLAW_BASE_PORT"); v != "" {
+	if v := os.Getenv("GATEWAY_PIVM_BASE_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
-			cfg.OpenClaw.BasePort = port
+			cfg.PiVM.BasePort = port
+		}
+	} else if v := os.Getenv("GATEWAY_OPENCLAW_BASE_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.PiVM.BasePort = port
 		}
 	}
-	if v := os.Getenv("GATEWAY_OPENCLAW_DATA_ROOT"); v != "" {
-		cfg.OpenClaw.DataRoot = v
+	if v := os.Getenv("GATEWAY_PIVM_DATA_ROOT"); v != "" {
+		cfg.PiVM.DataRoot = v
+	} else if v := os.Getenv("GATEWAY_OPENCLAW_DATA_ROOT"); v != "" {
+		cfg.PiVM.DataRoot = v
 	}
 	if v := os.Getenv("GATEWAY_DATABASE_URL"); v != "" {
 		cfg.Database.URL = v

@@ -13,10 +13,7 @@ import (
 )
 
 var (
-	ErrTemplatesDirNotFound = errors.New("openclaw templates directory not found")
-	ErrTemplateNotFound     = errors.New("openclaw template not found")
-	ErrProfileNotFound      = errors.New("profile not found")
-	ErrPiMigrationPending   = errors.New("legacy OpenClaw flow removed; Pi CLI migration pending")
+	ErrPiMigrationPending = errors.New("legacy OpenClaw flow removed; Pi CLI migration pending")
 )
 
 const defaultGatewayPort = 18789
@@ -30,68 +27,12 @@ type Client struct {
 	manager      *Manager
 }
 
-type TemplateAgentSummary struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Role     string `json:"role"`
-	IsLeader bool   `json:"isLeader"`
-}
-
-type TemplateSummary struct {
-	Type        string                 `json:"type"`
-	Name        string                 `json:"name"`
-	DisplayName string                 `json:"displayName"`
-	Description string                 `json:"description"`
-	Version     string                 `json:"version"`
-	Agents      []TemplateAgentSummary `json:"agents"`
-}
-
-type TemplateDetail struct {
-	Type        string                 `json:"type"`
-	Name        string                 `json:"name"`
-	DisplayName string                 `json:"displayName"`
-	Description string                 `json:"description"`
-	Version     string                 `json:"version"`
-	Agents      []TemplateAgentSummary `json:"agents"`
-	Files       map[string]string      `json:"files,omitempty"`
-}
-
-type TemplateInstallResult struct {
-	Template      string `json:"template"`
-	Container     string `json:"container"`
-	Workspace     string `json:"workspace"`
-	Agents        int    `json:"agents"`
-	FilesCopied   int    `json:"filesCopied"`
-	ConfigChanged bool   `json:"configChanged"`
-}
-
-type ProfileSummary struct {
-	Type        string `json:"type"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName"`
-	Description string `json:"description"`
-	Icon        string `json:"icon,omitempty"`
-	SessionKey  string `json:"sessionKey"`
-}
-
-type ProfileDetail struct {
-	Type        string            `json:"type"`
-	Name        string            `json:"name"`
-	DisplayName string            `json:"displayName"`
-	Description string            `json:"description"`
-	Icon        string            `json:"icon,omitempty"`
-	Model       string            `json:"model"`
-	Skills      []string          `json:"skills,omitempty"`
-	Workspace   string            `json:"workspace,omitempty"`
-	Files       map[string]string `json:"files,omitempty"`
-}
-
 func NewClient(rt container.Runtime, _ string, hostIP, image string, getLLM func() config.LLMConfig, s *store.Store, gatewayURL string) *Client {
 	if hostIP == "" {
 		hostIP = "127.0.0.1"
 	}
 	if image == "" {
-		image = "openclaw-ready"
+		image = "pi-ready"
 	}
 	return &Client{
 		rt:           rt,
@@ -109,10 +50,6 @@ func (c *Client) Runtime() container.Runtime {
 
 func (c *Client) HostIP() string {
 	return c.hostIP
-}
-
-func (c *Client) LegacyProtocolDisabled() bool {
-	return true
 }
 
 func (c *Client) UpstreamAddr(info *store.ContainerInfo) string {
@@ -150,7 +87,7 @@ func (c *Client) Provision(containerName, userID, containerToken string, _ int, 
 		UserID:         userID,
 		ContainerName:  containerName,
 		ContainerToken: containerToken,
-		ContainerType:  store.ContainerTypeOpenClaw,
+		ContainerType:  store.ContainerTypePiVM,
 	}
 	status, err := c.rt.Status(ctx, containerName)
 	if err != nil {
@@ -188,7 +125,14 @@ func (c *Client) SyncConfig(ctx context.Context, info *store.ContainerInfo) (boo
 	if c == nil || c.rt == nil {
 		return false, ErrPiMigrationPending
 	}
-	if err := c.configWriter.WritePiConfig(ctx, info.ContainerName, info.ContainerToken); err != nil {
+	updated, err := c.ensureInstanceReady(ctx, info)
+	if err != nil {
+		return false, err
+	}
+	if err := c.configWriter.WritePiConfig(ctx, updated.ContainerName, updated.ContainerToken); err != nil {
+		return false, err
+	}
+	if err := c.manager.RestartPiWrapper(ctx, updated); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -198,7 +142,7 @@ func (c *Client) SyncAllVMs(ctx context.Context) error {
 	if c == nil || c.store == nil {
 		return nil
 	}
-	containers, err := c.store.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
+	containers, err := c.store.ListContainersByType(ctx, store.ContainerTypePiVM)
 	if err != nil {
 		return err
 	}
@@ -211,62 +155,6 @@ func (c *Client) SyncAllVMs(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (c *Client) ListTemplates() ([]TemplateSummary, error) {
-	return []TemplateSummary{}, nil
-}
-
-func (c *Client) GetTemplateSummary(string) (*TemplateSummary, error) {
-	return nil, ErrTemplateNotFound
-}
-
-func (c *Client) GetTemplateDetail(string) (*TemplateDetail, error) {
-	return nil, ErrTemplateNotFound
-}
-
-func (c *Client) SaveTemplate(*TemplateDetail) error {
-	return ErrPiMigrationPending
-}
-
-func (c *Client) DeleteTemplate(string) error {
-	return ErrPiMigrationPending
-}
-
-func (c *Client) InstallTemplate(context.Context, *store.ContainerInfo, string) (*TemplateInstallResult, error) {
-	return nil, ErrPiMigrationPending
-}
-
-func (c *Client) ListProfilesMerged(string) []ProfileSummary {
-	return []ProfileSummary{}
-}
-
-func (c *Client) UserGetProfileDetail(string, string) (*ProfileDetail, error) {
-	return nil, ErrProfileNotFound
-}
-
-func GetProfileDetail(string) (*ProfileDetail, error) {
-	return nil, ErrProfileNotFound
-}
-
-func (c *Client) UserSaveProfile(string, *ProfileDetail) error {
-	return ErrPiMigrationPending
-}
-
-func (c *Client) UserDeleteProfile(string, string) error {
-	return ErrPiMigrationPending
-}
-
-func (c *Client) DeployProfiles(string) (int, error) {
-	return 0, nil
-}
-
-func (c *Client) DeployUserProfiles(string, string) (int, error) {
-	return 0, nil
-}
-
-func (c *Client) IsJMOSInstalled(string) bool {
-	return false
 }
 
 func (c *Client) ensureInstanceReady(ctx context.Context, info *store.ContainerInfo) (*store.ContainerInfo, error) {
@@ -302,7 +190,7 @@ func (c *Client) ensureInstanceReady(ctx context.Context, info *store.ContainerI
 	updated.ContainerIP = status.IP
 	updated.Status = "running"
 	if c.store != nil && strings.TrimSpace(updated.UserID) != "" {
-		_ = c.store.UpdateContainerIP(ctx, updated.UserID, store.ContainerTypeOpenClaw, updated.ContainerIP)
+		_ = c.store.UpdateContainerIP(ctx, updated.UserID, store.ContainerTypePiVM, updated.ContainerIP)
 	}
 	return &updated, nil
 }

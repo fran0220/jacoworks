@@ -17,6 +17,7 @@ LLM_PROXY_URL_DEFAULT="http://67.230.182.59:8317"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PI_CONFIG_DIR="${REPO_ROOT}/pi-config"
+PI_WS_WRAPPER_DIR="${REPO_ROOT}/pi-ws-wrapper"
 PI_CONFIG_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/pi-config.XXXXXX")"
 
 FORCE=false
@@ -660,6 +661,31 @@ chmod 700 /home/node/.pi /home/node/.pi/agent
 '
 }
 
+push_pi_ws_wrapper_bundle() {
+    local server_path="${PI_WS_WRAPPER_DIR}/server.ts"
+    local package_path="${PI_WS_WRAPPER_DIR}/package.json"
+    local service_path="${PI_WS_WRAPPER_DIR}/pi-ws-wrapper.service"
+
+    local required_path
+    for required_path in "${server_path}" "${package_path}" "${service_path}"; do
+        if [[ ! -f "${required_path}" ]]; then
+            echo "❌ Missing pi-ws-wrapper asset: ${required_path}"
+            exit 1
+        fi
+    done
+
+    incus file push "${server_path}" "${BUILD_INSTANCE}/opt/pi-ws-wrapper/server.ts"
+    incus file push "${package_path}" "${BUILD_INSTANCE}/opt/pi-ws-wrapper/package.json"
+    incus file push "${service_path}" "${BUILD_INSTANCE}/etc/systemd/system/pi-ws-wrapper.service"
+
+    incus exec "${BUILD_INSTANCE}" -- bash -c '
+set -euo pipefail
+chown -R node:node /opt/pi-ws-wrapper
+cd /opt/pi-ws-wrapper
+runuser -u node -- env HOME=/home/node bun install
+'
+}
+
 if ! command -v incus &>/dev/null; then
     echo "❌ incus not found"
     exit 1
@@ -755,6 +781,14 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y -qq nodejs
 '
 
+# ── 6b. Bun runtime ─────────────────────────────────
+echo "📥 Installing Bun..."
+incus exec "${BUILD_INSTANCE}" -- bash -c '
+curl -fsSL https://bun.sh/install | bash
+install -m 0755 /root/.bun/bin/bun /usr/local/bin/bun
+install -m 0755 /root/.bun/bin/bunx /usr/local/bin/bunx
+'
+
 # ── 7. Python packages for tools & document support ──
 echo "📥 Installing Python packages..."
 incus exec "${BUILD_INSTANCE}" -- bash -c '
@@ -808,29 +842,50 @@ if ! id node &>/dev/null; then
         useradd -m -s /bin/bash node
     fi
 fi
-mkdir -p /home/node/.pi/agent/extensions /home/node/.pi/agent/skills /home/node/.local/share /data/workspace /opt/pi-ws-wrapper
+mkdir -p /home/node/.pi/agent/extensions /home/node/.pi/agent/skills /home/node/.local/share /home/node/.npm-global /data/workspace /opt/pi-ws-wrapper
+runuser -u node -- env HOME=/home/node npm config set prefix /home/node/.npm-global >/dev/null
+cat > /home/node/.npmrc << "EOF_NPMRC"
+prefix=/home/node/.npm-global
+EOF_NPMRC
+grep -qxF 'export PATH=/home/node/.npm-global/bin:$PATH' /home/node/.profile || \
+    echo 'export PATH=/home/node/.npm-global/bin:$PATH' >> /home/node/.profile
 chown -R node:node /home/node /data /opt/pi-ws-wrapper
 '
 
 # ── 11. Install Pi community packages ────────────────
 echo "📥 Installing Pi community packages..."
-incus exec "${BUILD_INSTANCE}" -- bash -c '
+incus exec "${BUILD_INSTANCE}" -- bash -s <<'EOF_PI_PACKAGES'
 set -euo pipefail
 packages=(
-  "npm:pi-subagents"
-  "npm:@tmustier/pi-agent-teams"
-  "npm:taskplane"
-  "npm:pi-web-access"
-  "npm:@apmantza/greedysearch-pi"
-  "npm:pi-mcp-adapter"
-  "npm:@aliou/pi-guardrails"
-  "npm:@aliou/pi-processes"
-  "npm:pi-rtk"
+  "pi-subagents"
+  "@tmustier/pi-agent-teams"
+  "taskplane"
+  "pi-web-access"
+  "@apmantza/greedysearch-pi"
+  "pi-mcp-adapter"
+  "@aliou/pi-guardrails"
+  "@aliou/pi-processes"
+  "pi-rtk"
 )
 for package in "${packages[@]}"; do
-    runuser -u node -- env HOME=/home/node pi install "${package}"
+    if ! runuser -u node -- env \
+        HOME=/home/node \
+        NPM_CONFIG_PREFIX=/home/node/.npm-global \
+        PATH=/home/node/.npm-global/bin:/usr/local/bin:/usr/bin:/bin \
+        bash -lc "pi list 2>/dev/null | grep -Fq '$package'"; then
+        runuser -u node -- env \
+            HOME=/home/node \
+            NPM_CONFIG_PREFIX=/home/node/.npm-global \
+            PATH=/home/node/.npm-global/bin:/usr/local/bin:/usr/bin:/bin \
+            pi install "npm:${package}"
+    fi
 done
-'
+runuser -u node -- env \
+    HOME=/home/node \
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \
+    PATH=/home/node/.npm-global/bin:/usr/local/bin:/usr/bin:/bin \
+    bash -lc 'pi list >/tmp/pi-packages.txt && test -s /tmp/pi-packages.txt && cat /tmp/pi-packages.txt'
+EOF_PI_PACKAGES
 
 # ── 12. Deploy Pi config & extensions ────────────────
 echo "🔧 Deploying Pi config bundle..."
@@ -893,42 +948,16 @@ Environment=HOME=/home/node
 [Install]
 WantedBy=multi-user.target
 EOF2
-
-cat > /opt/pi-ws-wrapper/index.mjs << 'EOF2'
-#!/usr/bin/env node
-console.error('pi-ws-wrapper placeholder: implement Thread 7 before enabling this service');
-process.exit(1);
-EOF2
-chmod +x /opt/pi-ws-wrapper/index.mjs
-chown -R node:node /opt/pi-ws-wrapper
-
-cat > /etc/systemd/system/pi-ws-wrapper.service << EOF2
-[Unit]
-Description=Pi WS Wrapper Placeholder
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=node
-Group=node
-WorkingDirectory=/opt/pi-ws-wrapper
-ExecStart=/usr/bin/node /opt/pi-ws-wrapper/index.mjs
-Restart=on-failure
-RestartSec=5
-Environment=PORT=${PI_PORT}
-Environment=HOME=/home/node
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=pi-ws-wrapper
-
-[Install]
-WantedBy=multi-user.target
-EOF2
-
-systemctl daemon-reload
-systemctl enable vncserver.service novnc.service
 "
+
+echo "🔧 Deploying pi-ws-wrapper..."
+push_pi_ws_wrapper_bundle
+
+incus exec "${BUILD_INSTANCE}" -- bash -c '
+set -euo pipefail
+systemctl daemon-reload
+systemctl enable vncserver.service novnc.service pi-ws-wrapper.service
+'
 
 # ── 15. Verify installations ─────────────────────────
 echo "🔍 Verifying installations..."
@@ -937,6 +966,7 @@ set -euo pipefail
 
 echo "  Node.js: $(node --version)"
 echo "  npm: $(npm --version)"
+echo "  Bun: $(bun --version)"
 echo "  Pi CLI: $(pi --version 2>&1 | head -1)"
 echo "  Python: $(python3 --version)"
 echo "  pip: $(pip3 --version | cut -d" " -f1-2)"
@@ -960,6 +990,7 @@ import chardet
 import docx
 import feedparser
 import fitz
+import importlib.metadata
 import lxml
 import markdown
 import numpy
@@ -973,6 +1004,11 @@ import toml
 import yaml
 from PIL import Image
 
+try:
+    svglib_version = importlib.metadata.version("svglib")
+except importlib.metadata.PackageNotFoundError:
+    svglib_version = "unknown"
+
 print(f"  openpyxl: {openpyxl.__version__}")
 print(f"  pandas: {pandas.__version__}")
 print(f"  requests: {requests.__version__}")
@@ -983,7 +1019,7 @@ print(f"  Pillow: {Image.__version__}")
 print(f"  numpy: {numpy.__version__}")
 print(f"  python-pptx: {pptx.__version__}")
 print(f"  PyMuPDF: {fitz.VersionBind}")
-print(f"  svglib: {getattr(svglib, '__version__', 'unknown')}")
+print(f"  svglib: {svglib_version}")
 print(f"  reportlab: {reportlab.Version}")
 print(f"  pyyaml: {yaml.__version__}")
 print(f"  toml: {toml.__version__}")
@@ -998,10 +1034,24 @@ test -f /home/node/.pi/agent/extensions/visual.ts
 test -f /home/node/.pi/agent/extensions/cron-proxy.ts
 test -f /home/node/.pi/agent/extensions/image-gen.ts
 test -d /home/node/.pi/agent/skills
+runuser -u node -- env HOME=/home/node NPM_CONFIG_PREFIX=/home/node/.npm-global PATH=/home/node/.npm-global/bin:/usr/local/bin:/usr/bin:/bin \
+    npm config get prefix | grep -qx "/home/node/.npm-global"
+installed_packages=$(runuser -u node -- env \
+    HOME=/home/node \
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \
+    PATH=/home/node/.npm-global/bin:/usr/local/bin:/usr/bin:/bin \
+    bash -lc "pi list")
+test -n "${installed_packages}"
+test "${installed_packages}" != "No packages installed."
+printf "  Pi packages:\n%s\n" "${installed_packages}"
 echo "  pi config dirs: ok"
 
 systemctl cat pi-ws-wrapper.service >/dev/null
-echo "  pi-ws-wrapper service: placeholder installed"
+systemctl cat pi-ws-wrapper.service | grep -q "/usr/local/bin/bun /opt/pi-ws-wrapper/server.ts"
+systemctl cat pi-ws-wrapper.service | grep -q "EnvironmentFile=-/home/node/.pi/agent/runtime.env"
+test -f /opt/pi-ws-wrapper/server.ts
+test -f /opt/pi-ws-wrapper/package.json
+echo "  pi-ws-wrapper service: installed"
 '
 
 # ── 16. Clean up ─────────────────────────────────────
@@ -1028,7 +1078,7 @@ echo "   Image type: VIRTUAL-MACHINE"
 echo "   Desktop: XFCE4"
 echo "   VNC: TigerVNC :1 (port ${VNC_PORT})"
 echo "   noVNC: websockify :${NOVNC_PORT}"
-echo "   Pi WS wrapper placeholder: port ${PI_PORT}"
+echo "   Pi WS wrapper: Bun service on port ${PI_PORT}"
 echo "   Pi config: /home/node/.pi/agent/"
 echo "   Preinstalled Python: openpyxl, pandas, requests, python-docx, Pillow, yt-dlp"
 echo "   Preinstalled tools: pi, asset-gateway, ffmpeg, ImageMagick, poppler-utils, sqlite3"

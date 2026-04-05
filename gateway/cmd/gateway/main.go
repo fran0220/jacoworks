@@ -147,7 +147,7 @@ func main() {
 	wsTicketStore := agent.NewTicketStore(30 * time.Second)
 	defer wsTicketStore.Close()
 
-	// Initialize Feishu Bot handler (proxies to oc-gateway for OpenClaw routing)
+	// Initialize Feishu Bot handler (proxies to oc-gateway for Pi routing)
 	feishuBotClient := feishubot.NewClient(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)
 	feishuBotHandler := feishubot.NewHandler(feishuBotClient, s)
 	if cfg.OcGatewayURL != "" {
@@ -199,7 +199,7 @@ func main() {
 	mux.Handle("PUT /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsUpsertHandler(s))))
 	mux.Handle("DELETE /api/skills/{skillId}", authMiddleware.Authenticate(http.HandlerFunc(skillsDeleteHandler(s))))
 
-	// OpenClaw container routes — migrated to oc-gateway (:18700)
+	// Pi VM routes — migrated to oc-gateway (:18700)
 	ocGone := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusGone)
@@ -247,18 +247,6 @@ func main() {
 	// User: available teams (templates) — migrated to oc-gateway
 	mux.Handle("GET /api/teams", authMiddleware.Authenticate(ocGone))
 	mux.Handle("POST /api/teams/install", authMiddleware.Authenticate(ocGone))
-
-	// User: JaMOSS read proxy — migrated to oc-gateway
-	mux.Handle("GET /api/jamoss", authMiddleware.Authenticate(ocGone))
-	mux.Handle("GET /api/jamoss/", authMiddleware.Authenticate(ocGone))
-	mux.Handle("POST /api/jamoss", authMiddleware.Authenticate(ocGone))
-	mux.Handle("POST /api/jamoss/", authMiddleware.Authenticate(ocGone))
-	mux.Handle("PUT /api/jamoss", authMiddleware.Authenticate(ocGone))
-	mux.Handle("PUT /api/jamoss/", authMiddleware.Authenticate(ocGone))
-	mux.Handle("DELETE /api/jamoss", authMiddleware.Authenticate(ocGone))
-	mux.Handle("DELETE /api/jamoss/", authMiddleware.Authenticate(ocGone))
-	mux.Handle("PATCH /api/jamoss", authMiddleware.Authenticate(ocGone))
-	mux.Handle("PATCH /api/jamoss/", authMiddleware.Authenticate(ocGone))
 
 	// Admin: container management — migrated to oc-gateway
 	mux.Handle("GET /api/admin/containers", authMiddleware.Authenticate(authMiddleware.RequireAdmin(ocGone)))
@@ -560,7 +548,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 		}
 		containerType := r.URL.Query().Get("container_type")
 		if containerType == "" {
-			containerType = store.ContainerTypeOpenClaw
+			containerType = store.ContainerTypePiVM // historical DB value
 		}
 		info, err := s.GetContainerInfo(r.Context(), user.ID, containerType)
 		if err != nil {
@@ -585,7 +573,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 			"container_type": info.ContainerType,
 			"host_port":      info.HostPort,
 		}
-		if info.ContainerType == "openclaw" {
+		if info.ContainerType == store.ContainerTypePiVM { // historical DB value
 			resp["container_token"] = info.ContainerToken
 		}
 		writeJSON(w, http.StatusOK, resp)

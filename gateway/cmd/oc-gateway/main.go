@@ -14,8 +14,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +36,19 @@ import (
 	pipkg "github.com/fran0220/jacoworks/gateway/internal/pi"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
 )
+
+var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+type profileUpsertRequest struct {
+	Name        string            `json:"name"`
+	DisplayName string            `json:"displayName"`
+	Description string            `json:"description"`
+	Icon        string            `json:"icon"`
+	Model       string            `json:"model"`
+	Skills      []string          `json:"skills"`
+	Workspace   string            `json:"workspace"`
+	Files       map[string]string `json:"files"`
+}
 
 func main() {
 	configPath := "oc-gateway.yaml"
@@ -148,19 +161,19 @@ func main() {
 
 	auditLogger := audit.NewLogger(s.Pool())
 
-	incusRT, err := incuspkg.NewClient("", cfg.OpenClaw.HostIP)
+	incusRT, err := incuspkg.NewClient("", cfg.PiVM.HostIP)
 	if err != nil {
 		log.Fatal().Err(err).Msg("init incus client")
 	}
-	ocClient := pipkg.NewClient(incusRT, cfg.OpenClaw.DataRoot, cfg.OpenClaw.HostIP, cfg.OpenClaw.Image, cfg.GetLLM, s, cfg.Server.PublicURL)
+	ocClient := pipkg.NewClient(incusRT, cfg.PiVM.DataRoot, cfg.PiVM.HostIP, cfg.PiVM.Image, cfg.GetLLM, s, cfg.Server.PublicURL)
 
 	// Freeze disabled: VMs stay running permanently for instant WS connection.
 	// Previously: freeze after 1h idle → unpause + health poll added 5-30s to every reconnect.
 
 	log.Info().
-		Str("image", cfg.OpenClaw.Image).
-		Str("host_ip", cfg.OpenClaw.HostIP).
-		Msg("openclaw backend initialized (incus)")
+		Str("image", cfg.PiVM.Image).
+		Str("host_ip", cfg.PiVM.HostIP).
+		Msg("pi backend initialized (incus)")
 
 	authMiddleware := auth.NewMiddleware(s, cfg.Auth.AdminToken)
 	authHandlers := auth.NewHandlers(s, cfg.Auth.SessionTTLHours)
@@ -222,7 +235,7 @@ func main() {
 	mux.Handle("GET /ws/oc", wsHandler)
 
 	containerLookup := func(ctx context.Context, userID string) (string, error) {
-		info, err := s.GetContainerInfo(ctx, userID, store.ContainerTypeOpenClaw)
+		info, err := s.GetContainerInfo(ctx, userID, store.ContainerTypePiVM)
 		if err != nil {
 			return "", err
 		}
@@ -234,7 +247,10 @@ func main() {
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
 	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, ocClient, auditLogger))))
 
+	mux.Handle("GET /api/agents/presets", authMiddleware.Authenticate(http.HandlerFunc(agentPresetsHandler())))
 	mux.Handle("GET /api/teams", authMiddleware.Authenticate(http.HandlerFunc(userTeamsHandler(s, ocClient))))
+	mux.Handle("GET /api/teams/templates", authMiddleware.Authenticate(http.HandlerFunc(listTeamTemplatesHandler())))
+	mux.Handle("POST /api/teams/create", authMiddleware.Authenticate(http.HandlerFunc(createTeamHandler())))
 	mux.Handle("POST /api/teams/install", authMiddleware.Authenticate(http.HandlerFunc(installUserTeamHandler(s, ocClient, auditLogger))))
 
 	// Avatar CRUD (user-level)
@@ -243,20 +259,8 @@ func main() {
 	mux.Handle("PUT /api/avatars/{role}", authMiddleware.Authenticate(http.HandlerFunc(upsertAvatarHandler(s))))
 	mux.Handle("DELETE /api/avatars/{role}", authMiddleware.Authenticate(http.HandlerFunc(deleteAvatarHandler(s))))
 
-	jamossProxy := authMiddleware.Authenticate(http.HandlerFunc(jamossProxyHandler(s, ocClient)))
-	mux.Handle("GET /api/jamoss", jamossProxy)
-	mux.Handle("GET /api/jamoss/", jamossProxy)
-	mux.Handle("POST /api/jamoss", jamossProxy)
-	mux.Handle("POST /api/jamoss/", jamossProxy)
-	mux.Handle("PUT /api/jamoss", jamossProxy)
-	mux.Handle("PUT /api/jamoss/", jamossProxy)
-	mux.Handle("DELETE /api/jamoss", jamossProxy)
-	mux.Handle("DELETE /api/jamoss/", jamossProxy)
-	mux.Handle("PATCH /api/jamoss", jamossProxy)
-	mux.Handle("PATCH /api/jamoss/", jamossProxy)
-
 	// VNC reverse proxy (authenticated, per-user)
-	vncHandler := authMiddleware.Authenticate(http.HandlerFunc(vncProxyHandler(s, cfg.OpenClaw.HostIP)))
+	vncHandler := authMiddleware.Authenticate(http.HandlerFunc(vncProxyHandler(s, cfg.PiVM.HostIP)))
 	mux.Handle("GET /vnc/", vncHandler)
 	mux.Handle("GET /websockify", authMiddleware.Authenticate(http.HandlerFunc(vncWebsockifyHandler(s))))
 
@@ -266,7 +270,7 @@ func main() {
 
 	// Profile CRUD (user-level)
 	mux.Handle("GET /api/profiles", authMiddleware.Authenticate(http.HandlerFunc(userListProfilesHandler(s, ocClient))))
-	mux.Handle("GET /api/profiles/{name}", authMiddleware.Authenticate(http.HandlerFunc(userGetProfileHandler(ocClient))))
+	mux.Handle("GET /api/profiles/{name}", authMiddleware.Authenticate(http.HandlerFunc(userGetProfileHandler(s, ocClient))))
 	mux.Handle("POST /api/profiles", authMiddleware.Authenticate(http.HandlerFunc(userCreateProfileHandler(s, ocClient, auditLogger))))
 	mux.Handle("PUT /api/profiles/{name}", authMiddleware.Authenticate(http.HandlerFunc(userUpdateProfileHandler(s, ocClient, auditLogger))))
 	mux.Handle("DELETE /api/profiles/{name}", authMiddleware.Authenticate(http.HandlerFunc(userDeleteProfileHandler(s, ocClient, auditLogger))))
@@ -278,7 +282,7 @@ func main() {
 	mux.Handle("PUT /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(updateTemplateHandler(s, ocClient, auditLogger)))))
 	mux.Handle("DELETE /api/admin/templates/{name}", authMiddleware.Authenticate(authMiddleware.RequireAdmin(http.HandlerFunc(deleteTemplateHandler(s, ocClient, auditLogger)))))
 
-	// TODO: Feishu bot routes removed — needs refactor to work without ChannelPool (direct OpenClaw connection)
+	// TODO: Feishu bot routes removed — needs refactor to work without ChannelPool (direct Pi connection)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -304,7 +308,7 @@ func main() {
 	go func() {
 		time.Sleep(10 * time.Second)
 		if err := ocClient.SyncAllVMs(context.Background()); err != nil {
-			log.Warn().Err(err).Msg("initial openclaw skills sync failed")
+			log.Warn().Err(err).Msg("initial pi skills sync failed")
 		}
 	}()
 
@@ -372,15 +376,15 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 type chatPageData struct {
-	GatewayURL     string
-	UserName       string
-	AuthToken      string
-	OpenClawToken  string
-	OpenClawWSPort int
-	OpenClawVncURL string
-	PostHogKey     string
-	PostHogHost    string
-	CacheBust      string
+	GatewayURL  string
+	UserName    string
+	AuthToken   string
+	PiToken     string
+	PiWSPort    int
+	PiVncURL    string
+	PostHogKey  string
+	PostHogHost string
+	CacheBust   string
 }
 
 func loginPageHandler(tpl *template.Template) http.HandlerFunc {
@@ -407,32 +411,32 @@ func chatPageHandler(s *store.Store, cfg *config.Config, tpl *template.Template,
 			return
 		}
 
-		openclawToken := ""
-		openclawWSPort := 0
+		piToken := ""
+		piWSPort := 0
 		vncPort := 0
-		if info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw); err == nil {
-			openclawToken = info.ContainerToken
-			openclawWSPort = info.HostPort
+		if info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypePiVM); err == nil {
+			piToken = info.ContainerToken
+			piWSPort = info.HostPort
 			vncPort = info.VncPort
 		}
 
 		gatewayURL := resolveGatewayURL(cfg, r)
-		openclawVncURL := ""
+		piVncURL := ""
 		if vncPort > 0 {
-			openclawVncURL = gatewayURL + "/vnc/vnc.html"
+			piVncURL = gatewayURL + "/vnc/vnc.html"
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := tpl.Execute(w, chatPageData{
-			GatewayURL:     gatewayURL,
-			UserName:       user.Name,
-			AuthToken:      authToken,
-			OpenClawToken:  openclawToken,
-			OpenClawWSPort: openclawWSPort,
-			OpenClawVncURL: openclawVncURL,
-			PostHogKey:     cfg.PostHog.APIKey,
-			PostHogHost:    cfg.PostHog.Endpoint,
-			CacheBust:      cacheBust,
+			GatewayURL:  gatewayURL,
+			UserName:    user.Name,
+			AuthToken:   authToken,
+			PiToken:     piToken,
+			PiWSPort:    piWSPort,
+			PiVncURL:    piVncURL,
+			PostHogKey:  cfg.PostHog.APIKey,
+			PostHogHost: cfg.PostHog.Endpoint,
+			CacheBust:   cacheBust,
 		}); err != nil {
 			log.Error().Err(err).Str("user_id", user.ID).Msg("render chat page")
 			http.Error(w, "failed to render chat page", http.StatusInternalServerError)
@@ -682,9 +686,9 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 
 		containerType := strings.TrimSpace(r.URL.Query().Get("container_type"))
 		if containerType == "" {
-			containerType = store.ContainerTypeOpenClaw
+			containerType = store.ContainerTypePiVM
 		}
-		if containerType != store.ContainerTypeOpenClaw {
+		if containerType != store.ContainerTypePiVM {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid container_type"})
 			return
 		}
@@ -695,7 +699,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 				"provisioned":    false,
 				"ready":          false,
 				"status":         "missing",
-				"container_type": store.ContainerTypeOpenClaw,
+				"container_type": store.ContainerTypePiVM,
 			})
 			return
 		}
@@ -727,7 +731,7 @@ func selfProvisionHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logg
 		}
 
 		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pi backend not configured"})
 			return
 		}
 
@@ -736,14 +740,14 @@ func selfProvisionHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logg
 
 		containerType := strings.TrimSpace(body.ContainerType)
 		if containerType == "" {
-			containerType = store.ContainerTypeOpenClaw
+			containerType = store.ContainerTypePiVM
 		}
-		if containerType != store.ContainerTypeOpenClaw {
+		if containerType != store.ContainerTypePiVM {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid container_type"})
 			return
 		}
 
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypePiVM)
 		if err == nil && info.ContainerName != "" {
 			if info.Status != "running" && info.Status != "creating" {
 				if startErr := ocClient.EnsureRunning(r.Context(), info); startErr != nil {
@@ -768,367 +772,66 @@ func selfProvisionHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logg
 			return
 		}
 
-		containerName := openClawContainerName(user.ID)
-		hostPort := allocateOpenClawPort(r.Context(), s, user.ID)
+		piContainerName := piContainerName(user.ID)
+		hostPort := allocatePiPort(r.Context(), s, user.ID)
 		vncPort := allocateVncPort(hostPort)
 
-		if err := s.CreateContainer(r.Context(), user.ID, containerName, containerToken, hostPort, vncPort, store.ContainerTypeOpenClaw); err != nil {
+		if err := s.CreateContainer(r.Context(), user.ID, piContainerName, containerToken, hostPort, vncPort, store.ContainerTypePiVM); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "container record creation failed"})
 			return
 		}
 
-		al.Log(user.ID, "self_provision", "container", containerName, r.RemoteAddr)
+		al.Log(user.ID, "self_provision", "container", piContainerName, r.RemoteAddr)
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"status":          "provisioning",
-			"container_name":  containerName,
-			"container_type":  store.ContainerTypeOpenClaw,
+			"container_name":  piContainerName,
+			"container_type":  store.ContainerTypePiVM,
 			"container_token": containerToken,
 		})
 
 		userID := user.ID
 		go func() {
-			ip, err := ocClient.Provision(containerName, userID, containerToken, hostPort, vncPort)
+			ip, err := ocClient.Provision(piContainerName, userID, containerToken, hostPort, vncPort)
 			if err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async pi provision failed")
+				log.Error().Err(err).Str("container", piContainerName).Str("user_id", userID).Msg("async pi provision failed")
 				return
 			}
 
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer bgCancel()
 
-			if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypeOpenClaw, containerName, ip, containerToken, hostPort, vncPort); err != nil {
-				log.Error().Err(err).Str("container", containerName).Str("user_id", userID).Msg("async pi provision: persist failed")
+			if err := s.UpdateContainer(bgCtx, userID, store.ContainerTypePiVM, piContainerName, ip, containerToken, hostPort, vncPort); err != nil {
+				log.Error().Err(err).Str("container", piContainerName).Str("user_id", userID).Msg("async pi provision: persist failed")
 				return
 			}
 
-			log.Info().Str("container", containerName).Str("ip", ip).Str("user_id", userID).Msg("async pi provision complete")
+			log.Info().Str("container", piContainerName).Str("ip", ip).Str("user_id", userID).Msg("async pi provision complete")
 		}()
 	}
 }
 
-func userTeamsHandler(s *store.Store, ocClient *pipkg.Client) http.HandlerFunc {
-	type response struct {
-		Installed        string                  `json:"installed"`
-		ActiveSessionKey string                  `json:"activeSessionKey"`
-		Available        []pipkg.TemplateSummary `json:"available"`
-		Profiles         []pipkg.ProfileSummary  `json:"profiles"`
-	}
-
-	leaderSessionKey := func(tmpl *pipkg.TemplateSummary) string {
-		if tmpl == nil {
-			return ""
-		}
-		for _, teamAgent := range tmpl.Agents {
-			if teamAgent.IsLeader && strings.TrimSpace(teamAgent.ID) != "" {
-				return fmt.Sprintf("agent:%s:main", teamAgent.ID)
-			}
-		}
-		return ""
-	}
-
+func agentPresetsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
 
-		available, err := ocClient.ListTemplates()
+		presets, err := pipkg.LoadAgentPresets()
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			log.Error().Err(err).Msg("load agent presets")
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load agent presets"})
 			return
 		}
-		if available == nil {
-			available = []pipkg.TemplateSummary{}
-		}
 
-		installed, _ := s.GetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw)
-		activeSessionKey := ""
-		if installed != "" {
-			if tmpl, err := ocClient.GetTemplateSummary(installed); err == nil {
-				activeSessionKey = leaderSessionKey(tmpl)
-			}
-		}
-
-		profiles := ocClient.ListProfilesMerged(user.ID)
-		if profiles == nil {
-			profiles = []pipkg.ProfileSummary{}
-		}
-
-		writeJSON(w, http.StatusOK, response{
-			Installed:        installed,
-			ActiveSessionKey: activeSessionKey,
-			Available:        available,
-			Profiles:         profiles,
-		})
+		writeJSON(w, http.StatusOK, presets)
 	}
 }
 
-func installUserTeamHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
-	type installRequest struct {
-		Template string `json:"template"`
-	}
-
+func installTemplateHandler(_ *store.Store, _ *pipkg.Client, _ *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
-
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		var req installRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-		req.Template = strings.TrimSpace(req.Template)
-		if req.Template == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template is required"})
-			return
-		}
-
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "openclaw container not found"})
-			return
-		}
-
-		result, err := ocClient.InstallTemplate(r.Context(), info, req.Template)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		if err := s.SetContainerTemplate(r.Context(), user.ID, store.ContainerTypeOpenClaw, result.Template); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		al.Log(user.ID, "team_install", "template", fmt.Sprintf("%s:%s", info.ContainerName, req.Template), r.RemoteAddr)
-		writeJSON(w, http.StatusOK, result)
-	}
-}
-
-const jamossProxyPrefix = "/api/jamoss"
-
-func jamossProxyHandler(s *store.Store, ocClient *pipkg.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
-
-		// Determine allowed paths based on HTTP method
-		upstreamPath, logicalPath := buildJaMOSSProxyPaths(r.URL.Path)
-		if r.Method == http.MethodGet {
-			if !isAllowedJaMOSSReadPath(logicalPath) {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "jamoss path not allowed"})
-				return
-			}
-		} else {
-			if !isAllowedJaMOSSWritePath(logicalPath) {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "jamoss write path not allowed"})
-				return
-			}
-		}
-
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "openclaw container not found"})
-			return
-		}
-		if info.ContainerIP == "" || info.HostPort == 0 {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw container endpoint unavailable"})
-			return
-		}
-
-		if err := ocClient.EnsureRunning(r.Context(), info); err != nil {
-			log.Warn().Err(err).Str("user_id", user.ID).Str("container", info.ContainerName).Msg("jamoss proxy: ensure running failed")
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw container unavailable"})
-			return
-		}
-
-		if !ocClient.IsJMOSInstalled(info.ContainerName) {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "jmos not installed in this container"})
-			return
-		}
-
-		target := &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", info.ContainerIP, 6565)}
-		proxy := &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				req.URL.Path = upstreamPath
-				req.URL.RawPath = ""
-				req.Host = target.Host
-				req.Header.Del("Authorization")
-				req.Header.Set("X-Admin-Token", info.ContainerToken)
-			},
-			ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
-				log.Error().Err(err).Str("target", target.Host).Str("user_id", user.ID).Str("path", logicalPath).Msg("jamoss proxy error")
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "jamoss upstream unavailable"})
-			},
-		}
-
-		proxy.ServeHTTP(w, r)
-	}
-}
-
-func buildJaMOSSProxyPaths(requestPath string) (upstreamPath string, logicalPath string) {
-	relative := strings.TrimPrefix(requestPath, jamossProxyPrefix)
-	if relative == "" {
-		relative = "/"
-	}
-	if !strings.HasPrefix(relative, "/") {
-		relative = "/" + relative
-	}
-	clean := path.Clean(relative)
-	if clean == "." {
-		clean = "/"
-	}
-	return "/api" + clean, clean
-}
-
-func isAllowedJaMOSSReadPath(p string) bool {
-	if p == "/admin/login" {
-		return false
-	}
-	if strings.HasPrefix(p, "/admin/agents/") && strings.HasSuffix(p, "/reset-key") {
-		return false
-	}
-
-	switch {
-	case strings.HasPrefix(p, "/admin/tasks"):
-		return true
-	case strings.HasPrefix(p, "/admin/sub-tasks"):
-		return true
-	case p == "/agents":
-		return true
-	case strings.HasPrefix(p, "/scores/"):
-		return true
-	case strings.HasPrefix(p, "/review-records"):
-		return true
-	case strings.HasPrefix(p, "/logs"):
-		return true
-	case strings.HasPrefix(p, "/feed/"):
-		return true
-	case strings.HasPrefix(p, "/tasks"):
-		return true
-	case strings.HasPrefix(p, "/sub-tasks"):
-		return true
-	case strings.HasPrefix(p, "/stats"):
-		return true
-	case p == "/health":
-		return true
-	case strings.HasPrefix(p, "/events"):
-		return true
-	case strings.HasPrefix(p, "/space/"):
-		return true
-	case strings.HasPrefix(p, "/config/"):
-		return true
-	default:
-		return false
-	}
-}
-
-func isAllowedJaMOSSWritePath(p string) bool {
-	switch {
-	case strings.HasPrefix(p, "/admin/tasks"):
-		return true
-	case strings.HasPrefix(p, "/tasks"):
-		return true
-	case strings.HasPrefix(p, "/admin/sub-tasks"):
-		return true
-	case strings.HasPrefix(p, "/sub-tasks"):
-		return true
-	case strings.HasPrefix(p, "/logs"):
-		return true
-	default:
-		return false
-	}
-}
-
-func installTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
-	type installRequest struct {
-		Template string `json:"template"`
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
-
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		var req installRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-		req.Template = strings.TrimSpace(req.Template)
-		if req.Template == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template is required"})
-			return
-		}
-
-		containerName := r.PathValue("id")
-		info, err := s.GetContainerInfoByName(r.Context(), containerName)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
-			return
-		}
-
-		if info.ContainerType != store.ContainerTypeOpenClaw {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "install-template only supported for openclaw containers"})
-			return
-		}
-
-		result, err := ocClient.InstallTemplate(r.Context(), info, req.Template)
-		if err != nil {
-			switch {
-			case errors.Is(err, pipkg.ErrTemplateNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			case errors.Is(err, pipkg.ErrTemplatesDirNotFound):
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			}
-			return
-		}
-
-		al.Log(user.ID, "container_install_template", "container", fmt.Sprintf("%s:%s", containerName, req.Template), r.RemoteAddr)
-		writeJSON(w, http.StatusOK, result)
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "template installation not yet supported for Pi VM"})
 	}
 }
 
@@ -1143,17 +846,13 @@ func syncContainerConfigHandler(s *store.Store, ocClient *pipkg.Client, al *audi
 			return
 		}
 
-		if info.ContainerType != store.ContainerTypeOpenClaw {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync-config only supported for openclaw containers"})
+		if info.ContainerType != store.ContainerTypePiVM {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync-config only supported for pi containers"})
 			return
 		}
 
 		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pi backend not configured"})
 			return
 		}
 
@@ -1177,7 +876,7 @@ func restartContainerHandler(ocClient *pipkg.Client, s *store.Store, al *audit.L
 		user := auth.GetUser(r.Context())
 
 		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pi backend not configured"})
 			return
 		}
 
@@ -1186,8 +885,8 @@ func restartContainerHandler(ocClient *pipkg.Client, s *store.Store, al *audit.L
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
 			return
 		}
-		if info.ContainerType != store.ContainerTypeOpenClaw {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "restart only supported for openclaw containers"})
+		if info.ContainerType != store.ContainerTypePiVM {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "restart only supported for pi containers"})
 			return
 		}
 
@@ -1214,388 +913,229 @@ func restartContainerHandler(ocClient *pipkg.Client, s *store.Store, al *audit.L
 
 // ── Profile CRUD handlers (user-scoped) ──────────────────────
 
-func userListProfilesHandler(s *store.Store, ocClient *pipkg.Client) http.HandlerFunc {
+func userListProfilesHandler(s *store.Store, _ *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+
+		profiles, err := s.ListAgentProfiles(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list profiles"})
 			return
 		}
-		profiles := ocClient.ListProfilesMerged(user.ID)
+		if profiles == nil {
+			profiles = []store.AgentProfileSummary{}
+		}
 		writeJSON(w, http.StatusOK, profiles)
 	}
 }
 
-func userGetProfileHandler(ocClient *pipkg.Client) http.HandlerFunc {
+func userGetProfileHandler(s *store.Store, _ *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+		name, ok := normalizeProfileName(r.PathValue("name"))
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid profile name"})
 			return
 		}
-		name := r.PathValue("name")
-		// Try user profile first, fall back to system profile
-		detail, err := ocClient.UserGetProfileDetail(user.ID, name)
+		profile, err := s.GetAgentProfile(r.Context(), user.ID, name)
 		if err != nil {
-			if errors.Is(err, pipkg.ErrProfileNotFound) {
-				// Try system profile
-				detail, err = pipkg.GetProfileDetail(name)
-				if err != nil {
-					if errors.Is(err, pipkg.ErrProfileNotFound) {
-						writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
-						return
-					}
-					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-					return
-				}
-			} else {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			if errors.Is(err, store.ErrAgentProfileNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
 				return
 			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load profile"})
+			return
 		}
-		writeJSON(w, http.StatusOK, detail)
+		writeJSON(w, http.StatusOK, profile)
 	}
 }
 
-func userCreateProfileHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
+func userCreateProfileHandler(s *store.Store, _ *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
 
-		var detail pipkg.ProfileDetail
-		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
+		var req profileUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		detail.Name = strings.TrimSpace(detail.Name)
-		if detail.Name == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+
+		profile, err := buildProfileFromRequest(req, "")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 
-		// Check if user profile already exists
-		if _, err := ocClient.UserGetProfileDetail(user.ID, detail.Name); err == nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "profile already exists"})
+		if err := s.CreateAgentProfile(r.Context(), user.ID, profile); err != nil {
+			if strings.Contains(err.Error(), "already exists") {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "profile already exists"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create profile"})
 			return
 		}
 
-		if err := ocClient.UserSaveProfile(user.ID, &detail); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		al.Log(user.ID, "profile_create", "profile", profile.Name, r.RemoteAddr)
+		created, err := s.GetAgentProfile(r.Context(), user.ID, profile.Name)
+		if err != nil {
+			writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
 			return
 		}
-
-		al.Log(user.ID, "profile_create", "profile", detail.Name, r.RemoteAddr)
-		go propagateToUserContainer(s, ocClient, user.ID)
-		writeJSON(w, http.StatusCreated, map[string]string{"name": detail.Name, "status": "created"})
+		writeJSON(w, http.StatusCreated, created)
 	}
 }
 
-func userUpdateProfileHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
+func userUpdateProfileHandler(s *store.Store, _ *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
+		name, ok := normalizeProfileName(r.PathValue("name"))
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid profile name"})
 			return
 		}
 
-		name := r.PathValue("name")
-		var detail pipkg.ProfileDetail
-		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
+		var req profileUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		detail.Name = name
+		profile, err := buildProfileFromRequest(req, name)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 
-		// Save (create or overwrite) the user profile
-		if err := ocClient.UserSaveProfile(user.ID, &detail); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if err := s.UpdateAgentProfile(r.Context(), user.ID, name, profile); err != nil {
+			if errors.Is(err, store.ErrAgentProfileNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update profile"})
 			return
 		}
 
 		al.Log(user.ID, "profile_update", "profile", name, r.RemoteAddr)
-		go propagateToUserContainer(s, ocClient, user.ID)
-		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "updated"})
+		updated, err := s.GetAgentProfile(r.Context(), user.ID, name)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
 	}
 }
 
-func userDeleteProfileHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
+func userDeleteProfileHandler(s *store.Store, _ *pipkg.Client, al *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
+		name, ok := normalizeProfileName(r.PathValue("name"))
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid profile name"})
 			return
 		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
-
-		name := r.PathValue("name")
-		if err := ocClient.UserDeleteProfile(user.ID, name); err != nil {
-			if errors.Is(err, pipkg.ErrProfileNotFound) {
+		if err := s.DeleteAgentProfile(r.Context(), user.ID, name); err != nil {
+			if errors.Is(err, store.ErrAgentProfileNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
 				return
 			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete profile"})
 			return
 		}
-
 		al.Log(user.ID, "profile_delete", "profile", name, r.RemoteAddr)
-		go propagateToUserContainer(s, ocClient, user.ID)
-		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "deleted"})
+		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func buildProfileFromRequest(req profileUpsertRequest, fallbackName string) (store.AgentProfile, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = strings.TrimSpace(fallbackName)
+	}
+	normalizedName, ok := normalizeProfileName(name)
+	if !ok {
+		return store.AgentProfile{}, fmt.Errorf("invalid profile name")
+	}
+	icon := strings.TrimSpace(req.Icon)
+	if icon == "" {
+		icon = "bot"
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = normalizedName
+	}
+
+	return store.AgentProfile{
+		Type:        "agent",
+		Name:        normalizedName,
+		DisplayName: displayName,
+		Description: strings.TrimSpace(req.Description),
+		Icon:        icon,
+		Model:       strings.TrimSpace(req.Model),
+		Skills:      req.Skills,
+		Workspace:   strings.TrimSpace(req.Workspace),
+		Files:       req.Files,
+	}, nil
+}
+
+func normalizeProfileName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	if !profileNamePattern.MatchString(name) {
+		return "", false
+	}
+	return strings.ToLower(name), true
 }
 
 // ── Template CRUD handlers ───────────────────────────────────
 
-func listTemplatesAdminHandler(ocClient *pipkg.Client) http.HandlerFunc {
+func listTemplatesAdminHandler(_ *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		templates, err := ocClient.ListTemplates()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if templates == nil {
-			templates = []pipkg.TemplateSummary{}
-		}
-		writeJSON(w, http.StatusOK, templates)
+		writeJSON(w, http.StatusOK, []any{})
 	}
 }
 
-func getTemplateHandler(ocClient *pipkg.Client) http.HandlerFunc {
+func getTemplateHandler(_ *pipkg.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		name := r.PathValue("name")
-		detail, err := ocClient.GetTemplateDetail(name)
-		if err != nil {
-			if errors.Is(err, pipkg.ErrTemplateNotFound) {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
-				return
-			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, detail)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
 	}
 }
 
-func createTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
+func createTemplateHandler(_ *store.Store, _ *pipkg.Client, _ *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		var detail pipkg.TemplateDetail
-		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-		detail.Name = strings.TrimSpace(detail.Name)
-		if detail.Name == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
-			return
-		}
-
-		if _, err := ocClient.GetTemplateDetail(detail.Name); err == nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "template already exists"})
-			return
-		}
-
-		if err := ocClient.SaveTemplate(&detail); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		al.Log(user.ID, "template_create", "template", detail.Name, r.RemoteAddr)
-		go propagateToAllOpenClawContainers(s, ocClient)
-		writeJSON(w, http.StatusCreated, map[string]string{"name": detail.Name, "status": "created"})
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "template management not yet supported for Pi VM"})
 	}
 }
 
-func updateTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
+func updateTemplateHandler(_ *store.Store, _ *pipkg.Client, _ *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		name := r.PathValue("name")
-		var detail pipkg.TemplateDetail
-		if err := json.NewDecoder(r.Body).Decode(&detail); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-		detail.Name = name
-
-		if _, err := ocClient.GetTemplateDetail(name); err != nil {
-			if errors.Is(err, pipkg.ErrTemplateNotFound) {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
-				return
-			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		if err := ocClient.SaveTemplate(&detail); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		al.Log(user.ID, "template_update", "template", name, r.RemoteAddr)
-		go propagateTemplateToContainers(s, ocClient, name)
-		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "updated"})
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "template management not yet supported for Pi VM"})
 	}
 }
 
-func deleteTemplateHandler(s *store.Store, ocClient *pipkg.Client, al *audit.Logger) http.HandlerFunc {
+func deleteTemplateHandler(_ *store.Store, _ *pipkg.Client, _ *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ocClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "openclaw backend not configured"})
-			return
-		}
-		if ocClient.LegacyProtocolDisabled() {
-			writePiMigrationPending(w)
-			return
-		}
-		user := auth.GetUser(r.Context())
-		if user == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-
-		name := r.PathValue("name")
-		if err := ocClient.DeleteTemplate(name); err != nil {
-			if errors.Is(err, pipkg.ErrTemplateNotFound) {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
-				return
-			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-
-		al.Log(user.ID, "template_delete", "template", name, r.RemoteAddr)
-		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "deleted"})
-	}
-}
-
-// ── Propagation helpers ──────────────────────────────────────
-
-func propagateToUserContainer(s *store.Store, ocClient *pipkg.Client, userID string) {
-	ctx := context.Background()
-	info, err := s.GetContainerInfo(ctx, userID, store.ContainerTypeOpenClaw)
-	if err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Msg("propagate to user: container not found")
-		return
-	}
-	if info.Status != "running" {
-		return
-	}
-	if _, err := ocClient.SyncConfig(ctx, info); err != nil {
-		log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate to user: sync config failed")
-	}
-	if _, err := ocClient.DeployProfiles(info.ContainerName); err != nil {
-		log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate to user: deploy profiles failed")
-	}
-	if _, err := ocClient.DeployUserProfiles(info.ContainerName, userID); err != nil {
-		log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate to user: deploy user profiles failed")
-	}
-}
-
-func propagateToAllOpenClawContainers(s *store.Store, ocClient *pipkg.Client) {
-	ctx := context.Background()
-	containers, err := s.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
-	if err != nil {
-		log.Error().Err(err).Msg("propagate: list containers failed")
-		return
-	}
-	for _, info := range containers {
-		if info.Status != "running" {
-			continue
-		}
-		if _, err := ocClient.SyncConfig(ctx, info); err != nil {
-			log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate: sync config failed")
-		}
-		if _, err := ocClient.DeployProfiles(info.ContainerName); err != nil {
-			log.Warn().Err(err).Str("container", info.ContainerName).Msg("propagate: deploy profiles failed")
-		}
-	}
-}
-
-func propagateTemplateToContainers(s *store.Store, ocClient *pipkg.Client, templateName string) {
-	ctx := context.Background()
-	containers, err := s.ListContainersByType(ctx, store.ContainerTypeOpenClaw)
-	if err != nil {
-		log.Error().Err(err).Msg("propagate template: list containers failed")
-		return
-	}
-	for _, info := range containers {
-		if info.Status != "running" {
-			continue
-		}
-		installed, _ := s.GetContainerTemplate(ctx, info.UserID, store.ContainerTypeOpenClaw)
-		if installed != templateName {
-			continue
-		}
-		if _, err := ocClient.InstallTemplate(ctx, info, templateName); err != nil {
-			log.Warn().Err(err).Str("container", info.ContainerName).Str("template", templateName).Msg("propagate template: install failed")
-		}
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "template management not yet supported for Pi VM"})
 	}
 }
 
@@ -1603,10 +1143,6 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writePiMigrationPending(w http.ResponseWriter) {
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": pipkg.ErrPiMigrationPending.Error()})
 }
 
 func generateToken() (string, error) {
@@ -1617,12 +1153,12 @@ func generateToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func openClawContainerName(userID string) string {
+func piContainerName(userID string) string {
 	sum := sha256.Sum256([]byte(userID))
 	return "oc-" + hex.EncodeToString(sum[:8])
 }
 
-func allocateOpenClawPort(ctx context.Context, s *store.Store, userID string) int {
+func allocatePiPort(ctx context.Context, s *store.Store, userID string) int {
 	sum := sha256.Sum256([]byte(userID))
 	base := int(sum[0])<<8 | int(sum[1])
 	return 18800 + (base % 200)
@@ -1643,7 +1179,7 @@ func vncProxyHandler(s *store.Store, hostIP string) http.HandlerFunc {
 			return
 		}
 
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypePiVM)
 		if err != nil || info.ContainerIP == "" {
 			http.Error(w, "VNC not available", http.StatusServiceUnavailable)
 			return
@@ -1685,7 +1221,7 @@ func vncWebsockifyHandler(s *store.Store) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypeOpenClaw)
+		info, err := s.GetContainerInfo(r.Context(), user.ID, store.ContainerTypePiVM)
 		if err != nil || info.ContainerIP == "" {
 			http.Error(w, "VNC not available", http.StatusServiceUnavailable)
 			return
@@ -1789,8 +1325,18 @@ func getAvatarHandler(s *store.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role is required"})
 			return
 		}
+		role = strings.ToLower(strings.TrimSpace(role))
+		if role == "leader" || role == "member" {
+			role = "default"
+		}
 		avatar, err := s.GetAvatar(r.Context(), user.ID, role)
 		if err != nil {
+			if role != "default" {
+				if fallback, fallbackErr := s.GetAvatar(r.Context(), user.ID, "default"); fallbackErr == nil {
+					writeJSON(w, http.StatusOK, fallback)
+					return
+				}
+			}
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "avatar not found"})
 			return
 		}

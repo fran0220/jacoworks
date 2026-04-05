@@ -60,7 +60,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := h.store.GetContainerInfo(r.Context(), userID, store.ContainerTypeOpenClaw)
+	info, err := h.store.GetContainerInfo(r.Context(), userID, store.ContainerTypePiVM)
 	if err != nil {
 		writeWSJSON(w, http.StatusBadGateway, map[string]string{"error": "no container provisioned"})
 		return
@@ -73,7 +73,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// EnsureRunning may refresh container IP/status in the DB.
-	if refreshed, err := h.store.GetContainerInfo(r.Context(), userID, store.ContainerTypeOpenClaw); err == nil {
+	if refreshed, err := h.store.GetContainerInfo(r.Context(), userID, store.ContainerTypePiVM); err == nil {
 		info = refreshed
 	}
 

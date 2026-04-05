@@ -34,7 +34,7 @@ type imageAttachment struct {
 	URL string // descriptive label (e.g. image_key + extension)
 }
 
-// Handler processes Feishu webhook events and routes messages to OpenClaw containers
+// Handler processes Feishu webhook events and routes messages to Pi VMs
 // via oc-gateway HTTP proxy, enabling conversation sync with webchat.
 type Handler struct {
 	client *Client
@@ -278,8 +278,8 @@ func (h *Handler) handleMessage(raw json.RawMessage) {
 
 // --- OC-Gateway proxy routing ---
 
-// routeViaOcGateway forwards the feishu message to oc-gateway's /api/feishu/chat
-// endpoint, which has the OpenClaw ChannelPool and dialers.
+// routeViaOcGateway forwards the Feishu message to oc-gateway's /api/feishu/chat
+// endpoint, which owns the Pi relay and runtime connection logic.
 func (h *Handler) routeViaOcGateway(userID, openID, messageID, text string) (string, error) {
 	proxyReq := ChatProxyRequest{
 		UserID:    userID,

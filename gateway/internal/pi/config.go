@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,14 @@ type ConfigWriter struct {
 	gatewayURL string
 }
 
+type AgentPreset struct {
+	ID           string  `json:"id"`
+	Label        string  `json:"label"`
+	Icon         string  `json:"icon"`
+	WorkspaceKey string  `json:"workspaceKey"`
+	SystemPrompt *string `json:"systemPrompt"`
+}
+
 func NewConfigWriter(rt container.Runtime, getLLM func() config.LLMConfig, gatewayURL string) *ConfigWriter {
 	return &ConfigWriter{rt: rt, getLLM: getLLM, gatewayURL: strings.TrimSpace(gatewayURL)}
 }
@@ -32,7 +41,7 @@ func (w *ConfigWriter) WritePiConfig(ctx context.Context, containerName, gateway
 		return ErrPiMigrationPending
 	}
 
-	if _, err := w.rt.Exec(ctx, containerName, "bash", "-lc", "mkdir -p /home/node/.pi/agent/extensions && chown -R node:node /home/node/.pi"); err != nil {
+	if _, err := w.rt.Exec(ctx, containerName, "bash", "-lc", "mkdir -p /home/node/.pi/agent/extensions /home/node/.pi/agent/skills /home/node/.pi/agent/team-templates && chown -R node:node /home/node/.pi"); err != nil {
 		return fmt.Errorf("prepare pi config dir: %w", err)
 	}
 
@@ -54,6 +63,13 @@ func (w *ConfigWriter) WritePiConfig(ctx context.Context, containerName, gateway
 	}
 	if err := w.rt.WriteFile(ctx, containerName, filepath.ToSlash(filepath.Join(agentConfigDir, "settings.json")), settingsJSON); err != nil {
 		return fmt.Errorf("write pi settings.json: %w", err)
+	}
+	agentsJSON, err := readPiConfigSourceFile("agents.json")
+	if err != nil {
+		return err
+	}
+	if err := w.rt.WriteFile(ctx, containerName, filepath.ToSlash(filepath.Join(agentConfigDir, "agents.json")), agentsJSON); err != nil {
+		return fmt.Errorf("write pi agents.json: %w", err)
 	}
 
 	envData := []byte(renderRuntimeEnv(llm, w.gatewayURL, gatewayToken))
@@ -83,7 +99,61 @@ func (w *ConfigWriter) WritePiConfig(ctx context.Context, containerName, gateway
 		}
 	}
 
+	skillsDir, err := resolveSkillsSourcePath()
+	if err != nil {
+		return err
+	}
+	if _, err := w.rt.Exec(ctx, containerName, "bash", "-lc", "rm -rf /home/node/.pi/agent/skills/* && mkdir -p /home/node/.pi/agent/skills"); err != nil {
+		return fmt.Errorf("reset pi skills dir: %w", err)
+	}
+	if err := syncDirectoryTree(ctx, w.rt, containerName, skillsDir, filepath.ToSlash(filepath.Join(agentConfigDir, "skills"))); err != nil {
+		return err
+	}
+
+	templatesDir, err := resolvePiConfigSourcePath("team-templates")
+	if err != nil {
+		return err
+	}
+	if _, err := w.rt.Exec(ctx, containerName, "bash", "-lc", "rm -rf /home/node/.pi/agent/team-templates/* && mkdir -p /home/node/.pi/agent/team-templates"); err != nil {
+		return fmt.Errorf("reset pi team templates dir: %w", err)
+	}
+	if err := syncDirectoryTree(ctx, w.rt, containerName, templatesDir, filepath.ToSlash(filepath.Join(agentConfigDir, "team-templates"))); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func syncDirectoryTree(ctx context.Context, rt container.Runtime, containerName, sourceDir, targetDir string) error {
+	return filepath.WalkDir(sourceDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("walk %s: %w", sourceDir, walkErr)
+		}
+		if path == sourceDir {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return fmt.Errorf("resolve relative path for %s: %w", path, err)
+		}
+		targetPath := filepath.ToSlash(filepath.Join(targetDir, relPath))
+		if entry.IsDir() {
+			if _, err := rt.Exec(ctx, containerName, "mkdir", "-p", targetPath); err != nil {
+				return fmt.Errorf("create pi directory %s: %w", filepath.ToSlash(relPath), err)
+			}
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read pi asset %s: %w", filepath.ToSlash(relPath), err)
+		}
+		if err := rt.WriteFile(ctx, containerName, targetPath, content); err != nil {
+			return fmt.Errorf("write pi asset %s: %w", filepath.ToSlash(relPath), err)
+		}
+		return nil
+	})
 }
 
 func buildModelsJSON(llm config.LLMConfig) ([]byte, error) {
@@ -185,6 +255,45 @@ func buildSettingsJSON(llm config.LLMConfig) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
+func LoadAgentPresets() ([]AgentPreset, error) {
+	source, err := readPiConfigSourceFile("agents.json")
+	if err != nil {
+		return nil, err
+	}
+
+	var presets []AgentPreset
+	if err := json.Unmarshal(source, &presets); err != nil {
+		return nil, fmt.Errorf("parse pi agents template: %w", err)
+	}
+
+	normalized := make([]AgentPreset, 0, len(presets))
+	for _, preset := range presets {
+		preset.ID = strings.TrimSpace(preset.ID)
+		preset.Label = strings.TrimSpace(preset.Label)
+		preset.Icon = strings.TrimSpace(preset.Icon)
+		preset.WorkspaceKey = strings.TrimSpace(preset.WorkspaceKey)
+		if preset.ID == "" || preset.WorkspaceKey == "" {
+			continue
+		}
+		if preset.Label == "" {
+			preset.Label = preset.ID
+		}
+		if preset.Icon == "" {
+			preset.Icon = "bot"
+		}
+		if preset.SystemPrompt != nil {
+			prompt := strings.TrimSpace(*preset.SystemPrompt)
+			if prompt == "" {
+				preset.SystemPrompt = nil
+			} else {
+				preset.SystemPrompt = &prompt
+			}
+		}
+		normalized = append(normalized, preset)
+	}
+	return normalized, nil
+}
+
 func renderRuntimeEnv(llm config.LLMConfig, gatewayURL, gatewayToken string) string {
 	proxyURL := strings.TrimSpace(llm.ProxyURL)
 	if proxyURL == "" {
@@ -200,6 +309,7 @@ func renderRuntimeEnv(llm config.LLMConfig, gatewayURL, gatewayToken string) str
 		fmt.Sprintf("LLM_PROXY_KEY=%s", shellEscapeEnvValue(llm.ProxyKey)),
 		fmt.Sprintf("FAL_API_KEY=%s", shellEscapeEnvValue(llm.FalAPIKey)),
 		fmt.Sprintf("TAVILY_API_KEY=%s", shellEscapeEnvValue(llm.TavilyKey)),
+		fmt.Sprintf("WS_WRAPPER_TOKEN=%s", shellEscapeEnvValue(gatewayToken)),
 		fmt.Sprintf("GATEWAY_URL=%s", shellEscapeEnvValue(gatewayURL)),
 		fmt.Sprintf("GATEWAY_TOKEN=%s", shellEscapeEnvValue(gatewayToken)),
 	}
@@ -261,7 +371,37 @@ func resolvePiConfigSourcePath(rel string) (string, error) {
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("pi config asset not found: %s", rel)
+	return "", fmt.Errorf("%w: pi config asset not found: %s", os.ErrNotExist, rel)
+}
+
+func readPiConfigSourceFile(rel string) ([]byte, error) {
+	path, err := resolvePiConfigSourcePath(rel)
+	if err != nil {
+		return nil, err
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read pi config asset %s: %w", rel, err)
+	}
+	return content, nil
+}
+
+func resolveSkillsSourcePath() (string, error) {
+	execPath, _ := os.Executable()
+	execDir := filepath.Dir(execPath)
+	candidates := []string{
+		filepath.Join("skills"),
+		filepath.Join("..", "skills"),
+		filepath.Join(execDir, "skills"),
+		filepath.Join(execDir, "..", "skills"),
+		"/opt/jacoworks/skills",
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("%w: skills asset not found", os.ErrNotExist)
 }
 
 func shellEscapeEnvValue(value string) string {
