@@ -21,6 +21,7 @@ type Config struct {
 	GitHub       GitHubConfig    `yaml:"github"`
 	ChatAgent    ChatAgentConfig `yaml:"chat_agent"`
 	PostHog      PostHogConfig   `yaml:"posthog"`
+	MapboxToken  string          `yaml:"mapbox_token"`
 	OcGatewayURL string          `yaml:"oc_gateway_url"`
 }
 
