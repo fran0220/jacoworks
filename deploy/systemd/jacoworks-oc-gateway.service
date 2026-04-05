@@ -1,5 +1,5 @@
 [Unit]
-Description=JAcoworks OC Gateway (OpenClaw Container Management)
+Description=JAcoworks OC Gateway (Pi VM + WebChat Backend)
 After=network.target incus.socket
 Wants=incus.socket
 

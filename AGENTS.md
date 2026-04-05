@@ -13,7 +13,6 @@
 | `webchat/AGENTS.md` | React SPA 聊天前端 (chat.jingao.club)、4-Tab 指挥台布局 (workbench/tasks/team/observe)、状态分域 hooks、群聊 (agent attribution + @mention + orchestration)、三栏 WorkbenchView、JaMOSS 集成、移动端适配、WS 协议 |
 | `website/AGENTS.md` | 路由、Askama 模板、Rust 规范 |
 | `deploy/AGENTS.md` | SQL schema、测试账号、基础设施、部署策略 |
-| `openclaw/AGENTS.md` | 已废弃的 OpenClaw 模板参考说明（目录保留供迁移参考） |
 | `.agents/skills/openclaw-integration/` | 旧 OpenClaw 集成参考（仅历史迁移资料） |
 | `.agents/skills/releasing-desktop/` | Desktop 发版全流程 (version bump → macOS/Windows 构建 → COS 上传 → DB 注册 → git tag) |
 
@@ -68,7 +67,7 @@ jingao ──── FRP tunnel ────→ local / fan (192.168.31.162)
 **Pi WS Wrapper relay**: oc-gateway `/ws/oc` 做 ticket auth → VM lookup → 连接 VM 内 `pi-ws-wrapper` (:18789) → Pi JSONL 与前端兼容帧互译
 **跨机**: pi-ready Incus VM 与 oc-gateway 同机在 local/fan (192.168.31.162, x86_64)；oc-gateway 通过 SSH tunnel 访问 jingao PostgreSQL
 **VM 直连**: pi-ready VM 通过 Incus bridge 网络获取 IP (10.193.112.x)，服务端口直接暴露，不使用 proxy device。oc-gateway 通过 VM bridge IP 访问 Pi WS Wrapper (:18789)、noVNC (:6080)、VNC (:5901)
-**团队模板**: 旧 `openclaw/templates/` 保留为迁移参考；运行时技能统一来自顶层 `skills/`，团队行为由 Pi CLI + 社区插件承载
+**团队模板**: 运行时技能统一来自顶层 `skills/`，团队配置在 `pi-config/team-templates/`，团队行为由 Pi CLI + 社区插件承载
 
 ## 数据库
 
@@ -209,7 +208,7 @@ make deploy-webchat    # 仅 webchat 前端 (构建 + 同步到 local)
 
 ### Golden Image (`pi-ready`)
 
-构建脚本: `deploy/incus/build-openclaw-vm.sh`。完整预装环境：
+构建脚本: `deploy/incus/build-pi-vm.sh`。完整预装环境：
 
 | 层 | 内容 |
 |-----|------|
@@ -239,7 +238,7 @@ make deploy-webchat    # 仅 webchat 前端 (构建 + 同步到 local)
 
 **添加新 skill**: 把 `SKILL.md` 放到顶层 `skills/<name>/` → `make deploy-local` → 同步到 local / VM。
 
-**Credentials**: LLM proxy 信息来自 Gateway 下发的 provider/model 配置，运行时写入 Pi CLI 所需配置文件，不再依赖 `~/.openclaw/credentials/`。
+**Credentials**: LLM proxy 信息来自 Gateway 下发的 provider/model 配置，运行时写入 Pi CLI 所需配置文件。
 
 ### Pi CLI 工具与插件
 
@@ -281,7 +280,7 @@ webchat 的「桌面」Tab 通过 noVNC iframe 嵌入用户专属 Incus 桌面 V
 - Incus VM (VIRTUAL-MACHINE), Ubuntu 24.04 + XFCE4 桌面
 - TigerVNC :5901 + websockify/noVNC :6080 + Pi WS Wrapper :18789
 - 4 CPU / 4GiB RAM (Provision 时设置)
-- 构建脚本: `deploy/incus/build-openclaw-vm.sh`
+- 构建脚本: `deploy/incus/build-pi-vm.sh`
 - VNC 密码: `openclaw`
 
 **VM 网络**: VM 通过 Incus bridge 网络自动获取 IP (10.193.112.x 段)，所有端口直接暴露，**不使用 proxy device**。oc-gateway 通过 `container_ip` 列存储的 bridge IP 直连 VM。
@@ -290,7 +289,7 @@ webchat 的「桌面」Tab 通过 noVNC iframe 嵌入用户专属 Incus 桌面 V
 - oc-gateway `/vnc/*` → 反代到 VM bridge IP:6080 (noVNC 静态文件)
 - oc-gateway `/websockify` → WS 代理到 VM bridge IP:6080 (noVNC WebSocket)
 - webchat `DesktopPanel` 通过 iframe 加载 `/vnc/vnc.html`
-- `__OPENCLAW_VNC_URL__` 由 oc-gateway chat.html 模板动态注入
+- VNC URL 由 oc-gateway chat.html 模板动态注入
 
 **待完成**:
 - [ ] 每用户独立桌面 VM provision (当前单用户验证通过)
@@ -307,7 +306,7 @@ webchat 的「桌面」Tab 通过 noVNC iframe 嵌入用户专属 Incus 桌面 V
 
 **运行环境**: Incus 桌面 VM (完整 Ubuntu Desktop + Godot 4.4+ 编辑器 GUI + godot-forge CLI)。Pi Agent 运行在同一 VM 或通过网络访问 VM 内的 Godot 项目。
 
-**GodotForge 团队模板** (规划中): `openclaw/templates/godotforge/`
+**GodotForge 团队模板** (规划中): `pi-config/team-templates/godotforge/`
 - 7 角色: 游戏制作人 (leader) + 4 专精执行者 (玩法程序员/关卡设计师/UI 开发者/视效音效师) + QA 测试员 + 巡查者
 - 使用 JMOS 任务调度 + godotforge skill + godot-forge CLI
 - VM 需预装: Godot 4.4+ 编辑器 (Linux x86_64 GUI 版) + godot-forge CLI + Node.js
@@ -318,7 +317,7 @@ webchat 的「桌面」Tab 通过 noVNC iframe 嵌入用户专属 Incus 桌面 V
 - [ ] webchat Capacitor 包装 → iOS/Android App
 - [ ] 语音 / 文件上传
 - [x] WebChat 独立域名部署 (chat.jingao.club → OpenResty → FRP tunnel → oc-gateway)
-- [x] Pi CLI 替换 OpenClaw / vm-agent 主链路
+- [x] Pi CLI 替换旧 vm-agent 主链路
 - [x] 桌面端接入 tauri-plugin-updater (运行时自动检查更新, use-updater.ts)
 - [ ] @anthropic-ai/sandbox-runtime 集成 (macOS Seatbelt / Linux bubblewrap)
 - [x] Gateway 模板安装 API (GET /api/teams + POST /api/teams/install, 用户自助)

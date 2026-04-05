@@ -12,7 +12,7 @@
         db-reset db-migrate clean \
         docker-build-agent docker-run-agent \
         release release-build release-upload release-bump \
-        setup-incus build-openclaw-image rebuild-openclaw-image
+        setup-incus build-pi-image rebuild-pi-image
 
 # ─── 配置 ───
 JINGAO_HOST   ?= jingao
@@ -122,10 +122,9 @@ deploy-oracle: ## 已退役：vm-agent Docker 不再是正式部署链路
 
 deploy-pi-config: ## 同步 pi-config/ 与顶层 skills/ 到 local
 	@echo "📂 同步 pi-config/ 与 skills/ ..."
-	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/pi-config /opt/jacoworks/skills /opt/jacoworks/openclaw/templates"
+	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/pi-config /opt/jacoworks/skills"
 	rsync -a --delete pi-config/ $(LOCAL_HOST):/opt/jacoworks/pi-config/
 	rsync -a --delete skills/ $(LOCAL_HOST):/opt/jacoworks/skills/
-	rsync -a --delete openclaw/templates/ $(LOCAL_HOST):/opt/jacoworks/openclaw/templates/
 	@echo "✅ Pi 配置与技能已同步"
 
 push-skills: ## 推送 vm-agent/skills/ 到网关 (system skills)
@@ -144,7 +143,6 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		export GOTOOLCHAIN=local && \
 		export GOPROXY=https://goproxy.cn,direct && \
 		CGO_ENABLED=0 go build -buildvcs=false -ldflags='-s -w' -o /tmp/jacoworks-gateway ./cmd/gateway && \
-		sudo ln -sfn $(REPO_DIR)/openclaw /opt/jacoworks/openclaw && \
 		sudo systemctl stop jacoworks-gateway && \
 		sudo mv /tmp/jacoworks-gateway /opt/jacoworks/gateway && \
 		sudo chmod +x /opt/jacoworks/gateway && \
@@ -298,12 +296,12 @@ setup-incus: ## 初始化 local 服务器 Incus 环境
 	ssh $(LOCAL_HOST) "chmod +x /tmp/setup-incus.sh && /tmp/setup-incus.sh"
 	@echo "✅ Incus 环境已初始化"
 
-build-openclaw-image: ## 构建 pi-ready Incus VM 基础镜像
-	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
-	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh"
+build-pi-image: ## 构建 pi-ready Incus VM 基础镜像
+	scp deploy/incus/build-pi-vm.sh $(LOCAL_HOST):/tmp/
+	ssh $(LOCAL_HOST) "chmod +x /tmp/build-pi-vm.sh && /tmp/build-pi-vm.sh"
 	@echo "✅ pi-ready 镜像已构建"
 
-rebuild-openclaw-image: ## 重建 pi-ready Incus VM 基础镜像
-	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
-	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh --force"
+rebuild-pi-image: ## 重建 pi-ready Incus VM 基础镜像
+	scp deploy/incus/build-pi-vm.sh $(LOCAL_HOST):/tmp/
+	ssh $(LOCAL_HOST) "chmod +x /tmp/build-pi-vm.sh && /tmp/build-pi-vm.sh --force"
 	@echo "✅ pi-ready 镜像已重建"
