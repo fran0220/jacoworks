@@ -4,10 +4,10 @@
   "private": true,
   "description": "Bundled Pi CLI community packages for JAcoworks Desktop",
   "dependencies": {
+    "pi-messenger": "*",
+    "@db0-ai/pi": "*",
+    "@db0-ai/backends-postgres": "*",
     "pi-web-access": "*",
-    "pi-subagents": "*",
-    "@tmustier/pi-agent-teams": "*",
-    "taskplane": "*",
     "@apmantza/greedysearch-pi": "*",
     "pi-mcp-adapter": "*",
     "@aliou/pi-guardrails": "*",

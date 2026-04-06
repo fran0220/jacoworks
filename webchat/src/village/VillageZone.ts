@@ -114,6 +114,9 @@ const ROLE_ALIASES: Record<string, string> = {
   leader: "planner",
   coder: "executor",
   builder: "executor",
+  "crew-planner": "planner",
+  "crew-worker": "executor",
+  "crew-reviewer": "reviewer",
   analyst: "researcher",
   designer: "executor",
   secretary: "planner",
@@ -155,6 +158,31 @@ export function getVillageHomeZone(role: string): VillageZoneId {
 
 export function getVillageIdleZone(): VillageZoneId {
   return "campfire";
+}
+
+export function resolveVillageZoneForPath(path: string): VillageZoneId {
+  const normalized = path.trim().toLowerCase();
+
+  if (!normalized) return "market";
+  if (/\b(tasks?|sub-?tasks?|dependencies|wave|kanban|backlog|milestone)\b/.test(normalized)) {
+    return "crops";
+  }
+  if (/\b(docs?|readme|prompt|notes?|spec|summary|report|proposal)\b/.test(normalized)) {
+    return "library";
+  }
+  if (/\b(test|tests|qa|review|lint|assert|snapshot|guard)\b/.test(normalized)) {
+    return "watchtower";
+  }
+  if (/\b(config|workflow|crew|messenger|registry|settings|ops|plan)\b/.test(normalized)) {
+    return "hq";
+  }
+  if (/\b(dist|build|release|deploy|artifact|output|bundle|ship)\b/.test(normalized)) {
+    return "docks";
+  }
+  if (/\b(public|static|asset|assets|sprite|image|images|video|audio|design)\b/.test(normalized)) {
+    return "plaza";
+  }
+  return "market";
 }
 
 export function getVillageSlot(

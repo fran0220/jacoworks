@@ -221,8 +221,7 @@ const LOG_KEEP_FILES: usize = 3;
 const PI_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const PI_SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
-static AGENT_LOG_LOCK: std::sync::LazyLock<Mutex<()>> =
-    std::sync::LazyLock::new(|| Mutex::new(()));
+static AGENT_LOG_LOCK: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
 static PI_SESSION_CLEANUP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 struct AgentProcess {
@@ -287,7 +286,9 @@ fn append_log_line(app: &AppHandle, source: &str, line: &str) {
         Err(_) => return,
     };
 
-    let Some(log_dir) = agent_log_dir(app) else { return };
+    let Some(log_dir) = agent_log_dir(app) else {
+        return;
+    };
     let _ = fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("agent.log");
 
@@ -317,12 +318,7 @@ fn handle_session_line(
     emit_json_or_log(app, line, source, session_id)
 }
 
-fn emit_json_or_log(
-    app: &AppHandle,
-    line: &str,
-    source: &str,
-    session_id: Option<&str>,
-) -> bool {
+fn emit_json_or_log(app: &AppHandle, line: &str, source: &str, session_id: Option<&str>) -> bool {
     if let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(line) {
         if let (Some(session_id), Some(object)) = (session_id, payload.as_object_mut()) {
             object
@@ -601,13 +597,34 @@ fn build_settings_config(
     serde_json::json!({
         "defaultProvider": default_provider,
         "defaultModel": default_model,
+        "defaultThinkingLevel": "off",
         "quietStartup": true,
         "compaction": {
+            "enabled": true,
             "reserveTokens": reserve_tokens,
             "keepRecentTokens": keep_recent_tokens,
         },
+        "packages": [
+            "npm:pi-messenger",
+            "npm:@db0-ai/pi",
+            "npm:@db0-ai/backends-postgres",
+            "npm:pi-web-access",
+            "npm:@apmantza/greedysearch-pi",
+            "npm:pi-mcp-adapter",
+            "npm:@aliou/pi-guardrails",
+            "npm:@aliou/pi-processes",
+            "npm:pi-rtk"
+        ],
+        "extensions": ["./extensions"],
         "skills": skill_paths,
     })
+}
+
+fn is_supported_pi_extension(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("ts" | "js" | "mjs")
+    )
 }
 
 fn sync_pi_extensions(pi_dir: &Path, app: &AppHandle) {
@@ -622,16 +639,40 @@ fn sync_pi_extensions(pi_dir: &Path, app: &AppHandle) {
     }
 
     let Some(config_dir) = resolve_pi_config_dir() else {
-        append_log_line(app, "sidecar", "pi-config directory not found; skipping custom extension sync");
+        append_log_line(
+            app,
+            "sidecar",
+            "pi-config directory not found; skipping custom extension sync",
+        );
         return;
     };
 
-    for file_name in ["visual.ts", "cron-proxy.ts", "image-gen.ts"] {
-        let source = config_dir.join("extensions").join(file_name);
-        if !source.is_file() {
+    let source_extensions = config_dir.join("extensions");
+    let entries = match fs::read_dir(&source_extensions) {
+        Ok(entries) => entries,
+        Err(error) => {
+            append_log_line(
+                app,
+                "sidecar",
+                &format!(
+                    "Failed to read Pi extensions dir {}: {}",
+                    source_extensions.display(),
+                    error
+                ),
+            );
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let source = entry.path();
+        if !source.is_file() || !is_supported_pi_extension(&source) {
             continue;
         }
 
+        let Some(file_name) = source.file_name() else {
+            continue;
+        };
         let destination = extensions_dir.join(file_name);
         if let Err(error) = fs::copy(&source, &destination) {
             append_log_line(
@@ -680,6 +721,21 @@ fn write_pi_config(app: &AppHandle, env_vars: &HashMap<String, String>) -> Resul
         .map_err(|error| format!("Failed to write models.json: {}", error))?;
     fs::write(&settings_path, settings_json)
         .map_err(|error| format!("Failed to write settings.json: {}", error))?;
+
+    if let Some(config_dir) = resolve_pi_config_dir() {
+        let pi_messenger_source = config_dir.join("pi-messenger.json");
+        if pi_messenger_source.is_file() {
+            let pi_messenger_target = pi_dir.join("pi-messenger.json");
+            fs::copy(&pi_messenger_source, &pi_messenger_target).map_err(|error| {
+                format!(
+                    "Failed to sync pi-messenger.json from {}: {}",
+                    pi_messenger_source.display(),
+                    error
+                )
+            })?;
+        }
+    }
+
     sync_pi_extensions(&pi_dir, app);
 
     Ok(pi_dir)
@@ -714,7 +770,8 @@ fn cleanup_idle_sessions(app: &AppHandle) {
         let idle_ids: Vec<String> = processes
             .iter_mut()
             .filter_map(|(session_id, process)| {
-                if !is_running(process) || process.last_access.elapsed() >= PI_SESSION_IDLE_TIMEOUT {
+                if !is_running(process) || process.last_access.elapsed() >= PI_SESSION_IDLE_TIMEOUT
+                {
                     Some(session_id.clone())
                 } else {
                     None
@@ -795,7 +852,10 @@ fn spawn_pi_process(
         .env("MEMORY_ENABLED", "true")
         .env("HEARTBEAT_ENABLED", "false")
         .env("CRON_ENABLED", "false")
-        .env("USER_SKILLS_DIR", user_skills_dir.to_string_lossy().to_string())
+        .env(
+            "USER_SKILLS_DIR",
+            user_skills_dir.to_string_lossy().to_string(),
+        )
         .env("AGENT_HOME_DIR", app_data_dir.to_string_lossy().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -926,8 +986,7 @@ fn spawn_pi_process(
             if trimmed.is_empty() {
                 continue;
             }
-            if trimmed.contains("\"type\":\"session\"")
-                || trimmed.contains("\"type\": \"session\"")
+            if trimmed.contains("\"type\":\"session\"") || trimmed.contains("\"type\": \"session\"")
             {
                 signal_ready(&ready_tx_stdout);
             }
@@ -1209,7 +1268,10 @@ pub struct FeedbackContext {
 }
 
 #[tauri::command]
-pub fn get_feedback_context(app: AppHandle, tail_lines: Option<usize>) -> Result<FeedbackContext, String> {
+pub fn get_feedback_context(
+    app: AppHandle,
+    tail_lines: Option<usize>,
+) -> Result<FeedbackContext, String> {
     let n = tail_lines.unwrap_or(50);
     let mut all_lines: Vec<String> = Vec::new();
 
@@ -1226,7 +1288,11 @@ pub fn get_feedback_context(app: AppHandle, tail_lines: Option<usize>) -> Result
         }
     }
 
-    let start = if all_lines.len() > n { all_lines.len() - n } else { 0 };
+    let start = if all_lines.len() > n {
+        all_lines.len() - n
+    } else {
+        0
+    };
     let log_tail = all_lines[start..].to_vec();
 
     let version = app.package_info().version.to_string();

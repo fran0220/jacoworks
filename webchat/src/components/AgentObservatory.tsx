@@ -172,7 +172,7 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
   const [error, setError] = useState<string | null>(null);
   const [teamsData, setTeamsData] = useState<TeamsResponse | null>(null);
   const [presets, setPresets] = useState<AgentPreset[]>([]);
-  const lastLogIdRef = useRef<string | undefined>(undefined);
+  const lastFeedTimestampRef = useRef<string | undefined>(undefined);
   const sceneRef = useRef<SceneRefs | null>(null);
   const leaderRef = useRef<LeaderAssistantHandle>(null);
   const appliedThemeRef = useRef<string | null>(null);
@@ -507,9 +507,9 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
     let cancelled = false;
     const poll = async () => {
       try {
-        const logs = await fetchFeedLogs(lastLogIdRef.current, undefined, 20);
+        const logs = await fetchFeedLogs(lastFeedTimestampRef.current, undefined, 20);
         if (cancelled || logs.length === 0) return;
-        lastLogIdRef.current = logs[logs.length - 1].id;
+        lastFeedTimestampRef.current = logs[0]?.timestamp ?? lastFeedTimestampRef.current;
         const newItems = logs.map(feedLogToActivity);
         setActivities((prev) => [...newItems, ...prev].slice(0, 50));
 

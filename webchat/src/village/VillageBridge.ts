@@ -25,14 +25,21 @@ import {
   getVillageIdleZone,
   getVillageSlot,
   normalizeVillageRole,
+  resolveVillageZoneForPath,
   type VillageZoneId,
 } from "./VillageZone";
+
+export interface VillageZoneEffect {
+  reserveCount: number;
+  reservedPaths: string[];
+}
 
 export interface UseVillageBridgeResult {
   agents: VillageAgentModel[];
   activeCount: number;
   latestStory: string;
   highlightedAgentId: string | null;
+  zoneEffects: Partial<Record<VillageZoneId, VillageZoneEffect>>;
 }
 
 type VillageEventKind =
@@ -45,6 +52,9 @@ type VillageEventKind =
   | "task_rework"
   | "task_failed"
   | "task_timeout"
+  | "file_reserve"
+  | "message_dm"
+  | "message_broadcast"
   | "thinking"
   | "idle";
 
@@ -65,6 +75,115 @@ function prettifyMemberName(name: string): string {
   return name
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (token) => token.toUpperCase());
+}
+
+function parseBody(body: string | null): Record<string, unknown> {
+  if (!body) return {};
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function extractReservationPaths(body: Record<string, unknown>): string[] {
+  const arraySource = body.reserved_paths ?? body.reservations ?? body.file_reservations;
+
+  const values = (Array.isArray(arraySource) ? arraySource : [])
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (!item || typeof item !== "object") return "";
+      const rec = item as Record<string, unknown>;
+      return (
+        normalizeToken(String(rec.path ?? "")) ||
+        normalizeToken(String(rec.file_path ?? "")) ||
+        normalizeToken(String(rec.filePath ?? ""))
+      );
+    })
+    .filter((item): item is string => Boolean(item));
+
+  return Array.from(new Set(values));
+}
+
+function hasReservationPayload(body: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(body.reserved_paths) ||
+    Array.isArray(body.reservations) ||
+    Array.isArray(body.file_reservations)
+  );
+}
+
+function extractMessageText(body: Record<string, unknown>): string | null {
+  const candidate =
+    body.message ??
+    body.content ??
+    body.text ??
+    body.summary ??
+    body.body;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
+function extractMessageTarget(body: Record<string, unknown>): string | null {
+  const candidate = body.target ?? body.to ?? body.recipient ?? body.channel;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
+function summarizePath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return "文件工位";
+  const parts = trimmed.split("/").filter(Boolean);
+  return parts[parts.length - 1] || trimmed;
+}
+
+function summarizeReservations(paths: string[]): string | null {
+  if (paths.length === 0) return null;
+  const [first, ...rest] = paths;
+  return rest.length > 0
+    ? `锁定 ${summarizePath(first)} +${rest.length}`
+    : `锁定 ${summarizePath(first)}`;
+}
+
+function resolveReservationZone(paths: string[], fallback: VillageZoneId): VillageZoneId {
+  if (paths.length === 0) return fallback;
+  const counters = new Map<VillageZoneId, number>();
+  for (const path of paths) {
+    const zoneId = resolveVillageZoneForPath(path);
+    counters.set(zoneId, (counters.get(zoneId) ?? 0) + 1);
+  }
+  let bestZone = fallback;
+  let bestScore = -1;
+  for (const [zoneId, score] of counters) {
+    if (score > bestScore) {
+      bestZone = zoneId;
+      bestScore = score;
+    }
+  }
+  return bestZone;
+}
+
+function getPresenceState(summary: AgentSummary | null, role: string): VillageAgentState | null {
+  if (!summary?.presence_state) return null;
+  if (summary.presence_state === "stuck") return "stuck";
+  if (summary.presence_state === "idle") return "resting";
+  if (summary.presence_state === "away") return "idle";
+  if (summary.presence_state === "active") {
+    return summary.current_sub_task ? buildWorkingState(role, summary) : "working";
+  }
+  return null;
+}
+
+function getCrewStatusText(
+  state: VillageAgentState,
+  zoneId: VillageZoneId,
+  reservedPaths: string[],
+): string {
+  if (state === "walking") return buildTravelStatus(zoneId);
+  if (state === "stuck") return "卡在当前流程，等待外援";
+  if (reservedPaths.length > 0) {
+    return state === "resting" ? "守着已预留的文件工位" : "围着预留文件持续推进";
+  }
+  return describeVillageState(state, "member");
 }
 
 function matchesSummaryToMember(
@@ -116,6 +235,7 @@ function activityToEvent(
   activity: TranslatedActivity,
 ): VillageActivityEvent | null {
   const key = `${activity.rawMethod.toUpperCase()} ${activity.rawPath}`;
+  const body = parseBody(activity.rawBody);
   let kind: VillageEventKind | null = null;
 
   if (/POST \/api\/tasks$/.test(key)) kind = "task_create";
@@ -125,17 +245,40 @@ function activityToEvent(
   else if (/POST \/api\/review-records/.test(key)) kind = "task_review";
   else if (/POST \/api\/sub-tasks\/.*\/complete/.test(key)) kind = "task_complete";
   else if (/POST \/api\/sub-tasks\/.*\/rework/.test(key)) kind = "task_rework";
+  else if (/reserve|lock/.test(key) || hasReservationPayload(body)) kind = "file_reserve";
+  else if (/message|broadcast|inbox|dm/.test(key) || (extractMessageText(body) && extractMessageTarget(body))) {
+    kind = /broadcast|channel|team|all/.test(key) || /broadcast|team|all/.test(extractMessageTarget(body) ?? "")
+      ? "message_broadcast"
+      : "message_dm";
+  }
   else if (/GET \/api\//.test(key)) kind = "thinking";
 
   if (!kind) return null;
+
+  const reservationSummary = summarizeReservations(extractReservationPaths(body));
+  const messageText = extractMessageText(body);
+  const detailText =
+    kind === "file_reserve"
+      ? reservationSummary ?? activity.objectName
+      : kind === "message_dm" || kind === "message_broadcast"
+        ? messageText ?? activity.objectName
+        : activity.objectName;
+  const story =
+    kind === "file_reserve"
+      ? `${activity.agentName} 锁定了文件工位`
+      : kind === "message_broadcast"
+        ? `${activity.agentName} 正在向全队广播`
+        : kind === "message_dm"
+          ? `${activity.agentName} 正在传递消息`
+          : `${activity.agentName} ${activity.verb}`;
 
   return {
     kind,
     agentId: activity.agentId,
     agentName: activity.agentName,
-    detailText: activity.objectName,
+    detailText,
     timestamp: activity.timestamp,
-    story: `${activity.agentName} ${activity.verb}`,
+    story,
   };
 }
 
@@ -150,6 +293,9 @@ function describeEventKind(kind: string): string {
     case "task_rework": return "返工中";
     case "task_failed": return "执行失败";
     case "task_timeout": return "执行超时";
+    case "file_reserve": return "锁定了文件";
+    case "message_dm": return "发来了一条私信";
+    case "message_broadcast": return "向全队广播了消息";
     default: return kind;
   }
 }
@@ -194,16 +340,24 @@ function buildIntent(
   const normalizedRole = normalizeVillageRole(member.role || summary?.role || "member");
   const homeZoneId = getVillageHomeZone(normalizedRole);
   const isLeader = normalizedRole === "planner" || member.role === "leader";
-  const detailText =
-    summary?.current_sub_task?.name ?? event?.detailText ?? member.kickoff ?? null;
   const baseName = summary?.name || prettifyMemberName(member.name);
+  const reservedPaths = summary?.reserved_paths ?? [];
+  const reservationZoneId = resolveReservationZone(reservedPaths, homeZoneId);
+  const reservationHint = summarizeReservations(reservedPaths);
   const spritePackId =
     maybeSpritePackId(member.spritePackId) ??
     resolveSpritePackIdForRole(normalizedRole) ??
     pickSpritePackIdFromSeed(`${baseName}:${normalizedRole}`);
 
-  let zoneId: VillageZoneId = getVillageIdleZone();
-  let state: VillageAgentState = "idle";
+  let zoneId: VillageZoneId = reservedPaths.length > 0 ? reservationZoneId : getVillageIdleZone();
+  let state: VillageAgentState = getPresenceState(summary, normalizedRole) ?? (reservedPaths.length > 0 ? "resting" : "idle");
+  let detailText =
+    event?.detailText ??
+    summary?.latest_message ??
+    summary?.current_sub_task?.name ??
+    reservationHint ??
+    member.kickoff ??
+    null;
 
   if (event?.kind === "task_complete") {
     zoneId = "plaza";
@@ -218,23 +372,34 @@ function buildIntent(
     zoneId = "hq";
     state = "thinking";
   } else if (event?.kind === "task_claim" || event?.kind === "task_start") {
-    zoneId = homeZoneId;
-    state = "working";
+    zoneId = reservedPaths.length > 0 ? reservationZoneId : homeZoneId;
+    state = getPresenceState(summary, normalizedRole) ?? "working";
   } else if (event?.kind === "task_rework") {
-    zoneId = homeZoneId;
+    zoneId = reservedPaths.length > 0 ? reservationZoneId : homeZoneId;
     state = "thinking";
   } else if (event?.kind === "task_failed" || event?.kind === "task_timeout") {
-    zoneId = homeZoneId;
-    state = "idle";
+    zoneId = reservedPaths.length > 0 ? reservationZoneId : homeZoneId;
+    state = summary?.presence_state === "stuck" ? "stuck" : "idle";
+  } else if (event?.kind === "file_reserve") {
+    zoneId = reservationZoneId;
+    state = summary?.presence_state === "active" ? "working" : "thinking";
+  } else if (event?.kind === "message_dm" || event?.kind === "message_broadcast") {
+    zoneId = reservedPaths.length > 0 ? reservationZoneId : homeZoneId;
+    state = summary?.presence_state === "stuck" ? "stuck" : "thinking";
   } else if (summary?.current_sub_task) {
-    zoneId = homeZoneId;
+    zoneId = reservedPaths.length > 0 ? reservationZoneId : homeZoneId;
     state = buildWorkingState(normalizedRole, summary);
+  } else if (summary?.presence_state === "active") {
+    zoneId = reservedPaths.length > 0 ? reservationZoneId : homeZoneId;
+    state = "working";
   }
 
   const statusText =
-    state === "walking"
-      ? buildTravelStatus(zoneId)
-      : describeVillageState(state, normalizedRole);
+    summary?.source === "crew"
+      ? getCrewStatusText(state, zoneId, reservedPaths)
+      : state === "walking"
+        ? buildTravelStatus(zoneId)
+        : describeVillageState(state, normalizedRole);
 
   return {
     id: summary?.id || `${member.name}-${member.role}`,
@@ -263,6 +428,25 @@ function clearTimer(timerId: number | undefined): void {
   }
 }
 
+function buildZoneEffects(
+  agentSummaries: AgentSummary[],
+): Partial<Record<VillageZoneId, VillageZoneEffect>> {
+  return agentSummaries.reduce<Partial<Record<VillageZoneId, VillageZoneEffect>>>((acc, summary) => {
+    const reservedPaths = summary.reserved_paths ?? [];
+    for (const path of reservedPaths) {
+      const zoneId = resolveVillageZoneForPath(path);
+      const current = acc[zoneId] ?? { reserveCount: 0, reservedPaths: [] };
+      acc[zoneId] = {
+        reserveCount: current.reserveCount + 1,
+        reservedPaths: current.reservedPaths.includes(path)
+          ? current.reservedPaths
+          : [...current.reservedPaths, path].slice(0, 3),
+      };
+    }
+    return acc;
+  }, {});
+}
+
 export function useVillageBridge(
   template: TeamTemplate,
   agentSummaries: AgentSummary[],
@@ -274,6 +458,7 @@ export function useVillageBridge(
   const [readyToAnimate, setReadyToAnimate] = useState(false);
   const agentsRef = useRef<VillageAgentModel[]>([]);
   const timersRef = useRef<Record<string, number>>({});
+  const zoneEffects = useMemo(() => buildZoneEffects(agentSummaries), [agentSummaries]);
 
   useEffect(() => {
     agentsRef.current = agents;
@@ -430,7 +615,7 @@ export function useVillageBridge(
   }, [intents, readyToAnimate]);
 
   const activeCount = useMemo(
-    () => intents.filter((intent) => intent.state !== "idle").length,
+    () => intents.filter((intent) => intent.state !== "idle" && intent.state !== "resting").length,
     [intents],
   );
 
@@ -458,5 +643,6 @@ export function useVillageBridge(
     activeCount,
     latestStory,
     highlightedAgentId,
+    zoneEffects,
   };
 }

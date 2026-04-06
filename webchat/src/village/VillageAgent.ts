@@ -3,10 +3,12 @@ import type { AgentExpression } from "../types";
 
 export type VillageAgentState =
   | "idle"
+  | "resting"
   | "walking"
   | "working"
   | "thinking"
   | "reviewing"
+  | "stuck"
   | "celebrating";
 
 export type VillageFacing = "down" | "up" | "right" | "left";
@@ -93,11 +95,14 @@ export function mapVillageStateToExpression(state: VillageAgentState): AgentExpr
     case "thinking":
     case "reviewing":
       return "thinking";
+    case "stuck":
+      return "error";
     case "working":
     case "walking":
       return "working";
     case "celebrating":
       return "happy";
+    case "resting":
     case "idle":
     default:
       return "idle";
@@ -123,10 +128,14 @@ export function describeVillageState(
         return "在高处盯着交付质量";
       }
       return "在集市工坊埋头执行";
+    case "resting":
+      return "围着营火整理上下文与背包";
     case "thinking":
       return "站在案前拆分思路";
     case "reviewing":
       return "塔楼审阅进行中";
+    case "stuck":
+      return "在岔路口卡住，等待外援接应";
     case "celebrating":
       return "回到广场汇报喜讯";
     case "idle":

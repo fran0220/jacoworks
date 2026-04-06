@@ -10,7 +10,9 @@ import {
   TreePine,
   Users,
 } from "lucide-react";
+import CrewProgressBar from "../components/CrewProgressBar";
 import useOperations from "../hooks/useOperations";
+import type { CrewTask } from "../lib/feed";
 import { matchesTemplateSessionKey } from "../lib/team-utils";
 import type { TeamTemplate } from "../lib/teams";
 import {
@@ -23,6 +25,7 @@ import {
   getVillageAspectRatio,
   getZonePresence,
   listVillageZones,
+  type TaskCropInput,
   VILLAGE_MAP_ASSETS,
 } from "./VillageMap";
 import { useVillageBridge } from "./VillageBridge";
@@ -68,6 +71,47 @@ function renderVillageAgent(
   );
 }
 
+function mapCrewTaskToCropStatus(task: CrewTask): TaskCropInput["status"] {
+  if (task.status === "done") return "done";
+  if (task.status === "assigned") return "assigned";
+  if (task.status === "running" || task.status === "in-progress") return "running";
+  if (task.status === "failed" || task.status === "blocked") return "failed";
+  if (task.status === "timeout") return "timeout";
+  return "pending";
+}
+
+function buildCrewCropInputs(tasks: CrewTask[]): TaskCropInput[] | undefined {
+  if (tasks.length === 0) return undefined;
+
+  const pendingTask = tasks.find((task) => mapCrewTaskToCropStatus(task) === "pending");
+  const activeTask = tasks.find((task) => {
+    const status = mapCrewTaskToCropStatus(task);
+    return status === "assigned" || status === "running";
+  });
+  const deliveryTask = tasks.find((task) => {
+    const status = mapCrewTaskToCropStatus(task);
+    return status === "done" || status === "failed" || status === "timeout";
+  });
+
+  const ordered = [pendingTask, activeTask, deliveryTask].filter(
+    (task): task is CrewTask => task !== undefined,
+  );
+
+  if (ordered.length === 0) {
+    return tasks.slice(0, 3).map((task) => ({
+      taskId: task.id,
+      status: mapCrewTaskToCropStatus(task),
+      label: task.name,
+    }));
+  }
+
+  return ordered.map((task) => ({
+    taskId: task.id,
+    status: mapCrewTaskToCropStatus(task),
+    label: task.name,
+  }));
+}
+
 export default function VillageScene({
   template,
   activeSessionKey,
@@ -84,10 +128,14 @@ export default function VillageScene({
     operations.activities,
     operations.dashboardStats,
   );
+  const cropTaskInputs = useMemo(
+    () => buildCrewCropInputs(operations.crewTasks),
+    [operations.crewTasks],
+  );
 
   const cropPlots = useMemo(
-    () => buildCropPlots(operations.dashboardStats, bridge.activeCount),
-    [bridge.activeCount, operations.dashboardStats],
+    () => buildCropPlots(operations.dashboardStats, bridge.activeCount, cropTaskInputs),
+    [bridge.activeCount, cropTaskInputs, operations.dashboardStats],
   );
   const zonePresence = useMemo(
     () => getZonePresence(bridge.agents),
@@ -208,13 +256,18 @@ export default function VillageScene({
                 {villageZones.map((zone) => (
                   <div
                     key={zone.id}
-                    className="village-zone-chip"
+                    className={`village-zone-chip${bridge.zoneEffects[zone.id] ? " village-zone-chip--reserved" : ""}`}
                     style={{ left: `${zone.anchor.x}%`, top: `${zone.anchor.y}%` }}
                   >
                     <span aria-hidden="true">{zone.icon}</span>
                     <div>
                       <strong>{zone.label}</strong>
                       <em>{zone.caption}</em>
+                      {bridge.zoneEffects[zone.id] && (
+                        <em>
+                          锁定 {bridge.zoneEffects[zone.id]?.reserveCount ?? 0} 项 · {bridge.zoneEffects[zone.id]?.reservedPaths[0]}
+                        </em>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -261,6 +314,8 @@ export default function VillageScene({
                 三块农田分别代表任务拆解、执行推进与交付成熟，活跃度越高，庄稼越繁盛。
               </p>
             </div>
+
+            {operations.crewTasks.length > 0 && <CrewProgressBar tasks={operations.crewTasks} />}
           </aside>
         </div>
       </section>

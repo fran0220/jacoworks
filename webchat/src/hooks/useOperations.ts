@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { fetchAgentSummary, fetchFeedLogs, type AgentSummary, type FeedLog } from "../lib/feed";
+import {
+  fetchAgentSummary,
+  fetchCrewTasks,
+  fetchFeedLogs,
+  type AgentSummary,
+  type CrewTask,
+  type FeedLog,
+} from "../lib/feed";
 import { translateFeedLog, type TranslatedActivity } from "../lib/feed-translate";
 import type { DashboardStats } from "../lib/ops-types";
 
@@ -12,6 +19,7 @@ interface OperationsState {
   error: string | null;
   paused: boolean;
   agentSummaries: AgentSummary[];
+  crewTasks: CrewTask[];
   activities: TranslatedActivity[];
   selectedAgentId: string | null;
   selectedTaskId: string | null;
@@ -24,6 +32,7 @@ type OperationsAction =
   | { type: "set_error"; error: string | null }
   | { type: "set_paused"; paused: boolean }
   | { type: "set_agents"; agentSummaries: AgentSummary[] }
+  | { type: "set_tasks"; crewTasks: CrewTask[] }
   | { type: "set_activities"; activities: TranslatedActivity[] }
   | { type: "set_dashboard"; dashboardStats: DashboardStats | null }
   | { type: "select_agent"; agentId: string | null }
@@ -38,6 +47,7 @@ function createInitialState(): OperationsState {
     error: null,
     paused: false,
     agentSummaries: [],
+    crewTasks: [],
     activities: [],
     selectedAgentId: null,
     selectedTaskId: null,
@@ -57,6 +67,8 @@ function reducer(state: OperationsState, action: OperationsAction): OperationsSt
       return { ...state, paused: action.paused };
     case "set_agents":
       return { ...state, agentSummaries: action.agentSummaries };
+    case "set_tasks":
+      return { ...state, crewTasks: action.crewTasks };
     case "set_activities":
       return { ...state, activities: action.activities };
     case "set_dashboard":
@@ -83,6 +95,49 @@ function mergeActivities(incoming: TranslatedActivity[], existing: TranslatedAct
   }
 
   return merged.slice(0, MAX_FEED_ITEMS);
+}
+
+function isCrewMode(agentSummaries: AgentSummary[], crewTasks: CrewTask[]): boolean {
+  if (crewTasks.length > 0) return true;
+  return agentSummaries.some(
+    (agent) =>
+      agent.source === "crew" ||
+      agent.presence_state !== undefined ||
+      (agent.reserved_paths?.length ?? 0) > 0,
+  );
+}
+
+function isActiveCrewTask(task: CrewTask): boolean {
+  return (
+    task.status === "assigned" ||
+    task.status === "in-progress" ||
+    task.status === "running" ||
+    task.status === "blocked"
+  );
+}
+
+function buildDashboardStats(
+  agentSummaries: AgentSummary[],
+  crewTasks: CrewTask[],
+): DashboardStats {
+  const topScore = agentSummaries.reduce((max, item) => Math.max(max, item.total_score), 0);
+
+  if (crewTasks.length > 0) {
+    return {
+      totalTasks: crewTasks.length,
+      activeTasks: crewTasks.filter(isActiveCrewTask).length,
+      totalAgents: agentSummaries.length,
+      topScore,
+    };
+  }
+
+  const activeTasks = agentSummaries.filter((item) => item.current_sub_task !== null).length;
+  return {
+    totalTasks: activeTasks,
+    activeTasks,
+    totalAgents: agentSummaries.length,
+    topScore,
+  };
 }
 
 export interface UseOperationsResult extends OperationsState {
@@ -121,6 +176,17 @@ export default function useOperations(_workspaceKey: string): UseOperationsResul
     }
   }, []);
 
+  const loadCrewTasks = useCallback(async (silent = true) => {
+    try {
+      const crewTasks = await fetchCrewTasks();
+      dispatch({ type: "set_tasks", crewTasks });
+      return crewTasks;
+    } catch (error) {
+      if (!silent) throw error;
+      return [];
+    }
+  }, []);
+
   const loadActivities = useCallback(async (incremental = false, silent = true) => {
     try {
       const after = incremental ? activitiesRef.current[0]?.timestamp ?? undefined : undefined;
@@ -145,42 +211,45 @@ export default function useOperations(_workspaceKey: string): UseOperationsResul
     }
   }, []);
 
-  const loadDashboard = useCallback(async (silent = true) => {
-    try {
-      const agentSummaries = await fetchAgentSummary();
-      const activeTasks = agentSummaries.filter((item) => item.current_sub_task !== null).length;
-      const topScore = agentSummaries.reduce((max, item) => Math.max(max, item.total_score), 0);
-      const dashboardStats: DashboardStats = {
-        totalTasks: activeTasks,
-        activeTasks,
-        totalAgents: agentSummaries.length,
-        topScore,
-      };
-      dispatch({ type: "set_dashboard", dashboardStats });
-      return dashboardStats;
-    } catch (error) {
-      if (!silent) throw error;
-      return null;
-    }
+  const syncOpsSummary = useCallback((agentSummaries: AgentSummary[], crewTasks: CrewTask[]) => {
+    dispatch({ type: "set_dashboard", dashboardStats: buildDashboardStats(agentSummaries, crewTasks) });
+    dispatch({
+      type: "set_status",
+      enabled: true,
+      statusMessage: isCrewMode(agentSummaries, crewTasks) ? "Crew 实况" : "VM 运营数据",
+    });
   }, []);
 
   const refresh = useCallback(async () => {
     try {
       dispatch({ type: "set_error", error: null });
-      await Promise.all([loadActivities(true, false), loadAgentSummaries(false), loadDashboard(false)]);
+      const [, agentSummaries, crewTasks] = await Promise.all([
+        loadActivities(true, false),
+        loadAgentSummaries(false),
+        loadCrewTasks(false),
+      ]);
+      syncOpsSummary(agentSummaries, crewTasks);
     } catch {
       dispatch({ type: "set_error", error: "无法刷新运营数据" });
     }
-  }, [loadActivities, loadAgentSummaries, loadDashboard]);
+  }, [loadActivities, loadAgentSummaries, loadCrewTasks, syncOpsSummary]);
 
   useEffect(() => {
     let cancelled = false;
     dispatch({ type: "set_loading", loading: true });
     dispatch({ type: "reset_filters" });
-    dispatch({ type: "set_status", enabled: true, statusMessage: "VM 运营数据" });
+    dispatch({ type: "set_status", enabled: true, statusMessage: "加载运营数据…" });
     dispatch({ type: "set_error", error: null });
 
-    void Promise.all([loadActivities(false, false), loadAgentSummaries(false), loadDashboard(false)])
+    void Promise.all([
+      loadActivities(false, false),
+      loadAgentSummaries(false),
+      loadCrewTasks(false),
+    ])
+      .then(([, agentSummaries, crewTasks]) => {
+        if (cancelled) return;
+        syncOpsSummary(agentSummaries, crewTasks);
+      })
       .catch(() => {
         if (cancelled) return;
         dispatch({ type: "set_error", error: "无法获取运营数据" });
@@ -193,19 +262,23 @@ export default function useOperations(_workspaceKey: string): UseOperationsResul
     return () => {
       cancelled = true;
     };
-  }, [_workspaceKey, loadActivities, loadAgentSummaries, loadDashboard]);
+  }, [_workspaceKey, loadActivities, loadAgentSummaries, loadCrewTasks, syncOpsSummary]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (pausedRef.current || !enabledRef.current) return;
       void loadActivities(true);
-      void loadAgentSummaries();
+      void Promise.all([loadAgentSummaries(), loadCrewTasks()]).then(
+        ([agentSummaries, crewTasks]) => {
+          syncOpsSummary(agentSummaries, crewTasks);
+        },
+      );
     }, 5000);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [loadActivities, loadAgentSummaries]);
+  }, [loadActivities, loadAgentSummaries, loadCrewTasks, syncOpsSummary]);
 
   return useMemo(
     () => ({

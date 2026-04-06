@@ -622,6 +622,10 @@ prepare_pi_config_bundle() {
         prepare_inline_settings
     fi
 
+    if [[ -f "${PI_CONFIG_DIR}/pi-messenger.json" ]]; then
+        cp "${PI_CONFIG_DIR}/pi-messenger.json" "${PI_CONFIG_STAGING}/pi-messenger.json"
+    fi
+
     if [[ -f "${PI_CONFIG_DIR}/extensions/visual.ts" ]]; then
         cp "${PI_CONFIG_DIR}/extensions/visual.ts" "${PI_CONFIG_STAGING}/extensions/visual.ts"
     else
@@ -639,6 +643,10 @@ prepare_pi_config_bundle() {
     else
         prepare_inline_image_extension
     fi
+
+    if [[ -f "${PI_CONFIG_DIR}/extensions/db0-memory.mjs" ]]; then
+        cp "${PI_CONFIG_DIR}/extensions/db0-memory.mjs" "${PI_CONFIG_STAGING}/extensions/db0-memory.mjs"
+    fi
 }
 
 push_pi_config_bundle() {
@@ -646,10 +654,17 @@ push_pi_config_bundle() {
 
     incus file push "${PI_CONFIG_STAGING}/models.json" "${remote_root}/models.json"
     incus file push "${PI_CONFIG_STAGING}/settings.json" "${remote_root}/settings.json"
+    if [[ -f "${PI_CONFIG_STAGING}/pi-messenger.json" ]]; then
+        incus file push "${PI_CONFIG_STAGING}/pi-messenger.json" "${remote_root}/pi-messenger.json"
+    fi
 
     local extension
-    for extension in "${PI_CONFIG_STAGING}"/extensions/*.ts; do
-        [[ -e "${extension}" ]] || continue
+    for extension in "${PI_CONFIG_STAGING}"/extensions/*; do
+        [[ -f "${extension}" ]] || continue
+        case "${extension}" in
+            *.ts|*.js|*.mjs) ;;
+            *) continue ;;
+        esac
         incus file push "${extension}" "${remote_root}/extensions/$(basename "${extension}")"
     done
 
@@ -857,9 +872,9 @@ echo "📥 Installing Pi community packages..."
 incus exec "${BUILD_INSTANCE}" -- bash -s <<'EOF_PI_PACKAGES'
 set -euo pipefail
 packages=(
-  "pi-subagents"
-  "@tmustier/pi-agent-teams"
-  "taskplane"
+  "pi-messenger"
+  "@db0-ai/pi"
+  "@db0-ai/backends-postgres"
   "pi-web-access"
   "@apmantza/greedysearch-pi"
   "pi-mcp-adapter"
@@ -1030,9 +1045,11 @@ PY
 
 python3 -m json.tool /home/node/.pi/agent/models.json >/dev/null
 python3 -m json.tool /home/node/.pi/agent/settings.json >/dev/null
+test -f /home/node/.pi/agent/pi-messenger.json
 test -f /home/node/.pi/agent/extensions/visual.ts
 test -f /home/node/.pi/agent/extensions/cron-proxy.ts
 test -f /home/node/.pi/agent/extensions/image-gen.ts
+test -f /home/node/.pi/agent/extensions/db0-memory.mjs
 test -d /home/node/.pi/agent/skills
 runuser -u node -- env HOME=/home/node NPM_CONFIG_PREFIX=/home/node/.npm-global PATH=/home/node/.npm-global/bin:/usr/local/bin:/usr/bin:/bin \
     npm config get prefix | grep -qx "/home/node/.npm-global"

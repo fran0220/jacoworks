@@ -42,7 +42,7 @@ func (w *ConfigWriter) WritePiConfig(ctx context.Context, containerName, gateway
 		return ErrPiMigrationPending
 	}
 
-	if _, err := w.rt.Exec(ctx, containerName, "bash", "-lc", "mkdir -p /home/node/.pi/agent/extensions /home/node/.pi/agent/skills /home/node/.pi/agent/team-templates && chown -R node:node /home/node/.pi"); err != nil {
+	if _, err := w.rt.Exec(ctx, containerName, "bash", "-lc", "mkdir -p /home/node/.pi/agent/extensions /home/node/.pi/agent/skills /home/node/.pi/agent/team-templates /home/node/.pi/agent/crew-agents && chown -R node:node /home/node/.pi"); err != nil {
 		return fmt.Errorf("prepare pi config dir: %w", err)
 	}
 
@@ -72,6 +72,13 @@ func (w *ConfigWriter) WritePiConfig(ctx context.Context, containerName, gateway
 	if err := w.rt.WriteFile(ctx, containerName, filepath.ToSlash(filepath.Join(agentConfigDir, "agents.json")), agentsJSON); err != nil {
 		return fmt.Errorf("write pi agents.json: %w", err)
 	}
+	piMessengerJSON, err := readPiConfigSourceFile("pi-messenger.json")
+	if err != nil {
+		return err
+	}
+	if err := w.rt.WriteFile(ctx, containerName, filepath.ToSlash(filepath.Join(agentConfigDir, "pi-messenger.json")), piMessengerJSON); err != nil {
+		return fmt.Errorf("write pi pi-messenger.json: %w", err)
+	}
 
 	envData := []byte(renderRuntimeEnv(llm, w.gatewayURL, gatewayToken))
 	if err := w.rt.WriteFile(ctx, containerName, filepath.ToSlash(filepath.Join(agentConfigDir, "runtime.env")), envData); err != nil {
@@ -87,7 +94,7 @@ func (w *ConfigWriter) WritePiConfig(ctx context.Context, containerName, gateway
 		return fmt.Errorf("read pi extensions dir: %w", err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".ts") {
+		if entry.IsDir() || !isSupportedExtensionAsset(entry.Name()) {
 			continue
 		}
 		content, err := os.ReadFile(filepath.Join(extDir, entry.Name()))
@@ -122,7 +129,22 @@ func (w *ConfigWriter) WritePiConfig(ctx context.Context, containerName, gateway
 		return err
 	}
 
+	crewAgentsDir, err := resolvePiConfigSourcePath("crew-agents")
+	if err != nil {
+		return err
+	}
+	if _, err := w.rt.Exec(ctx, containerName, "bash", "-lc", "rm -rf /home/node/.pi/agent/crew-agents/* && mkdir -p /home/node/.pi/agent/crew-agents"); err != nil {
+		return fmt.Errorf("reset pi crew agents dir: %w", err)
+	}
+	if err := syncDirectoryTree(ctx, w.rt, containerName, crewAgentsDir, filepath.ToSlash(filepath.Join(agentConfigDir, "crew-agents"))); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func isSupportedExtensionAsset(name string) bool {
+	return strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".mjs")
 }
 
 func syncDirectoryTree(ctx context.Context, rt container.Runtime, containerName, sourceDir, targetDir string) error {
@@ -305,6 +327,10 @@ func renderRuntimeEnv(llm config.LLMConfig, gatewayURL, gatewayToken string) str
 	if gatewayURL == "" {
 		gatewayURL = "http://127.0.0.1:18700"
 	}
+	databaseURL := strings.TrimSpace(os.Getenv("GATEWAY_DATABASE_URL"))
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
 
 	lines := []string{
 		fmt.Sprintf("LLM_PROXY_URL=%s", shellEscapeEnvValue(proxyURL)),
@@ -314,6 +340,9 @@ func renderRuntimeEnv(llm config.LLMConfig, gatewayURL, gatewayToken string) str
 		fmt.Sprintf("WS_WRAPPER_TOKEN=%s", shellEscapeEnvValue(gatewayToken)),
 		fmt.Sprintf("GATEWAY_URL=%s", shellEscapeEnvValue(gatewayURL)),
 		fmt.Sprintf("GATEWAY_TOKEN=%s", shellEscapeEnvValue(gatewayToken)),
+	}
+	if databaseURL != "" {
+		lines = append(lines, fmt.Sprintf("DATABASE_URL=%s", shellEscapeEnvValue(databaseURL)))
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

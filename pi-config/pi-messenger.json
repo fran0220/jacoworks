@@ -1,0 +1,11 @@
+{
+  "autoRegister": true,
+  "crew": {
+    "coordination": "chatty",
+    "models": {
+      "planner": "proxy-gpt/gpt-5.4",
+      "worker": "proxy-gpt/gpt-5.4",
+      "reviewer": "proxy-gpt/gpt-5.4"
+    }
+  }
+}

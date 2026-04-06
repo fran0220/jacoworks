@@ -270,6 +270,9 @@ func main() {
 	}
 	mux.Handle("POST /api/files/upload", authMiddleware.Authenticate(http.HandlerFunc(filespkg.UploadHandler(nil, incusRT, containerLookup))))
 	mux.Handle("GET /api/vm/file", authMiddleware.Authenticate(http.HandlerFunc(filespkg.ReadByPathHandler(incusRT, containerLookup))))
+	mux.Handle("GET /api/crew/state", authMiddleware.Authenticate(http.HandlerFunc(crewStateHandler(incusRT, containerLookup))))
+	mux.Handle("GET /api/crew/feed", authMiddleware.Authenticate(http.HandlerFunc(crewFeedHandler(incusRT, containerLookup))))
+	mux.Handle("GET /api/crew/tasks", authMiddleware.Authenticate(http.HandlerFunc(crewTasksHandler(incusRT, containerLookup))))
 
 	mux.Handle("GET /api/cowork/container-status", authMiddleware.Authenticate(http.HandlerFunc(containerStatusHandler(s))))
 	mux.Handle("POST /api/cowork/provision", authMiddleware.Authenticate(http.HandlerFunc(selfProvisionHandler(s, ocClient, auditLogger))))

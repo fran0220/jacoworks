@@ -2620,6 +2620,11 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   max-width: 220px;
 }
 
+.village-zone-chip--reserved {
+  border-color: rgba(255, 226, 140, 0.45);
+  box-shadow: 0 0 0 1px rgba(255, 214, 102, 0.2), 0 14px 24px rgba(24, 17, 11, 0.18);
+}
+
 .village-zone-chip strong {
   display: block;
   font-size: 0.75rem;
@@ -2778,9 +2783,11 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 }
 
 .village-agent-sprite-sheet--idle,
+.village-agent-sprite-sheet--resting,
 .village-agent-sprite-sheet--thinking,
 .village-agent-sprite-sheet--working,
 .village-agent-sprite-sheet--reviewing,
+.village-agent-sprite-sheet--stuck,
 .village-agent-sprite-sheet--celebrating,
 .village-agent-sprite-sheet--walking {
   background-position-y: 0;
@@ -2790,9 +2797,18 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   --village-sprite-duration: 1.16s;
 }
 
+.village-agent-sprite-sheet--resting {
+  --village-sprite-duration: 1.28s;
+}
+
 .village-agent-sprite-sheet--thinking,
 .village-agent-sprite-sheet--reviewing {
   --village-sprite-duration: 0.92s;
+}
+
+.village-agent-sprite-sheet--stuck,
+.village-agent-sprite-sheet--error {
+  --village-sprite-duration: 0.48s;
 }
 
 .village-agent-sprite-sheet--working,
@@ -2809,6 +2825,10 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   --village-sprite-duration: 1.2s;
 }
 
+.village-agent--resting .village-agent-sprite-sheet {
+  --village-sprite-duration: 1.28s;
+}
+
 .village-agent--walking .village-agent-sprite-sheet {
   --village-sprite-duration: 0.72s;
 }
@@ -2822,6 +2842,10 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   --village-sprite-duration: 0.92s;
 }
 
+.village-agent--stuck .village-agent-sprite-sheet {
+  --village-sprite-duration: 0.48s;
+}
+
 .village-agent--celebrating .village-agent-sprite-sheet {
   --village-sprite-duration: 0.62s;
 }
@@ -2831,14 +2855,23 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   z-index: 4;
 }
 
+.village-agent--resting,
 .village-agent--working,
 .village-agent--thinking,
 .village-agent--reviewing {
   z-index: 5;
 }
 
+.village-agent--stuck {
+  z-index: 6;
+}
+
 .village-agent--celebrating .village-agent-bubble {
   box-shadow: 0 0 0 3px rgba(255, 228, 160, 0.35), 0 14px 22px rgba(43, 28, 17, 0.16);
+}
+
+.village-agent--stuck .village-agent-bubble {
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.3), 0 14px 22px rgba(67, 22, 22, 0.18);
 }
 
 .village-agent-badge {
@@ -2857,6 +2890,163 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
   font-size: 0.76rem;
   line-height: 1.55;
   color: #765840;
+}
+
+.crew-progress-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 1.2rem;
+  background: linear-gradient(180deg, rgba(255, 249, 238, 0.96), rgba(247, 237, 215, 0.92));
+  border: 1px solid rgba(191, 150, 86, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 14px 32px rgba(109, 74, 34, 0.08);
+}
+
+.crew-progress-head,
+.crew-progress-copy,
+.crew-progress-toggle,
+.crew-graph-row-head,
+.crew-graph-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.crew-progress-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9a6c2f;
+}
+
+.crew-progress-head strong {
+  font-size: 0.9rem;
+  color: #49311a;
+}
+
+.crew-progress-copy {
+  font-size: 0.76rem;
+  color: #6e4f2c;
+}
+
+.crew-progress-copy span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.crew-progress-track {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: rgba(137, 101, 51, 0.14);
+  overflow: hidden;
+}
+
+.crew-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #df9f44, #87b84d);
+}
+
+.crew-progress-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.crew-progress-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.45rem;
+  padding: 0.58rem 0.72rem;
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: #6e4f2c;
+}
+
+.crew-progress-stat strong {
+  font-size: 1rem;
+  color: #322114;
+}
+
+.crew-progress-stat--done {
+  background: rgba(134, 239, 172, 0.24);
+}
+
+.crew-progress-stat--blocked {
+  background: rgba(252, 165, 165, 0.2);
+}
+
+.crew-progress-toggle {
+  width: 100%;
+  padding: 0.68rem 0.8rem;
+  border-radius: 0.95rem;
+  border: 1px solid rgba(137, 101, 51, 0.16);
+  background: rgba(255, 255, 255, 0.7);
+  color: #5f4324;
+}
+
+.crew-progress-toggle small {
+  font-size: 0.72rem;
+  color: #8b6d48;
+}
+
+.crew-graph-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.crew-graph-row {
+  padding: 0.72rem 0.8rem;
+  border-radius: 0.95rem;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(137, 101, 51, 0.12);
+}
+
+.crew-graph-row--done {
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.crew-graph-row--blocked {
+  border-color: rgba(239, 68, 68, 0.24);
+}
+
+.crew-graph-row-head strong {
+  flex: 1;
+  font-size: 0.82rem;
+  color: #372516;
+}
+
+.crew-graph-row-head em,
+.crew-graph-row-meta {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: #7d6040;
+}
+
+.crew-graph-wave {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  padding: 0.16rem 0.44rem;
+  border-radius: 999px;
+  background: rgba(223, 159, 68, 0.18);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #8a5d26;
+}
+
+.crew-graph-row-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .village-legend-grid {
@@ -6333,6 +6523,20 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 .presence-dot--working { background: #22c55e; }
 .presence-dot--thinking { background: #f59e0b; }
 .presence-dot--idle { background: #d1d5db; }
+.presence-dot--stuck {
+  background: #ef4444;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+  animation: presence-dot-alert 1.2s ease-out infinite;
+}
+
+@keyframes presence-dot-alert {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+}
 
 .presence-name {
   font-size: 0.78rem;
@@ -6344,6 +6548,17 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 .presence-status {
   font-size: 0.72rem;
   color: var(--text-secondary);
+}
+
+.presence-reserve {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #315d9a;
+  font-size: 0.68rem;
 }
 
 .ops-sidebar-body {

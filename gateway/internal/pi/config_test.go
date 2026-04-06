@@ -203,7 +203,7 @@ func TestNormalizePrimaryModel(t *testing.T) {
 }
 
 func TestRenderRuntimeEnv_RendersAllFieldsAndDefaults(t *testing.T) {
-	t.Parallel()
+	t.Setenv("DATABASE_URL", "postgresql://pi-user:secret@db.example.com:5432/jacoworks")
 
 	llm := configpkg.LLMConfig{
 		ProxyURL:  "https://proxy.example.com/v1\n",
@@ -221,6 +221,7 @@ func TestRenderRuntimeEnv_RendersAllFieldsAndDefaults(t *testing.T) {
 		"WS_WRAPPER_TOKEN=ticketline",
 		"GATEWAY_URL=https://gateway.example.com",
 		"GATEWAY_TOKEN=ticketline",
+		"DATABASE_URL=postgresql://pi-user:secret@db.example.com:5432/jacoworks",
 		"",
 	}, "\n")
 	if got != want {
@@ -286,6 +287,9 @@ func TestWritePiConfig_SyncsSkillsRecursively(t *testing.T) {
 	if !rt.hasExec("mkdir", "-p", "/home/node/.pi/agent/skills/办公/data-analysis") {
 		t.Fatalf("WritePiConfig() did not preserve nested unicode skill directories")
 	}
+	if !rt.hasExec("bash", "-lc", "rm -rf /home/node/.pi/agent/crew-agents/* && mkdir -p /home/node/.pi/agent/crew-agents") {
+		t.Fatalf("WritePiConfig() did not reset the VM crew agents directory")
+	}
 
 	assertSyncedFile(t, rt, "skills/README.md")
 	assertSyncedFile(t, rt, "skills/team-builder/SKILL.md")
@@ -293,6 +297,9 @@ func TestWritePiConfig_SyncsSkillsRecursively(t *testing.T) {
 	assertSyncedFile(t, rt, "skills/办公/data-analysis/SKILL.md")
 	assertSyncedFile(t, rt, "skills/创作/slide-deck/requirements.txt")
 	assertSyncedTargetFile(t, rt, "pi-config/extensions/cron-proxy.ts", filepath.ToSlash(filepath.Join(agentConfigDir, "extensions", "cron-proxy.ts")))
+	assertSyncedTargetFile(t, rt, "pi-config/extensions/db0-memory.mjs", filepath.ToSlash(filepath.Join(agentConfigDir, "extensions", "db0-memory.mjs")))
+	assertSyncedTargetFile(t, rt, "pi-config/pi-messenger.json", filepath.ToSlash(filepath.Join(agentConfigDir, "pi-messenger.json")))
+	assertSyncedTargetFile(t, rt, "pi-config/crew-agents/builder-pod-planner.md", filepath.ToSlash(filepath.Join(agentConfigDir, "crew-agents", "builder-pod-planner.md")))
 }
 
 func TestShellEscapeEnvValue(t *testing.T) {
