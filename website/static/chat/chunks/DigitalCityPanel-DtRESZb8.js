@@ -1,4 +1,4 @@
-import{c as ju,h as v1,r as Fi,p as Wg,j as pt,R as I2,W as c1,U as E2,e as A2,T as M2,A as C2}from"../chat.js";import{m as b1}from"./VillageAgent-DnM4X9eh.js";/**
+import{c as ju,g as v1,r as Fi,p as Wg,j as pt,R as I2,W as c1,U as E2,b as A2,T as M2,A as C2}from"../chat.js";import{m as b1}from"./VillageAgent-Lq5k1mmP.js";/**
  * @license lucide-react v0.474.0 - ISC
  *
  * This source code is licensed under the ISC license.
