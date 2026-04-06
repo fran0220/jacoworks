@@ -114,6 +114,8 @@ func main() {
 				cfg.PostHog.Endpoint = setting.Value
 			case "oc_gateway_url":
 				cfg.OcGatewayURL = setting.Value
+			case "mapbox_token":
+				cfg.MapboxToken = setting.Value
 			}
 		}
 		cfg.UpdateLLM(llm)

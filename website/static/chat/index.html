@@ -11,6 +11,8 @@
 <body>
   <div id="root"></div>
   <script>
+    // Dev mode: inject from Vite env (see .env.local)
+    // Production: Website Rust template overwrites these in chat.html
     window.__GATEWAY_URL__ = window.__GATEWAY_URL__ || "";
     window.__AUTH_TOKEN__ = window.__AUTH_TOKEN__ || "";
     window.__USER_NAME__ = window.__USER_NAME__ || "";

@@ -9,6 +9,10 @@ export type View = "workbench" | "tasks" | "team" | "observe";
 
 export type OpsLens = "overview" | "timeline" | "board";
 
+export type AgentExpression = "idle" | "thinking" | "speaking" | "working" | "happy" | "error";
+
+export type AgentPresenceTone = "idle" | "thinking" | "working";
+
 export type FileCategory =
   | "image"
   | "pdf"

@@ -272,6 +272,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("GATEWAY_POSTHOG_ENDPOINT"); v != "" {
 		cfg.PostHog.Endpoint = v
 	}
+	if v := os.Getenv("GATEWAY_MAPBOX_TOKEN"); v != "" {
+		cfg.MapboxToken = v
+	}
 	if v := os.Getenv("GATEWAY_OC_GATEWAY_URL"); v != "" {
 		cfg.OcGatewayURL = v
 	}

@@ -1,11 +1,21 @@
 import { Activity, Menu, SlidersHorizontal } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { AgentSummary } from "../lib/feed";
 import type { DashboardStats } from "../lib/ops-types";
 import type { TranslatedActivity } from "../lib/feed-translate";
+import {
+  getStoredWorkspaceSpritePackId,
+  getWorkspaceAgentId,
+  resolveSpritePackIdForWorkspace,
+  subscribeSpritePackChanges,
+} from "../lib/sprite-packs";
+import { fetchProfileDetail } from "../lib/teams";
 import type { ChatMessage, FileArtifact, StreamBlock } from "../types";
+import useAgentExpression from "../hooks/useAgentExpression";
 import ChatView from "./ChatView";
 import Composer from "./Composer";
 import OpsSidebar from "./OpsSidebar";
+import SpriteAvatarPanel from "./SpriteAvatarPanel";
 import TeamPresenceBar from "./TeamPresenceBar";
 import ThreadListPanel from "./ThreadListPanel";
 import WebPreviewPane from "./WebPreviewPane";
@@ -74,6 +84,8 @@ function getConnLabel(state: ConnState): string {
   return "连接中断";
 }
 
+const BUILTIN_AGENT_IDS = new Set(["default", "researcher", "coder", "writer"]);
+
 export default function WorkbenchView({
   ui,
   workspace,
@@ -86,6 +98,14 @@ export default function WorkbenchView({
   ops: OperationsDomain;
 }) {
   const openTasksView = () => ui.setView?.("tasks");
+  const [spritePackId, setSpritePackId] = useState(() =>
+    resolveSpritePackIdForWorkspace(workspace.activeWorkspaceKey),
+  );
+  const agentExpression = useAgentExpression({
+    streaming: conversation.streaming,
+    blocks: conversation.blocks,
+    error: conversation.error,
+  });
   const showPreviewModal = ui.compact && ui.rightPane === "preview" && Boolean(ui.previewArtifact);
   const closeSidebar = () => {
     if (ui.compact && ui.sidebarOpen) {
@@ -97,6 +117,26 @@ export default function WorkbenchView({
       ui.toggleOpsPanel?.();
     }
   };
+
+  useEffect(() => {
+    const syncSpritePack = () => {
+      setSpritePackId(resolveSpritePackIdForWorkspace(workspace.activeWorkspaceKey));
+    };
+
+    syncSpritePack();
+    const unsubscribe = subscribeSpritePackChanges(syncSpritePack);
+    const agentId = getWorkspaceAgentId(workspace.activeWorkspaceKey);
+    const needsProfileLookup =
+      Boolean(agentId) &&
+      !BUILTIN_AGENT_IDS.has(agentId ?? "") &&
+      !getStoredWorkspaceSpritePackId(workspace.activeWorkspaceKey);
+
+    if (needsProfileLookup && agentId) {
+      void fetchProfileDetail(agentId).catch(() => undefined);
+    }
+
+    return unsubscribe;
+  }, [workspace.activeWorkspaceKey]);
 
   return (
     <div className="workbench-shell">
@@ -178,6 +218,7 @@ export default function WorkbenchView({
             onSend={conversation.send}
             onAbort={conversation.abort}
             agents={ops.agentSummaries}
+            avatarSlot={<SpriteAvatarPanel spritePackId={spritePackId} expression={agentExpression} />}
           />
         </section>
 

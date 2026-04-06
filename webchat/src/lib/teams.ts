@@ -1,4 +1,10 @@
 import { AUTH_TOKEN, DEFAULT_SESSION_KEY, GATEWAY_URL } from "./config";
+import {
+  buildProfileWorkspaceKey,
+  cacheProfileSpritePackAssignments,
+  maybeSpritePackId,
+  resolveSpritePackId,
+} from "./sprite-packs";
 
 export interface TemplateThemeRole {
   displayName: string;
@@ -40,6 +46,7 @@ export interface TeamTemplateMember {
   workspace: string;
   model: string;
   kickoff: string;
+  spritePackId?: string;
 }
 
 export interface TeamTemplate {
@@ -75,6 +82,7 @@ export interface AgentProfile {
   description: string;
   icon: string;
   sessionKey: string;
+  spritePackId?: string;
 }
 
 export interface ProfileDetail {
@@ -87,6 +95,7 @@ export interface ProfileDetail {
   skills: string[];
   workspace: string;
   files: Record<string, string>;
+  spritePackId: string;
 }
 
 export interface TeamsResponse {
@@ -106,10 +115,16 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function normalizeTeamMember(payload: unknown): TeamTemplateMember | null {
   const rec = asRecord(payload);
   const name = asText(rec.name) || asText(rec.id);
   if (!name) return null;
+
+  const spritePackId = maybeSpritePackId(asText(rec.spritePackId));
 
   return {
     name,
@@ -118,6 +133,7 @@ function normalizeTeamMember(payload: unknown): TeamTemplateMember | null {
     workspace: asText(rec.workspace),
     model: asText(rec.model),
     kickoff: asText(rec.kickoff),
+    spritePackId: spritePackId ?? undefined,
   };
 }
 
@@ -164,6 +180,8 @@ function normalizeProfile(payload: unknown): AgentProfile | null {
   const name = asText(rec.name);
   if (!name) return null;
 
+  const spritePackId = maybeSpritePackId(asText(rec.spritePackId));
+
   return {
     type: "agent",
     name,
@@ -171,6 +189,32 @@ function normalizeProfile(payload: unknown): AgentProfile | null {
     description: asText(rec.description),
     icon: asText(rec.icon) || "bot",
     sessionKey: asText(rec.sessionKey) || `agent:${name}:main`,
+    spritePackId: spritePackId ?? undefined,
+  };
+}
+
+function normalizeProfileDetail(payload: unknown): ProfileDetail {
+  const rec = asRecord(payload);
+  const name = asText(rec.name);
+  const filesRecord = asRecord(rec.files);
+
+  return {
+    type: "agent",
+    name,
+    displayName: asText(rec.displayName) || name,
+    description: asText(rec.description),
+    icon: asText(rec.icon) || "bot",
+    model: asText(rec.model) || "proxy/gpt-5.4",
+    skills: Array.isArray(rec.skills) ? rec.skills.map(asText).filter(Boolean) : [],
+    workspace: asText(rec.workspace),
+    files: Object.fromEntries(
+      Object.entries(filesRecord).flatMap(([key, value]) => {
+        const normalizedKey = asText(key);
+        if (!normalizedKey) return [];
+        return [[normalizedKey, asString(value)]];
+      }),
+    ),
+    spritePackId: resolveSpritePackId(asText(rec.spritePackId)),
   };
 }
 
@@ -198,11 +242,14 @@ function parseTeamsResponse(payload: unknown): TeamsResponse {
       : [];
   const profilesRaw = Array.isArray(rec.profiles) ? rec.profiles : [];
 
+  const profiles = profilesRaw
+    .map(normalizeProfile)
+    .filter((item): item is AgentProfile => Boolean(item));
+  cacheProfileSpritePackAssignments(profiles);
+
   return {
     activeSessionKey: asText(rec.activeSessionKey) || DEFAULT_SESSION_KEY,
-    profiles: profilesRaw
-      .map(normalizeProfile)
-      .filter((item): item is AgentProfile => Boolean(item)),
+    profiles,
     templates: templatesRaw
       .map(normalizeTemplate)
       .filter((item): item is TeamTemplate => Boolean(item)),
@@ -266,19 +313,37 @@ export async function fetchAgentPresets(): Promise<AgentPreset[]> {
 
 export async function fetchProfiles(): Promise<AgentProfile[]> {
   const payload = await apiFetch<unknown[]>("/api/profiles");
-  return (Array.isArray(payload) ? payload : [])
+  const profiles = (Array.isArray(payload) ? payload : [])
     .map(normalizeProfile)
     .filter((p): p is AgentProfile => Boolean(p));
+  cacheProfileSpritePackAssignments(profiles);
+  return profiles;
 }
 
 export async function fetchProfileDetail(name: string): Promise<ProfileDetail> {
-  return apiFetch<ProfileDetail>(`/api/profiles/${encodeURIComponent(name)}`);
+  const payload = await apiFetch<unknown>(`/api/profiles/${encodeURIComponent(name)}`);
+  const detail = normalizeProfileDetail(payload);
+  cacheProfileSpritePackAssignments([
+    {
+      name: detail.name,
+      sessionKey: buildProfileWorkspaceKey(detail.name),
+      spritePackId: detail.spritePackId,
+    },
+  ]);
+  return detail;
 }
 
 export async function createProfile(
   detail: Omit<ProfileDetail, "type">,
 ): Promise<void> {
   await apiFetch("/api/profiles", { method: "POST", body: detail });
+  cacheProfileSpritePackAssignments([
+    {
+      name: detail.name,
+      sessionKey: buildProfileWorkspaceKey(detail.name),
+      spritePackId: detail.spritePackId,
+    },
+  ]);
 }
 
 export async function updateProfile(
@@ -289,6 +354,13 @@ export async function updateProfile(
     method: "PUT",
     body: detail,
   });
+  cacheProfileSpritePackAssignments([
+    {
+      name,
+      sessionKey: buildProfileWorkspaceKey(name),
+      spritePackId: detail.spritePackId,
+    },
+  ]);
 }
 
 export async function deleteProfile(name: string): Promise<void> {
