@@ -29,6 +29,7 @@ type AgentPreset struct {
 	Label        string  `json:"label"`
 	Icon         string  `json:"icon"`
 	WorkspaceKey string  `json:"workspaceKey"`
+	SpritePackId string  `json:"spritePackId,omitempty"`
 	SystemPrompt *string `json:"systemPrompt"`
 }
 
@@ -272,6 +273,7 @@ func LoadAgentPresets() ([]AgentPreset, error) {
 		preset.Label = strings.TrimSpace(preset.Label)
 		preset.Icon = strings.TrimSpace(preset.Icon)
 		preset.WorkspaceKey = strings.TrimSpace(preset.WorkspaceKey)
+		preset.SpritePackId = strings.TrimSpace(preset.SpritePackId)
 		if preset.ID == "" || preset.WorkspaceKey == "" {
 			continue
 		}

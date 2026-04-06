@@ -42,10 +42,16 @@ type WSHandler struct {
 	ticketStore *TicketStore
 	backend     VMBackend
 	onEvent     EventCallback
+	onAgentEnd  AgentEndCallback
 }
 
 func NewWSHandler(s *store.Store, ticketStore *TicketStore, backend VMBackend, onEvent EventCallback) *WSHandler {
 	return &WSHandler{store: s, ticketStore: ticketStore, backend: backend, onEvent: onEvent}
+}
+
+// SetAgentEndCallback sets the callback invoked when Pi sends an agent_end event.
+func (h *WSHandler) SetAgentEndCallback(cb AgentEndCallback) {
+	h.onAgentEnd = cb
 }
 
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -102,11 +108,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	relay(client, upstream, userID)
+	relay(client, upstream, userID, h.onAgentEnd)
 }
 
 // relay runs two goroutines forwarding frames in each direction.
-func relay(client, upstream *websocket.Conn, userID string) {
+func relay(client, upstream *websocket.Conn, userID string, onAgentEnd AgentEndCallback) {
 	var once sync.Once
 	done := make(chan struct{})
 	shutdown := func() { once.Do(func() { close(done) }) }
@@ -142,6 +148,12 @@ func relay(client, upstream *websocket.Conn, userID string) {
 			}
 			if outData == nil {
 				continue
+			}
+			if onAgentEnd != nil && isAgentEndEvent(data) {
+				sessionID := extractSessionID(data)
+				if sessionID != "" {
+					go onAgentEnd(userID, sessionID)
+				}
 			}
 			if outType == websocket.TextMessage && len(outData) < 512 {
 				log.Debug().Str("user_id", userID).Str("frame", string(data)).Msg("ws relay: upstream→client")
@@ -235,6 +247,24 @@ func isHeartbeat(msgType int, data []byte) bool {
 		}
 	}
 	return false
+}
+
+func isAgentEndEvent(data []byte) bool {
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return false
+	}
+	kind, _ := payload["type"].(string)
+	return kind == "agent_end"
+}
+
+func extractSessionID(data []byte) string {
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+	sessionID, _ := payload["session_id"].(string)
+	return strings.TrimSpace(sessionID)
 }
 
 func isNormalClose(err error) bool {

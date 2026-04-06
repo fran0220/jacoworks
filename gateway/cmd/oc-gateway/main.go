@@ -34,7 +34,10 @@ import (
 	incuspkg "github.com/fran0220/jacoworks/gateway/internal/incus"
 	"github.com/fran0220/jacoworks/gateway/internal/middleware"
 	pipkg "github.com/fran0220/jacoworks/gateway/internal/pi"
+	"github.com/fran0220/jacoworks/gateway/internal/scheduler"
 	"github.com/fran0220/jacoworks/gateway/internal/store"
+	taskpkg "github.com/fran0220/jacoworks/gateway/internal/task"
+	workflowpkg "github.com/fran0220/jacoworks/gateway/internal/workflow"
 )
 
 var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -193,6 +196,19 @@ func main() {
 
 	wsHandler := agent.NewWSHandler(s, wsTicketStore, ocClient, func(userID, event string, properties map[string]interface{}) {})
 
+	// Initialize task scheduler
+	taskStore := taskpkg.NewStore(s.Pool())
+	workflowStore := workflowpkg.NewStore(s.Pool())
+	wfRunner := workflowpkg.NewRunner(workflowStore, taskStore)
+	eventBus := scheduler.NewEventBus()
+	dispatcher := scheduler.NewDispatcher(s, ocClient, taskStore)
+	watchdog := scheduler.NewWatchdog(taskStore, eventBus)
+	sched := scheduler.New(taskStore, wfRunner, dispatcher, watchdog, eventBus)
+
+	wsHandler.SetAgentEndCallback(func(userID, sessionKey string) {
+		sched.OnAgentEnd(context.Background(), userID, sessionKey)
+	})
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/chat", http.StatusFound)
@@ -229,6 +245,15 @@ func main() {
 	mux.Handle("POST /api/cron/jobs", authMiddleware.Authenticate(http.HandlerFunc(createCronJobHandler(s))))
 	mux.Handle("GET /api/cron/jobs", authMiddleware.Authenticate(http.HandlerFunc(listCronJobsHandler(s))))
 	mux.Handle("DELETE /api/cron/jobs/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteCronJobHandler(s))))
+
+	// Task orchestration
+	mux.Handle("POST /api/tasks", authMiddleware.Authenticate(http.HandlerFunc(createTaskHandler(taskStore, eventBus))))
+	mux.Handle("GET /api/tasks", authMiddleware.Authenticate(http.HandlerFunc(listTasksHandler(taskStore))))
+	mux.Handle("PATCH /api/tasks/{id}", authMiddleware.Authenticate(http.HandlerFunc(updateTaskHandler(taskStore, eventBus))))
+	mux.Handle("POST /api/workflows", authMiddleware.Authenticate(http.HandlerFunc(createWorkflowHandler(workflowStore))))
+	mux.Handle("GET /api/workflows", authMiddleware.Authenticate(http.HandlerFunc(listWorkflowsHandler(workflowStore))))
+	mux.Handle("PUT /api/workflows/{id}", authMiddleware.Authenticate(http.HandlerFunc(updateWorkflowHandler(workflowStore))))
+	mux.Handle("GET /api/activity/stream", authMiddleware.Authenticate(http.HandlerFunc(activityStreamHandler(eventBus))))
 
 	mux.Handle("POST /api/oc/ws-ticket", authMiddleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wsTicketStore.IssueTicket(w, r)
@@ -306,6 +331,11 @@ func main() {
 		WriteTimeout:      0,
 		IdleTimeout:       120 * time.Second,
 	}
+
+	// Start scheduler
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	go sched.Run(schedCtx)
 
 	go func() {
 		time.Sleep(10 * time.Second)
@@ -385,9 +415,9 @@ type chatPageData struct {
 	PiWSPort    int
 	PiVncURL    string
 	PostHogKey  string
-	PostHogHost  string
-	MapboxToken  string
-	CacheBust    string
+	PostHogHost string
+	MapboxToken string
+	CacheBust   string
 }
 
 func loginPageHandler(tpl *template.Template) http.HandlerFunc {
@@ -438,9 +468,9 @@ func chatPageHandler(s *store.Store, cfg *config.Config, tpl *template.Template,
 			PiWSPort:    piWSPort,
 			PiVncURL:    piVncURL,
 			PostHogKey:  cfg.PostHog.APIKey,
-			PostHogHost:  cfg.PostHog.Endpoint,
-			MapboxToken:  cfg.MapboxToken,
-			CacheBust:    cacheBust,
+			PostHogHost: cfg.PostHog.Endpoint,
+			MapboxToken: cfg.MapboxToken,
+			CacheBust:   cacheBust,
 		}); err != nil {
 			log.Error().Err(err).Str("user_id", user.ID).Msg("render chat page")
 			http.Error(w, "failed to render chat page", http.StatusInternalServerError)
@@ -1140,6 +1170,303 @@ func updateTemplateHandler(_ *store.Store, _ *pipkg.Client, _ *audit.Logger) htt
 func deleteTemplateHandler(_ *store.Store, _ *pipkg.Client, _ *audit.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "template management not yet supported for Pi VM"})
+	}
+}
+
+// ── Task orchestration handlers ───────────────────────────────
+
+func createTaskHandler(ts *taskpkg.Store, bus *scheduler.EventBus) http.HandlerFunc {
+	type createRequest struct {
+		Type       string `json:"type"`
+		AgentName  string `json:"agent_name"`
+		Prompt     string `json:"prompt"`
+		Priority   int    `json:"priority"`
+		MaxRetries int    `json:"max_retries"`
+		TimeoutSec int    `json:"timeout_sec"`
+		WorkflowID string `json:"workflow_id"`
+		Stage      string `json:"stage"`
+		SessionID  string `json:"session_id"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		var req createRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if strings.TrimSpace(req.Prompt) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt is required"})
+			return
+		}
+		t, err := ts.Create(r.Context(), user.ID, taskpkg.CreateTaskRequest{
+			Type:       req.Type,
+			AgentName:  req.AgentName,
+			Prompt:     req.Prompt,
+			Priority:   req.Priority,
+			MaxRetries: req.MaxRetries,
+			TimeoutSec: req.TimeoutSec,
+			WorkflowID: req.WorkflowID,
+			Stage:      req.Stage,
+			SessionID:  req.SessionID,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create task"})
+			return
+		}
+
+		if bus != nil {
+			bus.Publish(user.ID, scheduler.ActivityEvent{
+				Kind:      "task_create",
+				TaskID:    t.ID,
+				AgentID:   t.AgentName,
+				AgentName: t.AgentName,
+				Detail:    t.Prompt,
+			})
+		}
+
+		writeJSON(w, http.StatusCreated, t)
+	}
+}
+
+func listTasksHandler(ts *taskpkg.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		var statuses []string
+		if raw := strings.TrimSpace(r.URL.Query().Get("status")); raw != "" {
+			for _, item := range strings.Split(raw, ",") {
+				item = strings.TrimSpace(item)
+				if item != "" {
+					statuses = append(statuses, item)
+				}
+			}
+		}
+		tasks, err := ts.ListByUser(r.Context(), user.ID, statuses)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list tasks"})
+			return
+		}
+		if tasks == nil {
+			tasks = []taskpkg.Task{}
+		}
+		writeJSON(w, http.StatusOK, tasks)
+	}
+}
+
+func updateTaskHandler(ts *taskpkg.Store, bus *scheduler.EventBus) http.HandlerFunc {
+	type updateRequest struct {
+		Status string  `json:"status"`
+		Result *string `json:"result"`
+		Error  *string `json:"error"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		taskID := r.PathValue("id")
+		if _, err := ts.Get(r.Context(), user.ID, taskID); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+			return
+		}
+
+		var req updateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if req.Status == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "status is required"})
+			return
+		}
+
+		fields := map[string]any{}
+		if req.Result != nil {
+			fields["result"] = *req.Result
+		}
+		if req.Error != nil {
+			fields["error"] = *req.Error
+		}
+		switch req.Status {
+		case taskpkg.StatusRunning:
+			fields["started_at"] = time.Now().UTC()
+		case taskpkg.StatusDone, taskpkg.StatusFailed, taskpkg.StatusTimeout:
+			fields["finished_at"] = time.Now().UTC()
+		}
+
+		if err := ts.UpdateStatus(r.Context(), taskID, req.Status, fields); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		updated, err := ts.Get(r.Context(), user.ID, taskID)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+			return
+		}
+		if bus != nil {
+			if eventKind := taskEventKindForStatus(updated.Status); eventKind != "" {
+				bus.Publish(user.ID, scheduler.ActivityEvent{
+					Kind:      eventKind,
+					TaskID:    updated.ID,
+					AgentID:   updated.AgentName,
+					AgentName: updated.AgentName,
+					Detail:    updated.Prompt,
+				})
+			}
+		}
+		writeJSON(w, http.StatusOK, updated)
+	}
+}
+
+func createWorkflowHandler(ws *workflowpkg.Store) http.HandlerFunc {
+	type createRequest struct {
+		Name   string              `json:"name"`
+		Stages []workflowpkg.Stage `json:"stages"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		var req createRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+			return
+		}
+		wf, err := ws.Create(r.Context(), user.ID, req.Name, req.Stages)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create workflow"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, wf)
+	}
+}
+
+func listWorkflowsHandler(ws *workflowpkg.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		workflows, err := ws.ListByUser(r.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list workflows"})
+			return
+		}
+		if workflows == nil {
+			workflows = []workflowpkg.Workflow{}
+		}
+		writeJSON(w, http.StatusOK, workflows)
+	}
+}
+
+func updateWorkflowHandler(ws *workflowpkg.Store) http.HandlerFunc {
+	type updateRequest struct {
+		Name    string              `json:"name"`
+		Stages  []workflowpkg.Stage `json:"stages"`
+		Enabled bool                `json:"enabled"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		var req updateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		wf, err := ws.Update(r.Context(), user.ID, r.PathValue("id"), req.Name, req.Stages, req.Enabled)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update workflow"})
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
+func activityStreamHandler(bus *scheduler.EventBus) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		ch, unsubscribe := bus.Subscribe(user.ID)
+		defer unsubscribe()
+
+		pingTicker := time.NewTicker(15 * time.Second)
+		defer pingTicker.Stop()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case event, ok := <-ch:
+				if !ok {
+					return
+				}
+				data, err := json.Marshal(event)
+				if err != nil {
+					log.Warn().Err(err).Msg("activity stream: marshal event failed")
+					continue
+				}
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+			case <-pingTicker.C:
+				_, _ = fmt.Fprint(w, ": ping\n\n")
+				flusher.Flush()
+			}
+		}
+	}
+}
+
+func taskEventKindForStatus(status string) string {
+	switch status {
+	case taskpkg.StatusAssigned:
+		return "task_claim"
+	case taskpkg.StatusRunning:
+		return "task_start"
+	case taskpkg.StatusDone:
+		return "task_complete"
+	case taskpkg.StatusFailed:
+		return "task_failed"
+	case taskpkg.StatusTimeout:
+		return "task_timeout"
+	default:
+		return ""
 	}
 }
 

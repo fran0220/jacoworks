@@ -17,6 +17,9 @@ func TestTranslatePiToOC_TextDelta(t *testing.T) {
 	assertEq(t, asString(m["event"]), "agent")
 	payload := asMap(m["payload"])
 	assertEq(t, asString(payload["stream"]), "text")
+	if _, ok := payload["sender"]; ok {
+		t.Fatal("expected no sender field when Pi event does not contain sender attribution")
+	}
 	data := asMap(payload["data"])
 	assertEq(t, asString(data["delta"]), "hello")
 }
@@ -55,6 +58,12 @@ func TestTranslatePiToOC_ToolExecutionStart(t *testing.T) {
 	assertEq(t, asString(data["phase"]), "start")
 	assertEq(t, asString(data["toolCallId"]), "tc1")
 	assertEq(t, asString(data["name"]), "bash")
+	if _, ok := data["sender"]; ok {
+		t.Fatal("expected no sender field when Pi event does not contain sender attribution")
+	}
+	if _, ok := payload["sender"]; ok {
+		t.Fatal("expected no sender field when Pi event does not contain sender attribution")
+	}
 }
 
 func TestTranslatePiToOC_ToolExecutionUpdate(t *testing.T) {
@@ -100,6 +109,83 @@ func TestTranslatePiToOC_AgentEnd_Normal(t *testing.T) {
 	assertEq(t, asString(m["event"]), "chat")
 	payload := asMap(m["payload"])
 	assertEq(t, asString(payload["state"]), "final")
+	if _, ok := payload["sender"]; ok {
+		t.Fatal("expected no sender field when Pi event does not contain sender attribution")
+	}
+}
+
+func TestTranslatePiToOC_SenderPassthrough(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name          string
+		input         string
+		wantAgentID   string
+		wantAgentName string
+		wantRole      string
+	}
+
+	cases := []testCase{
+		{
+			name:          "text_delta",
+			input:         `{"type":"message_update","agentId":"planner","agentName":"Planner","agentRole":"planner","assistantMessageEvent":{"type":"text_delta","delta":"hello"}}`,
+			wantAgentID:   "planner",
+			wantAgentName: "Planner",
+			wantRole:      "planner",
+		},
+		{
+			name:          "thinking_delta",
+			input:         `{"type":"message_update","agentId":"analyst","agentName":"Analyst","agentRole":"researcher","assistantMessageEvent":{"type":"thinking_delta","delta":"reasoning"}}`,
+			wantAgentID:   "analyst",
+			wantAgentName: "Analyst",
+			wantRole:      "researcher",
+		},
+		{
+			name:          "tool_execution_start",
+			input:         `{"type":"tool_execution_start","agentId":"secretary","agentName":"Secretary","agentRole":"planner","toolCallId":"tc1","toolName":"bash","args":{"command":"ls"}}`,
+			wantAgentID:   "secretary",
+			wantAgentName: "Secretary",
+			wantRole:      "planner",
+		},
+		{
+			name:          "tool_execution_update",
+			input:         `{"type":"tool_execution_update","agentId":"designer","agentName":"Designer","agentRole":"executor","toolCallId":"tc2","toolName":"read","partialResult":"partial"}`,
+			wantAgentID:   "designer",
+			wantAgentName: "Designer",
+			wantRole:      "executor",
+		},
+		{
+			name:          "tool_execution_end",
+			input:         `{"type":"tool_execution_end","agentId":"writer","agentName":"Writer","agentRole":"writer","toolCallId":"tc3","toolName":"write","result":"ok"}`,
+			wantAgentID:   "writer",
+			wantAgentName: "Writer",
+			wantRole:      "writer",
+		},
+		{
+			name:          "agent_end",
+			input:         `{"type":"agent_end","agentId":"leader","agentName":"Leader","agentRole":"planner"}`,
+			wantAgentID:   "leader",
+			wantAgentName: "Leader",
+			wantRole:      "planner",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := TranslatePiToOC([]byte(tc.input))
+			assertNoErr(t, err)
+
+			m := mustParseJSON(t, got)
+			payload := asMap(m["payload"])
+			sender := asMap(payload["sender"])
+
+			assertEq(t, asString(sender["agentId"]), tc.wantAgentID)
+			assertEq(t, asString(sender["agentName"]), tc.wantAgentName)
+			assertEq(t, asString(sender["role"]), tc.wantRole)
+		})
+	}
 }
 
 func TestTranslatePiToOC_AgentEnd_Aborted(t *testing.T) {
@@ -159,6 +245,35 @@ func TestTranslatePiToOC_EmptyLine(t *testing.T) {
 	if got != nil {
 		t.Fatalf("expected nil for empty line, got %s", string(got))
 	}
+}
+
+func TestExtractSender(t *testing.T) {
+	t.Parallel()
+
+	t.Run("extracts all sender fields", func(t *testing.T) {
+		t.Parallel()
+		sender := extractSender(map[string]any{
+			"agentId":   "agent-1",
+			"agentName": "Planner",
+			"agentRole": "planner",
+		})
+		if sender == nil {
+			t.Fatal("expected sender map, got nil")
+		}
+		assertEq(t, asString(sender["agentId"]), "agent-1")
+		assertEq(t, asString(sender["agentName"]), "Planner")
+		assertEq(t, asString(sender["role"]), "planner")
+	})
+
+	t.Run("returns nil when sender fields are missing", func(t *testing.T) {
+		t.Parallel()
+		sender := extractSender(map[string]any{
+			"type": "message_update",
+		})
+		if sender != nil {
+			t.Fatalf("expected nil sender map, got %+v", sender)
+		}
+	})
 }
 
 // ── ParseOCCommand ───────────────────────────────────────

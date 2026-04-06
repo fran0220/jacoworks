@@ -24,12 +24,13 @@ type TeamTemplate struct {
 }
 
 type TeamTemplateMember struct {
-	Name      string `json:"name"`
-	Role      string `json:"role,omitempty"`
-	Mode      string `json:"mode,omitempty"`
-	Workspace string `json:"workspace,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Kickoff   string `json:"kickoff,omitempty"`
+	Name         string `json:"name"`
+	Role         string `json:"role,omitempty"`
+	SpritePackId string `json:"spritePackId,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	Workspace    string `json:"workspace,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Kickoff      string `json:"kickoff,omitempty"`
 }
 
 func (t TeamTemplate) DisplayLabel() string {
@@ -135,6 +136,7 @@ func loadTeamTemplateFile(path string) (TeamTemplate, error) {
 			continue
 		}
 		member.Role = strings.TrimSpace(member.Role)
+		member.SpritePackId = strings.TrimSpace(member.SpritePackId)
 		member.Mode = strings.TrimSpace(member.Mode)
 		member.Workspace = strings.TrimSpace(member.Workspace)
 		member.Model = strings.TrimSpace(member.Model)

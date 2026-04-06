@@ -133,61 +133,77 @@ func TranslatePiToOC(piLine []byte) ([]byte, error) {
 			if delta == "" {
 				return nil, nil
 			}
-			return mustMarshal(map[string]any{
-				"type":  "event",
-				"event": "agent",
-				"payload": map[string]any{
-					"stream": "text",
-					"data": map[string]any{
-						"delta": delta,
-					},
+			payload := map[string]any{
+				"stream": "text",
+				"data": map[string]any{
+					"delta": delta,
 				},
+			}
+			if sender := extractSender(event); sender != nil {
+				payload["sender"] = sender
+			}
+			return mustMarshal(map[string]any{
+				"type":    "event",
+				"event":   "agent",
+				"payload": payload,
 			}), nil
 		case "thinking_delta":
 			delta := asString(assistantEvent["delta"])
 			if delta == "" {
 				return nil, nil
 			}
-			return mustMarshal(map[string]any{
-				"type":  "event",
-				"event": "agent",
-				"payload": map[string]any{
-					"stream": "thinking",
-					"data": map[string]any{
-						"delta": delta,
-					},
+			payload := map[string]any{
+				"stream": "thinking",
+				"data": map[string]any{
+					"delta": delta,
 				},
+			}
+			if sender := extractSender(event); sender != nil {
+				payload["sender"] = sender
+			}
+			return mustMarshal(map[string]any{
+				"type":    "event",
+				"event":   "agent",
+				"payload": payload,
 			}), nil
 		default:
 			return nil, nil
 		}
 	case "tool_execution_start":
-		return mustMarshal(map[string]any{
-			"type":  "event",
-			"event": "agent",
-			"payload": map[string]any{
-				"stream": "tool",
-				"data": map[string]any{
-					"phase":      "start",
-					"toolCallId": asString(event["toolCallId"]),
-					"name":       asString(event["toolName"]),
-					"args":       event["args"],
-				},
+		payload := map[string]any{
+			"stream": "tool",
+			"data": map[string]any{
+				"phase":      "start",
+				"toolCallId": asString(event["toolCallId"]),
+				"name":       asString(event["toolName"]),
+				"args":       event["args"],
 			},
+		}
+		if sender := extractSender(event); sender != nil {
+			payload["sender"] = sender
+		}
+		return mustMarshal(map[string]any{
+			"type":    "event",
+			"event":   "agent",
+			"payload": payload,
 		}), nil
 	case "tool_execution_update":
-		return mustMarshal(map[string]any{
-			"type":  "event",
-			"event": "agent",
-			"payload": map[string]any{
-				"stream": "tool",
-				"data": map[string]any{
-					"phase":         "update",
-					"toolCallId":    asString(event["toolCallId"]),
-					"name":          asString(event["toolName"]),
-					"partialResult": firstNonNil(event["partialResult"], event["result"]),
-				},
+		payload := map[string]any{
+			"stream": "tool",
+			"data": map[string]any{
+				"phase":         "update",
+				"toolCallId":    asString(event["toolCallId"]),
+				"name":          asString(event["toolName"]),
+				"partialResult": firstNonNil(event["partialResult"], event["result"]),
 			},
+		}
+		if sender := extractSender(event); sender != nil {
+			payload["sender"] = sender
+		}
+		return mustMarshal(map[string]any{
+			"type":    "event",
+			"event":   "agent",
+			"payload": payload,
 		}), nil
 	case "tool_execution_end":
 		phase := "result"
@@ -202,25 +218,33 @@ func TranslatePiToOC(piLine []byte) ([]byte, error) {
 			data["phase"] = phase
 			data["error"] = firstNonEmpty(asString(event["reason"]), asString(event["error"]), "tool execution failed")
 		}
+		payload := map[string]any{
+			"stream": "tool",
+			"data":   data,
+		}
+		if sender := extractSender(event); sender != nil {
+			payload["sender"] = sender
+		}
 		return mustMarshal(map[string]any{
-			"type":  "event",
-			"event": "agent",
-			"payload": map[string]any{
-				"stream": "tool",
-				"data":   data,
-			},
+			"type":    "event",
+			"event":   "agent",
+			"payload": payload,
 		}), nil
 	case "agent_end":
 		state := "final"
 		if isTrue(event["aborted"]) {
 			state = "aborted"
 		}
+		payload := map[string]any{
+			"state": state,
+		}
+		if sender := extractSender(event); sender != nil {
+			payload["sender"] = sender
+		}
 		return mustMarshal(map[string]any{
-			"type":  "event",
-			"event": "chat",
-			"payload": map[string]any{
-				"state": state,
-			},
+			"type":    "event",
+			"event":   "chat",
+			"payload": payload,
 		}), nil
 	case "error":
 		return mustMarshal(map[string]any{
@@ -256,6 +280,24 @@ func asString(value any) string {
 		return s
 	}
 	return ""
+}
+
+// extractSender extracts agent attribution from a Pi event if present.
+func extractSender(event map[string]any) map[string]any {
+	sender := map[string]any{}
+	if id := asString(event["agentId"]); id != "" {
+		sender["agentId"] = id
+	}
+	if name := asString(event["agentName"]); name != "" {
+		sender["agentName"] = name
+	}
+	if role := asString(event["agentRole"]); role != "" {
+		sender["role"] = role
+	}
+	if len(sender) == 0 {
+		return nil
+	}
+	return sender
 }
 
 func isTrue(value any) bool {
