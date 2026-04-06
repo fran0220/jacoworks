@@ -1,17 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { FileArtifact } from "./types";
-import { getPiVMToken } from "./lib/config";
-import NavRail from "./components/NavRail";
+import { getPiVMToken, MAPBOX_TOKEN } from "./lib/config";
+import ModeBar from "./components/ModeBar";
+import ConfigDrawer from "./components/ConfigDrawer";
 import SetupGate from "./components/SetupGate";
-import TasksView from "./components/TasksView";
-import TeamStudioView from "./components/TeamStudioView";
 import WorkbenchView from "./components/WorkbenchView";
 import useConversation from "./hooks/useConversation";
 import useOperations from "./hooks/useOperations";
 import useUIShell from "./hooks/useUIShell";
 import useWorkspace from "./hooks/useWorkspace";
 
-const ObserveView = lazy(() => import("./components/ObserveView"));
+const DigitalCityPanel = lazy(() => import("./components/DigitalCityPanel"));
 
 export default function App() {
   const [ocToken, setOcToken] = useState<string | null>(() => getPiVMToken() || null);
@@ -38,10 +37,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (ui.view !== "workbench" && (previewArtifact || rightPane === "preview")) {
+    if (ui.mode !== "workspace" && (previewArtifact || rightPane === "preview")) {
       closePreview();
     }
-  }, [closePreview, previewArtifact, rightPane, ui.view]);
+  }, [closePreview, previewArtifact, rightPane, ui.mode]);
 
   const workbenchUI = useMemo(
     () => ({
@@ -83,37 +82,32 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      <NavRail
-        view={ui.view}
-        onViewChange={ui.setView}
+      <ModeBar
+        mode={ui.mode}
+        onModeChange={ui.setMode}
         compact={ui.compact}
         connState={conversation.connState}
-        mobileDrawerOpen={ui.mobileDrawerOpen}
-        onToggleMobileDrawer={ui.toggleMobileDrawer}
-        onCloseMobileDrawer={ui.closeMobileDrawer}
+        onToggleConfig={ui.toggleConfigDrawer}
       />
       <div className="app-main">
-        {ui.view === "workbench" && (
+        {ui.mode === "workspace" && (
           <WorkbenchView ui={workbenchUI} workspace={workbenchWorkspace} conversation={conversation} ops={ops} />
         )}
-        {ui.view === "tasks" && <TasksView />}
-        {ui.view === "team" && (
-          <TeamStudioView activeSessionKey={workspace.activeWorkspaceKey} onSwitchTeam={workspace.switchWorkspace} />
-        )}
-        {ui.view === "observe" && (
-          <Suspense fallback={<div className="observe-placeholder">加载观测站…</div>}>
-            <ObserveView
-              observatoryEventRef={conversation.observatoryEventRef}
-              activeTeamSessionKey={workspace.activeWorkspaceKey}
-              onTeamChange={workspace.switchWorkspace}
-              onSend={conversation.send}
-              onAbort={conversation.abort}
-              streaming={conversation.streaming}
-              connState={conversation.connState}
-            />
+        {ui.mode === "city" && (
+          <Suspense fallback={<div className="city-placeholder">加载数字之城…</div>}>
+            {MAPBOX_TOKEN ? <DigitalCityPanel mapboxToken={MAPBOX_TOKEN} /> : <div>尚未配置 MAPBOX_TOKEN</div>}
           </Suspense>
         )}
       </div>
+      <ConfigDrawer
+        open={ui.configDrawerOpen}
+        onClose={ui.closeConfigDrawer}
+        activeSessionKey={workspace.activeWorkspaceKey}
+        onSwitchTeam={workspace.switchWorkspace}
+        opsLens={ui.opsLens}
+        onOpsLensChange={ui.setOpsLens}
+        ops={ops}
+      />
     </div>
   );
 }

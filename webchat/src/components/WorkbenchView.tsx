@@ -1,4 +1,8 @@
-import { Activity, Menu, SlidersHorizontal } from "lucide-react";
+import {
+  Activity,
+  Menu,
+  SlidersHorizontal,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AgentSummary } from "../lib/feed";
 import type { DashboardStats } from "../lib/ops-types";
@@ -16,7 +20,6 @@ import ChatView from "./ChatView";
 import Composer from "./Composer";
 import OpsSidebar from "./OpsSidebar";
 import SpriteAvatarPanel from "./SpriteAvatarPanel";
-import TeamPresenceBar from "./TeamPresenceBar";
 import ThreadListPanel from "./ThreadListPanel";
 import WebPreviewPane from "./WebPreviewPane";
 
@@ -79,9 +82,9 @@ interface OperationsDomain {
 }
 
 function getConnLabel(state: ConnState): string {
-  if (state === "connected") return "协作在线";
-  if (state === "connecting") return "协作连接中";
-  return "连接中断";
+  if (state === "connected") return "Stage online";
+  if (state === "connecting") return "Linking stage";
+  return "Stage offline";
 }
 
 const BUILTIN_AGENT_IDS = new Set(["default", "researcher", "coder", "writer"]);
@@ -97,7 +100,6 @@ export default function WorkbenchView({
   conversation: ConversationDomain;
   ops: OperationsDomain;
 }) {
-  const openTasksView = () => ui.setView?.("tasks");
   const [spritePackId, setSpritePackId] = useState(() =>
     resolveSpritePackIdForWorkspace(workspace.activeWorkspaceKey),
   );
@@ -139,12 +141,12 @@ export default function WorkbenchView({
   }, [workspace.activeWorkspaceKey]);
 
   return (
-    <div className="workbench-shell">
+    <div className="workbench-shell workbench-shell--next">
       {ui.compact && ui.sidebarOpen && <div className="workbench-drawer-backdrop" onClick={closeSidebar} />}
       {ui.compact && ui.opsPanelOpen && ui.rightPane === "ops" && <div className="workbench-drawer-backdrop" onClick={closeOpsPanel} />}
       {showPreviewModal && <div className="preview-modal-overlay" onClick={ui.closePreview} />}
 
-      <div className="workbench">
+      <div className="workbench workbench--next">
         <ThreadListPanel
           workspaceKey={workspace.activeWorkspaceKey}
           threads={workspace.threads}
@@ -157,8 +159,8 @@ export default function WorkbenchView({
           onClose={closeSidebar}
         />
 
-        <section className="workbench-center">
-          <header className="workbench-toolbar">
+        <section className="workbench-center workbench-center--next">
+          <header className="workbench-toolbar workbench-toolbar--next">
             <div className="workbench-toolbar-start">
               {ui.compact && (
                 <button className="workbench-toolbar-btn workbench-nav-btn" onClick={() => ui.toggleMobileDrawer?.()} title="导航菜单">
@@ -170,12 +172,11 @@ export default function WorkbenchView({
                   <Menu size={16} />
                 </button>
               )}
-              {!ui.compact && (
-                <div className="workbench-toolbar-copy">
-                  <strong>指挥台</strong>
-                  <span>{workspace.activeWorkspaceKey}</span>
-                </div>
-              )}
+              <div className="workbench-toolbar-copy">
+                <span className="workbench-kicker">Agent Stage</span>
+                <strong>Workbench Command Stage</strong>
+                <span>{workspace.activeWorkspaceKey}</span>
+              </div>
             </div>
 
             <div className="workbench-toolbar-end">
@@ -202,24 +203,27 @@ export default function WorkbenchView({
             </div>
           </header>
 
-          <TeamPresenceBar agents={ops.agentSummaries} />
-          <ChatView
-            messages={conversation.messages}
-            blocks={conversation.blocks}
-            streaming={conversation.streaming}
-            error={conversation.error}
-            activeWorkspaceKey={workspace.activeWorkspaceKey}
-            agentSummaries={ops.agentSummaries}
-            onPreview={ui.openPreview}
-          />
-          <Composer
-            disabled={conversation.connState !== "connected"}
-            streaming={conversation.streaming}
-            onSend={conversation.send}
-            onAbort={conversation.abort}
-            agents={ops.agentSummaries}
-            avatarSlot={<SpriteAvatarPanel spritePackId={spritePackId} expression={agentExpression} />}
-          />
+          <section className="workbench-console workbench-chat-shell">
+            <div className="workbench-console-shell">
+              <ChatView
+                messages={conversation.messages}
+                blocks={conversation.blocks}
+                streaming={conversation.streaming}
+                error={conversation.error}
+                activeWorkspaceKey={workspace.activeWorkspaceKey}
+                agentSummaries={ops.agentSummaries}
+                onPreview={ui.openPreview}
+              />
+              <Composer
+                disabled={conversation.connState !== "connected"}
+                streaming={conversation.streaming}
+                onSend={conversation.send}
+                onAbort={conversation.abort}
+                agents={ops.agentSummaries}
+                avatarSlot={<SpriteAvatarPanel spritePackId={spritePackId} expression={agentExpression} />}
+              />
+            </div>
+          </section>
         </section>
 
         {!ui.compact ? (
@@ -232,7 +236,7 @@ export default function WorkbenchView({
                 ops={ops}
                 onAgentClick={ops.selectAgent}
                 onTaskClick={ops.selectTask}
-                onOpenTasks={openTasksView}
+                onOpenTasks={() => {}}
               />
             </div>
             <div className={`workbench-side-panel workbench-side-panel--preview${ui.rightPane === "preview" ? " is-active" : ""}`}>
@@ -249,7 +253,7 @@ export default function WorkbenchView({
             ops={ops}
             onAgentClick={ops.selectAgent}
             onTaskClick={ops.selectTask}
-            onOpenTasks={openTasksView}
+            onOpenTasks={() => {}}
             showClose={ui.compact}
             onClose={closeOpsPanel}
           />

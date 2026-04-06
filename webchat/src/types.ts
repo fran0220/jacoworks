@@ -5,7 +5,10 @@ export interface User {
   role: string;
 }
 
+/** @deprecated Use AppMode instead */
 export type View = "workbench" | "tasks" | "team" | "observe";
+
+export type AppMode = "workspace" | "city";
 
 export type OpsLens = "overview" | "timeline" | "board";
 
