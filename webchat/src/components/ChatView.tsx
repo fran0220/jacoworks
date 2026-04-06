@@ -50,11 +50,11 @@ function Welcome({ agentCount }: { agentCount: number }) {
           d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
         />
       </svg>
-      <h3>团队指挥台已就绪</h3>
+      <h3>The stage is ready</h3>
       <p>
         {agentCount > 0
-          ? `当前有 ${agentCount} 位协作成员待命，直接发消息或 @ 某个角色开始编排。`
-          : "直接发消息或 @ 某个角色，开始一轮新的协作对话。"}
+          ? `${agentCount} collaborators are standing by. Send a prompt or @mention a role to bring the stage to life.`
+          : "Send a prompt or @mention a role to begin a new collaborative run."}
       </p>
     </div>
   );

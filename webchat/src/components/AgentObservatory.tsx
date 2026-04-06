@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { Activity, Radio, Users, Workflow } from "lucide-react";
 import { fetchAgentSummary, fetchFeedLogs } from "../lib/feed";
 import type { AgentSummary, FeedLog } from "../lib/feed";
 import type { WorldAgent } from "../observatory/types";
@@ -288,6 +289,36 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
     );
   }, [agents, leaderInfo]);
 
+  const totalScore = useMemo(
+    () => agents.reduce((sum, agent) => sum + agent.total_score, 0),
+    [agents],
+  );
+
+  const activityPreview = useMemo(() => activities.slice(0, 8), [activities]);
+
+  const roleMatrix = useMemo(() => {
+    const grouped = new Map<
+      string,
+      { role: string; label: string; color: string; count: number }
+    >();
+
+    for (const agent of agents) {
+      const next = grouped.get(agent.role);
+      if (next) {
+        next.count += 1;
+        continue;
+      }
+      grouped.set(agent.role, {
+        role: agent.role,
+        label: teamsData?.theme?.roles?.[agent.role]?.displayName ?? agent.role,
+        color: roleColor(agent.role, teamsData?.theme),
+        count: 1,
+      });
+    }
+
+    return Array.from(grouped.values());
+  }, [agents, teamsData?.theme]);
+
   const initScene = useCallback(async () => {
     if (!containerRef.current) return;
     try {
@@ -552,50 +583,107 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
         </div>
       )}
       <div className="observatory-hud">
-        {/* Top-left: title + agent count + team selector */}
         <div className="observatory-top-bar">
-          <div className="observatory-title">
-            {teamsData?.theme?.icon ?? "🌌"}{" "}
-            {teamsData?.theme?.title ?? "观测站"}
-            <span className="badge">{agents.length} 位智能体</span>
+          <div className="observatory-title-card">
+            <div className="observatory-title-row">
+              <div className="observatory-title">
+                <span className="observatory-title-icon">
+                  {teamsData?.theme?.icon ?? "🌌"}
+                </span>
+                <div className="observatory-title-copy">
+                  <strong>{teamsData?.theme?.title ?? "观测站"}</strong>
+                  <span>
+                    World mode · Live team orchestration · Template-aware relay
+                  </span>
+                </div>
+              </div>
+              <span
+                className={`observatory-conn-pill observatory-conn-pill--${props.connState}`}
+              >
+                <Radio size={13} />
+                <span>{props.connState}</span>
+              </span>
+            </div>
+            <div className="observatory-summary-strip">
+              <span className="observatory-summary-chip">
+                <Users size={13} />
+                <span>{agents.length} 位智能体</span>
+              </span>
+              <span className="observatory-summary-chip">
+                <Activity size={13} />
+                <span>{activityPreview.length} 条即时活动</span>
+              </span>
+              <span className="observatory-summary-chip">
+                <Workflow size={13} />
+                <span>{totalScore} 总积分</span>
+              </span>
+            </div>
           </div>
           {teamOptions.length > 1 && (
-            <select
-              className="observatory-team-select"
-              value={props.activeTeamSessionKey}
-              onChange={(e) => props.onTeamChange(e.target.value)}
-              disabled={props.streaming}
-            >
-              {teamOptions.map((opt) => (
-                <option key={opt.sessionKey} value={opt.sessionKey}>
-                  {opt.source === "preset" ? `🤖 ${opt.label}` : opt.label}
-                </option>
-              ))}
-            </select>
+            <div className="observatory-team-switch">
+              <label>展示团队</label>
+              <select
+                className="observatory-team-select"
+                value={props.activeTeamSessionKey}
+                onChange={(e) => props.onTeamChange(e.target.value)}
+                disabled={props.streaming}
+              >
+                {teamOptions.map((opt) => (
+                  <option key={opt.sessionKey} value={opt.sessionKey}>
+                    {opt.source === "preset" ? `🤖 ${opt.label}` : opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
         </div>
 
-        {/* Right: mini activity log */}
-        <div className="observatory-activity">
-          {activities.slice(0, 10).map((item) => (
-            <div className="observatory-activity-item" key={item.id}>
-              <span
-                className="dot"
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: roleColor(item.agentRole, teamsData?.theme),
-                  flexShrink: 0,
-                }}
-              />
-              <span className="agent-name">{item.agentName}</span>
-              <span>{item.action}</span>
+        <div className="observatory-sidepanel">
+          <section className="observatory-panel observatory-panel--activity">
+            <div className="observatory-panel-head">
+              <strong>活动流</strong>
+              <span>Live feed</span>
             </div>
-          ))}
+            <div className="observatory-activity">
+              {activityPreview.map((item) => (
+                <div className="observatory-activity-item" key={item.id}>
+                  <span
+                    className="dot"
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: roleColor(item.agentRole, teamsData?.theme),
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span className="agent-name">{item.agentName}</span>
+                  <span>{item.action}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="observatory-panel">
+            <div className="observatory-panel-head">
+              <strong>角色矩阵</strong>
+              <span>Role mesh</span>
+            </div>
+            <div className="observatory-role-matrix">
+              {roleMatrix.map((item) => (
+                <div className="observatory-role-chip" key={item.role}>
+                  <span
+                    className="dot"
+                    style={{ background: item.color, flexShrink: 0 }}
+                  />
+                  <strong>{item.label}</strong>
+                  <span>{item.count} active</span>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
 
-        {/* Bottom: score bar */}
         <div className="observatory-scorebar">
           {agents.map((a) => (
             <div className="observatory-score-chip" key={a.id}>

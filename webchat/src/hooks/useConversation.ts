@@ -5,7 +5,7 @@ import { contentToBlocks, extractText, streamBlocksToContent, toContentItems } f
 import { extractFileArtifact } from "../lib/file-artifacts";
 import { generateTitle } from "../lib/sessions";
 import { posthog } from "../lib/posthog";
-import type { ChatMessage, FileArtifact, StreamBlock } from "../types";
+import type { ChatMessage, ChatSender, FileArtifact, StreamBlock } from "../types";
 import type { UseWorkspaceResult } from "./useWorkspace";
 
 interface ConversationState {
@@ -147,6 +147,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
   const wsRef = useRef<WSRelayClient | null>(null);
   const observatoryEventRef = useRef<((event: { kind: string; text?: string; toolName?: string }) => void) | null>(null);
   const streamTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentSenderRef = useRef<ChatSender | undefined>(undefined);
 
   const setMessages = useCallback((messages: ChatMessage[]) => {
     messagesRef.current = messages;
@@ -198,7 +199,10 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
 
   const finishStream = useCallback(
     (finalMessage?: unknown) => {
-      if (!streamingRef.current) return;
+      if (!streamingRef.current) {
+        currentSenderRef.current = undefined;
+        return;
+      }
       streamingRef.current = false;
       clearStreamTimeout();
 
@@ -222,6 +226,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
           blocks: finalBlocks.length > 0 ? finalBlocks : undefined,
           timestamp: Date.now(),
           ...finalMeta,
+          sender: finalMeta.sender || currentSenderRef.current || undefined,
           artifacts: mergeArtifacts(finalMeta.artifacts, derivedArtifacts),
         };
         const updated = [...messagesRef.current, assistantMsg];
@@ -242,6 +247,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       clearRenderTimer();
       streamTextRef.current = "";
       contentStartedRef.current = false;
+      currentSenderRef.current = undefined;
       setBlocks([]);
       setStreaming(false);
     },
@@ -273,6 +279,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       clearStreamTimeout();
       streamTextRef.current = "";
       contentStartedRef.current = false;
+      currentSenderRef.current = undefined;
       setMessages([]);
       setBlocks([]);
       setStreaming(false);
@@ -291,6 +298,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
     clearRenderTimer();
     clearStreamTimeout();
     streamTextRef.current = "";
+    currentSenderRef.current = undefined;
     setBlocks([]);
     setError(null);
     setStreaming(false);
@@ -318,6 +326,10 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       },
       onFrame(frame: RelayFrame) {
         let parsed = parseFrame(frame);
+
+        if (parsed.sender) {
+          currentSenderRef.current = parsed.sender;
+        }
 
         if (parsed.kind !== "ignore") {
           observatoryEventRef.current?.(parsed);
@@ -418,6 +430,7 @@ export default function useConversation(ocToken: string | null, workspace: UseWo
       contentStartedRef.current = false;
       blocksRef.current = [];
       streamTextRef.current = "";
+      currentSenderRef.current = undefined;
       setStreaming(true);
       resetStreamTimeout();
       void workspaceRef.current.saveThreadMessages(threadId, updated);

@@ -324,6 +324,9 @@ export default function TeamPanel({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [villageTemplate, setVillageTemplate] = useState<TeamTemplate | null>(null);
+  const [managementOpen, setManagementOpen] = useState(false);
+  const [spotlightTemplateId, setSpotlightTemplateId] = useState<string | null>(null);
+  const [hasAutoOpenedVillage, setHasAutoOpenedVillage] = useState(false);
 
   const loadTeams = useCallback(async () => {
     setError(null);
@@ -353,6 +356,39 @@ export default function TeamPanel({
     () => teamsData?.templates ?? [],
     [teamsData],
   );
+  const activeTemplate = useMemo(
+    () => templates.find((template) => matchesTemplateSessionKey(template, activeSessionKey)) ?? null,
+    [activeSessionKey, templates],
+  );
+  const spotlightTemplate = useMemo(
+    () =>
+      templates.find((template) => template.id === spotlightTemplateId) ??
+      activeTemplate ??
+      templates[0] ??
+      null,
+    [activeTemplate, spotlightTemplateId, templates],
+  );
+
+  useEffect(() => {
+    if (!templates.length) {
+      setSpotlightTemplateId(null);
+      return;
+    }
+    setSpotlightTemplateId((current) => {
+      if (current && templates.some((template) => template.id === current)) {
+        return current;
+      }
+      return activeTemplate?.id ?? templates[0].id;
+    });
+  }, [activeTemplate, templates]);
+
+  useEffect(() => {
+    if (hasAutoOpenedVillage || !templates.length) return;
+    const initialTemplate = activeTemplate ?? templates[0];
+    if (!initialTemplate) return;
+    setVillageTemplate(initialTemplate);
+    setHasAutoOpenedVillage(true);
+  }, [activeTemplate, hasAutoOpenedVillage, templates]);
 
   const handleLaunchTeam = useCallback(
     async (template: TeamTemplate) => {
@@ -378,6 +414,7 @@ export default function TeamPanel({
   const handleCreate = () => {
     setEditing(null);
     setCreating(true);
+    setManagementOpen(true);
   };
 
   const handleEdit = async (name: string) => {
@@ -386,6 +423,7 @@ export default function TeamPanel({
       const detail = await fetchProfileDetail(name);
       setCreating(false);
       setEditing(detail);
+      setManagementOpen(true);
     } catch {
       setError("加载配置失败");
     }
@@ -424,6 +462,23 @@ export default function TeamPanel({
     }
   };
 
+  const editorDetail = creating ? blankDetail() : editing;
+  const showEditor = creating || editing !== null;
+
+  useEffect(() => {
+    if (!showEditor) return;
+    setManagementOpen(true);
+  }, [showEditor]);
+
+  const openVillage = (template: TeamTemplate) => {
+    setSpotlightTemplateId(template.id);
+    setVillageTemplate(template);
+  };
+
+  const selectSpotlight = (template: TeamTemplate) => {
+    setSpotlightTemplateId(template.id);
+  };
+
   if (loading) {
     return (
       <div className="panel-container">
@@ -435,15 +490,12 @@ export default function TeamPanel({
     );
   }
 
-  const editorDetail = creating ? blankDetail() : editing;
-  const showEditor = creating || editing !== null;
-
   return (
     <>
       <div className="panel-container">
         <div className="panel-header">
           <Users size={16} />
-          <h3>Agent &amp; 团队</h3>
+          <h3>团队小镇</h3>
           <button
             className="panel-refresh-btn"
             onClick={() => void loadTeams()}
@@ -455,235 +507,379 @@ export default function TeamPanel({
 
         {error && <div className="panel-error">{error}</div>}
 
-        <section className="team-section">
-          <div className="team-section-header">
-            <h4 className="team-section-title">🤖 Agent</h4>
-            <button
-              className="team-create-btn"
-              onClick={handleCreate}
-              title="新建 Agent"
-            >
-              <Plus size={13} />
-              <span>新建 Agent</span>
-            </button>
-          </div>
+        <div className="team-stage-shell">
+          <section className="team-stage-hero">
+            <div className="team-stage-copy">
+              <span className="team-stage-kicker">Team Village</span>
+              <h4>先看活的小镇，再决定进入哪支队伍</h4>
+              <p>
+                {spotlightTemplate
+                  ? `当前精选「${spotlightTemplate.label}」，先看协作舞台和队伍气质，再决定进入实时协作还是下沉到管理面板调整角色。`
+                  : "team 入口默认展示协作模板和小镇舞台，管理能力下沉到次级面板。"}
+              </p>
+            </div>
+            <div className="team-stage-actions">
+              {spotlightTemplate && (
+                <button
+                  className="team-action-btn"
+                  type="button"
+                  onClick={() => openVillage(spotlightTemplate)}
+                >
+                  <Map size={13} />
+                  <span>打开小镇</span>
+                </button>
+              )}
+              <button
+                className={`team-install-btn${managementOpen ? " team-install-btn--active" : ""}`}
+                type="button"
+                onClick={() => setManagementOpen((current) => !current)}
+              >
+                <Users size={13} />
+                <span>{managementOpen ? "收起管理面板" : "打开管理面板"}</span>
+              </button>
+            </div>
+          </section>
 
-          {showEditor && editorDetail && (
-            <ProfileEditor
-              detail={editorDetail}
-              isCreate={creating}
-              saving={saving}
-              onSave={(detail) => void handleSave(detail)}
-              onCancel={() => {
-                setCreating(false);
-                setEditing(null);
-              }}
-            />
+          {spotlightTemplate && (
+            <section className="team-spotlight-card">
+              <div className="team-spotlight-head">
+                <div>
+                  <span className="team-spotlight-icon" aria-hidden="true">
+                    {spotlightTemplate.icon || "🏘️"}
+                  </span>
+                  <div className="team-spotlight-title">
+                    <strong>{spotlightTemplate.label}</strong>
+                    <span>
+                      角色 {spotlightTemplate.members.length} · 版本 {spotlightTemplate.version}
+                    </span>
+                  </div>
+                </div>
+                {activeTemplate?.id === spotlightTemplate.id && (
+                  <span className="team-live-pill">
+                    <CheckCircle2 size={14} />
+                    <span>当前正在协作</span>
+                  </span>
+                )}
+              </div>
+              <p className="team-spotlight-desc">
+                {spotlightTemplate.description ||
+                  "多 Agent 协作模板，适合把复杂任务拆分给不同角色并由 leader 汇总。"}
+              </p>
+              <ul className="team-spotlight-members">
+                {spotlightTemplate.members.map((member) => (
+                  <li key={`${spotlightTemplate.id}-${member.name}`}>
+                    <span>{member.name}</span>
+                    <em>{member.role || member.mode || "member"}</em>
+                  </li>
+                ))}
+              </ul>
+              <div className="team-spotlight-actions">
+                <button
+                  className={`team-action-btn${activeTemplate?.id === spotlightTemplate.id ? " team-action-btn--active" : ""}`}
+                  disabled={Boolean(launchingTemplate) && launchingTemplate !== spotlightTemplate.id}
+                  onClick={() => void handleLaunchTeam(spotlightTemplate)}
+                >
+                  {launchingTemplate === spotlightTemplate.id ? (
+                    <>
+                      <Loader size={13} className="spin-icon" />
+                      <span>启动中...</span>
+                    </>
+                  ) : activeTemplate?.id === spotlightTemplate.id ? (
+                    "继续协作"
+                  ) : (
+                    <>
+                      <span>启动团队</span>
+                      <ArrowRight size={13} />
+                    </>
+                  )}
+                </button>
+                <button
+                  className="team-mini-btn"
+                  type="button"
+                  onClick={() => openVillage(spotlightTemplate)}
+                >
+                  <Map size={13} />
+                  <span>进入小镇</span>
+                </button>
+              </div>
+            </section>
           )}
 
-          <div className="team-card-grid">
-            {presets.map((preset) => {
-              const isActive = activeSessionKey === preset.workspaceKey;
-              return (
-                <article
-                  key={preset.id}
-                  className={`team-card${isActive ? " active" : ""}`}
-                >
-                  <div className="team-card-head">
-                    <ProfileIcon icon={preset.icon} />
-                    <strong>{preset.label}</strong>
-                    <TypeBadge type="agent" />
-                    {isActive && (
-                      <CheckCircle2 size={14} className="team-active-icon" />
-                    )}
-                  </div>
-                  <p className="team-card-desc">
-                    {PRESET_DESCRIPTIONS[preset.id] ||
-                      "按线程隔离的专家预设，适合在不同角色间快速切换。"}
-                  </p>
-                  <div className="team-card-actions">
-                    <button
-                      className={`team-action-btn${isActive ? " team-action-btn--active" : ""}`}
-                      onClick={() => onSwitchTeam(preset.workspaceKey)}
-                    >
-                      {isActive ? (
-                        "继续对话"
-                      ) : (
-                        <>
-                          <span>开始对话</span>
-                          <ArrowRight size={13} />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-
-            {profiles.map((profile) => {
-              const isActive = activeSessionKey === profile.sessionKey;
-              const isDeleting = deleting === profile.name;
-              return (
-                <article
-                  key={profile.name}
-                  className={`team-card${isActive ? " active" : ""}`}
-                >
-                  <div className="team-card-head">
-                    <ProfileIcon icon={profile.icon} />
-                    <strong>{profile.displayName}</strong>
-                    <TypeBadge type="agent" />
-                    {isActive && (
-                      <CheckCircle2 size={14} className="team-active-icon" />
-                    )}
-                  </div>
-                  <p className="team-card-desc">{profile.description}</p>
-                  <div className="team-card-actions">
-                    <button
-                      className={`team-action-btn${isActive ? " team-action-btn--active" : ""}`}
-                      onClick={() => onSwitchTeam(profile.sessionKey)}
-                    >
-                      {isActive ? (
-                        "继续对话"
-                      ) : (
-                        <>
-                          <span>开始对话</span>
-                          <ArrowRight size={13} />
-                        </>
-                      )}
-                    </button>
-                    <button
-                      className="team-secondary-btn"
-                      onClick={() => void handleEdit(profile.name)}
-                      title="编辑"
-                    >
-                      <Edit3 size={13} />
-                    </button>
-                    <button
-                      className="team-secondary-btn team-secondary-btn--danger"
-                      onClick={() => void handleDelete(profile.name)}
-                      disabled={isDeleting}
-                      title="删除"
-                    >
-                      {isDeleting ? (
-                        <Loader size={13} className="spin-icon" />
-                      ) : (
-                        <Trash2 size={13} />
-                      )}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-
-            {presets.length === 0 && profiles.length === 0 && (
-              <article
-                className={`team-card${activeSessionKey === DEFAULT_SESSION_KEY ? " active" : ""}`}
-              >
-                <div className="team-card-head">
-                  <Bot size={14} />
-                  <strong>默认助手</strong>
-                  <TypeBadge type="agent" />
-                  {activeSessionKey === DEFAULT_SESSION_KEY && (
-                    <CheckCircle2 size={14} className="team-active-icon" />
-                  )}
-                </div>
-                <p className="team-card-desc">
-                  单 Agent 模式，适合日常问答和快速执行。
-                </p>
-                <div className="team-card-actions">
+          {templates.length > 1 && (
+            <section className="team-template-strip">
+              {templates.map((template) => {
+                const isActive = template.id === spotlightTemplate?.id;
+                return (
                   <button
-                    className={`team-action-btn${activeSessionKey === DEFAULT_SESSION_KEY ? " team-action-btn--active" : ""}`}
-                    onClick={() => onSwitchTeam(DEFAULT_SESSION_KEY)}
+                    key={template.id}
+                    type="button"
+                    className={`team-template-pill${isActive ? " active" : ""}`}
+                    onClick={() => selectSpotlight(template)}
                   >
-                    {activeSessionKey === DEFAULT_SESSION_KEY ? (
-                      "继续对话"
-                    ) : (
-                      <>
-                        <span>开始对话</span>
-                        <ArrowRight size={13} />
-                      </>
-                    )}
-                  </button>
-                </div>
-              </article>
-            )}
-          </div>
-        </section>
-
-        <section className="team-section">
-          <h4 className="team-section-title">👥 团队</h4>
-
-          <div className="team-card-grid">
-            {templates.map((template) => {
-              const isActive = matchesTemplateSessionKey(
-                template,
-                activeSessionKey,
-              );
-              return (
-                <article
-                  key={template.id}
-                  className={`team-card${isActive ? " active" : ""}`}
-                >
-                  <div className="team-card-head">
-                    <span aria-hidden="true">{template.icon || "👥"}</span>
+                    <span>{template.icon || "🏘️"}</span>
                     <strong>{template.label}</strong>
-                    <TypeBadge type="team" />
-                    {isActive && (
-                      <CheckCircle2 size={14} className="team-active-icon" />
-                    )}
-                  </div>
-                  <p className="team-card-desc">
-                    {template.description ||
-                      "多 Agent 协作模板，适合把复杂任务拆分给不同角色并由 leader 汇总。"}
-                  </p>
-                  <div className="team-card-meta">
-                    角色 {template.members.length} · 版本 {template.version}
-                  </div>
-                  <ul className="team-role-list">
-                    {template.members.map((member) => (
-                      <li key={`${template.id}-${member.name}`}>
-                        <span>{member.name}</span>
-                        <em>{member.role || member.mode || "member"}</em>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="team-card-actions team-card-actions--team">
-                    <button
-                      className={`team-action-btn${isActive ? " team-action-btn--active" : ""}`}
-                      disabled={
-                        Boolean(launchingTemplate) &&
-                        launchingTemplate !== template.id
-                      }
-                      onClick={() => void handleLaunchTeam(template)}
+                    <em>{template.members.length} 角色</em>
+                  </button>
+                );
+              })}
+            </section>
+          )}
+        </div>
+
+        <details
+          className={`team-management-shell${managementOpen ? " is-open" : ""}`}
+          open={managementOpen}
+          onToggle={(event) => {
+            setManagementOpen((event.currentTarget as HTMLDetailsElement).open);
+          }}
+        >
+          <summary className="team-management-summary">
+            <div>
+              <span className="team-management-kicker">Studio Control</span>
+              <strong>Agent / Team 管理面板</strong>
+            </div>
+            <span>{managementOpen ? "收起" : "展开"}</span>
+          </summary>
+
+          <div className="team-management-body">
+            <section className="team-section">
+              <div className="team-section-header">
+                <h4 className="team-section-title">🤖 Agent</h4>
+                <button
+                  className="team-create-btn"
+                  onClick={handleCreate}
+                  title="新建 Agent"
+                  type="button"
+                >
+                  <Plus size={13} />
+                  <span>新建 Agent</span>
+                </button>
+              </div>
+
+              {showEditor && editorDetail && (
+                <ProfileEditor
+                  detail={editorDetail}
+                  isCreate={creating}
+                  saving={saving}
+                  onSave={(detail) => void handleSave(detail)}
+                  onCancel={() => {
+                    setCreating(false);
+                    setEditing(null);
+                  }}
+                />
+              )}
+
+              <div className="team-card-grid">
+                {presets.map((preset) => {
+                  const isActive = activeSessionKey === preset.workspaceKey;
+                  return (
+                    <article
+                      key={preset.id}
+                      className={`team-card${isActive ? " active" : ""}`}
                     >
-                      {launchingTemplate === template.id ? (
-                        <>
-                          <Loader size={13} className="spin-icon" />
-                          <span>启动中...</span>
-                        </>
-                      ) : isActive ? (
-                        "继续协作"
-                      ) : (
-                        <>
-                          <span>启动团队</span>
-                          <ArrowRight size={13} />
-                        </>
+                      <div className="team-card-head">
+                        <ProfileIcon icon={preset.icon} />
+                        <strong>{preset.label}</strong>
+                        <TypeBadge type="agent" />
+                        {isActive && (
+                          <CheckCircle2 size={14} className="team-active-icon" />
+                        )}
+                      </div>
+                      <p className="team-card-desc">
+                        {PRESET_DESCRIPTIONS[preset.id] ||
+                          "按线程隔离的专家预设，适合在不同角色间快速切换。"}
+                      </p>
+                      <div className="team-card-actions">
+                        <button
+                          className={`team-action-btn${isActive ? " team-action-btn--active" : ""}`}
+                          onClick={() => onSwitchTeam(preset.workspaceKey)}
+                          type="button"
+                        >
+                          {isActive ? (
+                            "继续对话"
+                          ) : (
+                            <>
+                              <span>开始对话</span>
+                              <ArrowRight size={13} />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+
+                {profiles.map((profile) => {
+                  const isActive = activeSessionKey === profile.sessionKey;
+                  const isDeleting = deleting === profile.name;
+                  return (
+                    <article
+                      key={profile.name}
+                      className={`team-card${isActive ? " active" : ""}`}
+                    >
+                      <div className="team-card-head">
+                        <ProfileIcon icon={profile.icon} />
+                        <strong>{profile.displayName}</strong>
+                        <TypeBadge type="agent" />
+                        {isActive && (
+                          <CheckCircle2 size={14} className="team-active-icon" />
+                        )}
+                      </div>
+                      <p className="team-card-desc">{profile.description}</p>
+                      <div className="team-card-actions">
+                        <button
+                          className={`team-action-btn${isActive ? " team-action-btn--active" : ""}`}
+                          onClick={() => onSwitchTeam(profile.sessionKey)}
+                          type="button"
+                        >
+                          {isActive ? (
+                            "继续对话"
+                          ) : (
+                            <>
+                              <span>开始对话</span>
+                              <ArrowRight size={13} />
+                            </>
+                          )}
+                        </button>
+                        <button
+                          className="team-secondary-btn"
+                          onClick={() => void handleEdit(profile.name)}
+                          title="编辑"
+                          type="button"
+                        >
+                          <Edit3 size={13} />
+                        </button>
+                        <button
+                          className="team-secondary-btn team-secondary-btn--danger"
+                          onClick={() => void handleDelete(profile.name)}
+                          disabled={isDeleting}
+                          title="删除"
+                          type="button"
+                        >
+                          {isDeleting ? (
+                            <Loader size={13} className="spin-icon" />
+                          ) : (
+                            <Trash2 size={13} />
+                          )}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+
+                {presets.length === 0 && profiles.length === 0 && (
+                  <article
+                    className={`team-card${activeSessionKey === DEFAULT_SESSION_KEY ? " active" : ""}`}
+                  >
+                    <div className="team-card-head">
+                      <Bot size={14} />
+                      <strong>默认助手</strong>
+                      <TypeBadge type="agent" />
+                      {activeSessionKey === DEFAULT_SESSION_KEY && (
+                        <CheckCircle2 size={14} className="team-active-icon" />
                       )}
-                    </button>
-                    <button
-                      className="team-mini-btn"
-                      type="button"
-                      onClick={() => setVillageTemplate(template)}
+                    </div>
+                    <p className="team-card-desc">
+                      单 Agent 模式，适合日常问答和快速执行。
+                    </p>
+                    <div className="team-card-actions">
+                      <button
+                        className={`team-action-btn${activeSessionKey === DEFAULT_SESSION_KEY ? " team-action-btn--active" : ""}`}
+                        onClick={() => onSwitchTeam(DEFAULT_SESSION_KEY)}
+                        type="button"
+                      >
+                        {activeSessionKey === DEFAULT_SESSION_KEY ? (
+                          "继续对话"
+                        ) : (
+                          <>
+                            <span>开始对话</span>
+                            <ArrowRight size={13} />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </article>
+                )}
+              </div>
+            </section>
+
+            <section className="team-section">
+              <h4 className="team-section-title">👥 团队模板库</h4>
+
+              <div className="team-card-grid">
+                {templates.map((template) => {
+                  const isActive = matchesTemplateSessionKey(
+                    template,
+                    activeSessionKey,
+                  );
+                  return (
+                    <article
+                      key={template.id}
+                      className={`team-card${isActive ? " active" : ""}`}
                     >
-                      <Map size={13} />
-                      <span>进入小镇</span>
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
+                      <div className="team-card-head">
+                        <span aria-hidden="true">{template.icon || "👥"}</span>
+                        <strong>{template.label}</strong>
+                        <TypeBadge type="team" />
+                        {isActive && (
+                          <CheckCircle2 size={14} className="team-active-icon" />
+                        )}
+                      </div>
+                      <p className="team-card-desc">
+                        {template.description ||
+                          "多 Agent 协作模板，适合把复杂任务拆分给不同角色并由 leader 汇总。"}
+                      </p>
+                      <div className="team-card-meta">
+                        角色 {template.members.length} · 版本 {template.version}
+                      </div>
+                      <ul className="team-role-list">
+                        {template.members.map((member) => (
+                          <li key={`${template.id}-${member.name}`}>
+                            <span>{member.name}</span>
+                            <em>{member.role || member.mode || "member"}</em>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="team-card-actions team-card-actions--team">
+                        <button
+                          className={`team-action-btn${isActive ? " team-action-btn--active" : ""}`}
+                          disabled={
+                            Boolean(launchingTemplate) &&
+                            launchingTemplate !== template.id
+                          }
+                          onClick={() => void handleLaunchTeam(template)}
+                          type="button"
+                        >
+                          {launchingTemplate === template.id ? (
+                            <>
+                              <Loader size={13} className="spin-icon" />
+                              <span>启动中...</span>
+                            </>
+                          ) : isActive ? (
+                            "继续协作"
+                          ) : (
+                            <>
+                              <span>启动团队</span>
+                              <ArrowRight size={13} />
+                            </>
+                          )}
+                        </button>
+                        <button
+                          className="team-mini-btn"
+                          type="button"
+                          onClick={() => openVillage(template)}
+                        >
+                          <Map size={13} />
+                          <span>进入小镇</span>
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
           </div>
-        </section>
+        </details>
       </div>
 
       {villageTemplate && (

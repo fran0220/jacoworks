@@ -1,0 +1,33 @@
+{
+  "id": "ops-pod",
+  "label": "运营小队",
+  "description": "研究员调研 + 分析师量化 + 规划师输出方案。适合市场调研、竞品分析、策略规划。",
+  "icon": "📊",
+  "version": "1.0.0",
+  "workspaceKeyPrefix": "team:ops-pod",
+  "leaderSystemPrompt": "你是运营团队的主理人。你有两位队友：researcher 负责信息搜集，analyst 负责数据分析与方案产出。先让 researcher 搜集材料，再让 analyst 基于材料做深度分析并产出可执行方案。用 /team 命令协调。",
+  "members": [
+    {
+      "name": "researcher",
+      "role": "researcher",
+      "spritePackId": "atlas",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "你是研究员，负责全网搜索、信息搜集、竞品对比和素材整理。"
+    },
+    {
+      "name": "analyst",
+      "role": "reviewer",
+      "spritePackId": "prism",
+      "mode": "branch",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "你是分析师，负责把研究材料量化、提取洞察、产出带数据支撑的策略方案。"
+    }
+  ],
+  "bootstrapCommands": [
+    "/team spawn researcher fresh shared --model proxy/gpt-5.4",
+    "/team spawn analyst branch shared --model proxy/gpt-5.4"
+  ]
+}

@@ -2,7 +2,7 @@ import type { DashboardStats } from "../lib/ops-types";
 import type { VillageAgentModel } from "./VillageAgent";
 import { VILLAGE_BASE_SIZE, VILLAGE_ZONES, type VillageZoneId } from "./VillageZone";
 
-export type CropStage = "seed" | "sprout" | "mature";
+export type CropStage = "empty" | "seed" | "sprout" | "mature" | "dead";
 
 export interface VillageCropPlot {
   id: string;
@@ -10,6 +10,15 @@ export interface VillageCropPlot {
   x: number;
   y: number;
   stage: CropStage;
+  taskId?: string;
+}
+
+export type TaskCropStatus = "pending" | "assigned" | "running" | "done" | "failed" | "timeout";
+
+export interface TaskCropInput {
+  taskId: string;
+  status: TaskCropStatus;
+  label?: string;
 }
 
 export const VILLAGE_MAP_ASSETS = {
@@ -24,15 +33,46 @@ const CROP_PLOTS: Array<Pick<VillageCropPlot, "id" | "label" | "x" | "y">> = [
   { id: "plot-3", label: "交付成熟", x: 21.1, y: 37.7 },
 ];
 
+function taskStatusToCropStage(status: TaskCropStatus): CropStage {
+  switch (status) {
+    case "pending":
+    case "assigned":
+      return "seed";
+    case "running":
+      return "sprout";
+    case "done":
+      return "mature";
+    case "failed":
+    case "timeout":
+      return "dead";
+    default:
+      return "empty";
+  }
+}
+
 export function buildCropPlots(
   dashboardStats: DashboardStats | null,
   activeAgents: number,
+  taskInputs?: TaskCropInput[],
 ): VillageCropPlot[] {
+  if (taskInputs && taskInputs.length > 0) {
+    return CROP_PLOTS.map((plot, index) => {
+      const task = taskInputs[index];
+      if (!task) return { ...plot, stage: "empty" as CropStage };
+      return {
+        ...plot,
+        label: task.label ?? plot.label,
+        stage: taskStatusToCropStage(task.status),
+        taskId: task.taskId,
+      };
+    });
+  }
+
   const activeTasks = dashboardStats?.activeTasks ?? activeAgents;
   const topScore = dashboardStats?.topScore ?? 0;
 
   return CROP_PLOTS.map((plot, index) => {
-    let stage: CropStage = "seed";
+    let stage: CropStage = "seed" as CropStage;
     if (activeTasks > index) stage = "sprout";
     if (topScore > 0 && activeTasks > index + 1) stage = "mature";
     if (topScore >= 3 && index === 0) stage = "mature";

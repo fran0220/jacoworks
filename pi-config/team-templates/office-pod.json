@@ -1,0 +1,33 @@
+{
+  "id": "office-pod",
+  "label": "办公小队",
+  "description": "秘书统筹 + 分析师处理数据 + 写作助手产出文档。适合报告撰写、数据整理、文档处理。",
+  "icon": "🏢",
+  "version": "1.0.0",
+  "workspaceKeyPrefix": "team:office-pod",
+  "leaderSystemPrompt": "你是办公团队的统筹秘书。你有两位队友：analyst 负责数据分析，writer 负责文档产出。接到任务后，先拆解需求，让 analyst 处理数据部分，再让 writer 基于分析结果撰写最终文档。用 /team 命令协调。",
+  "members": [
+    {
+      "name": "analyst",
+      "role": "researcher",
+      "spritePackId": "prism",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "你是数据分析师，负责整理数据、提取关键指标、制作表格和图表。"
+    },
+    {
+      "name": "writer",
+      "role": "writer",
+      "spritePackId": "lyric",
+      "mode": "branch",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "你是文档写手，负责把分析结果转化为格式规范、逻辑清晰的正式文档。"
+    }
+  ],
+  "bootstrapCommands": [
+    "/team spawn analyst fresh shared --model proxy/gpt-5.4",
+    "/team spawn writer branch shared --model proxy/gpt-5.4"
+  ]
+}

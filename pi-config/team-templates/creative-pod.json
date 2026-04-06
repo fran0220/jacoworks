@@ -1,0 +1,33 @@
+{
+  "id": "creative-pod",
+  "label": "创作小队",
+  "description": "规划师构思 + 设计师视觉 + 写作助手文案。适合品牌策划、内容创作、方案设计。",
+  "icon": "🎨",
+  "version": "1.0.0",
+  "workspaceKeyPrefix": "team:creative-pod",
+  "leaderSystemPrompt": "你是创作团队的策划总监。你有两位队友：designer 负责视觉方案，writer 负责文案创作。先确定创作方向和风格，再分别让 designer 和 writer 并行产出。用 /team 命令协调。",
+  "members": [
+    {
+      "name": "designer",
+      "role": "executor",
+      "spritePackId": "sketch",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "你是视觉设计师，负责产出设计概念、配色方案、布局描述和视觉规范。"
+    },
+    {
+      "name": "writer",
+      "role": "writer",
+      "spritePackId": "lyric",
+      "mode": "branch",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "kickoff": "你是创意文案，负责撰写有感染力的标题、正文、口号和传播文案。"
+    }
+  ],
+  "bootstrapCommands": [
+    "/team spawn designer fresh shared --model proxy/gpt-5.4",
+    "/team spawn writer branch shared --model proxy/gpt-5.4"
+  ]
+}

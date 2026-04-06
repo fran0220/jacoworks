@@ -198,7 +198,7 @@ export default function VillageScene({
                 {cropPlots.map((plot) => (
                   <div
                     key={plot.id}
-                    className={`village-crop-plot village-crop-plot--${plot.stage}`}
+                    className={`village-crop-plot village-crop-plot--${plot.stage}${plot.taskId ? " has-task" : ""}`}
                     style={{ left: `${plot.x}%`, top: `${plot.y}%` }}
                   >
                     <span>{plot.label}</span>

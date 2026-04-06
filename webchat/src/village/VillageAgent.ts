@@ -42,6 +42,10 @@ const ROLE_LABELS: Record<string, string> = {
   patrol: "巡查员",
   researcher: "研究员",
   writer: "写作者",
+  analyst: "分析师",
+  designer: "设计师",
+  secretary: "秘书",
+  summarizer: "撰稿人",
   member: "成员",
   default: "默认助手",
 };
@@ -53,6 +57,10 @@ const ROLE_ACCENTS: Record<string, string> = {
   patrol: "#9076ff",
   researcher: "#4f8d57",
   writer: "#bc6b4a",
+  analyst: "#8b5cf6",
+  designer: "#6366f1",
+  secretary: "#a78bfa",
+  summarizer: "#bc6b4a",
   member: "#7b8496",
   default: "#5b74ff",
 };

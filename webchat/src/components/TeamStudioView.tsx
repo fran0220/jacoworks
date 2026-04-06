@@ -8,7 +8,7 @@ export default function TeamStudioView({
   onSwitchTeam: (key: string) => void;
 }) {
   return (
-    <section className="view-shell view-shell--team">
+    <section className="view-shell view-shell--team team-studio-view">
       <TeamPanel activeSessionKey={activeSessionKey} onSwitchTeam={onSwitchTeam} />
     </section>
   );

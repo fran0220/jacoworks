@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentSummary, RecentAction } from "../lib/feed";
 import type { TranslatedActivity } from "../lib/feed-translate";
+import type { ActivityStreamEvent } from "../hooks/useActivityStream";
 import type { DashboardStats } from "../lib/ops-types";
 import type { TeamTemplate, TeamTemplateMember } from "../lib/teams";
 import {
@@ -42,6 +43,8 @@ type VillageEventKind =
   | "task_review"
   | "task_complete"
   | "task_rework"
+  | "task_failed"
+  | "task_timeout"
   | "thinking"
   | "idle";
 
@@ -136,6 +139,34 @@ function activityToEvent(
   };
 }
 
+function describeEventKind(kind: string): string {
+  switch (kind) {
+    case "task_create": return "创建了新任务";
+    case "task_claim": return "领取了任务";
+    case "task_start": return "开始执行";
+    case "task_submit": return "提交了任务";
+    case "task_review": return "提交了审查";
+    case "task_complete": return "完成了任务";
+    case "task_rework": return "返工中";
+    case "task_failed": return "执行失败";
+    case "task_timeout": return "执行超时";
+    default: return kind;
+  }
+}
+
+function sseEventToVillageEvent(
+  sseEvent: ActivityStreamEvent,
+): VillageActivityEvent {
+  return {
+    kind: sseEvent.kind as VillageEventKind,
+    agentId: sseEvent.agentId,
+    agentName: sseEvent.agentName,
+    detailText: sseEvent.detail,
+    timestamp: sseEvent.ts,
+    story: `${sseEvent.agentName} ${describeEventKind(sseEvent.kind)}`,
+  };
+}
+
 function isThinkingAction(action: RecentAction | undefined): boolean {
   if (!action) return false;
   const key = `${action.method.toUpperCase()} ${action.path}`;
@@ -192,6 +223,9 @@ function buildIntent(
   } else if (event?.kind === "task_rework") {
     zoneId = homeZoneId;
     state = "thinking";
+  } else if (event?.kind === "task_failed" || event?.kind === "task_timeout") {
+    zoneId = homeZoneId;
+    state = "idle";
   } else if (summary?.current_sub_task) {
     zoneId = homeZoneId;
     state = buildWorkingState(normalizedRole, summary);
@@ -234,6 +268,7 @@ export function useVillageBridge(
   agentSummaries: AgentSummary[],
   activities: TranslatedActivity[],
   _dashboardStats: DashboardStats | null,
+  sseEvents?: ActivityStreamEvent[],
 ): UseVillageBridgeResult {
   const [agents, setAgents] = useState<VillageAgentModel[]>([]);
   const [readyToAnimate, setReadyToAnimate] = useState(false);
@@ -246,6 +281,17 @@ export function useVillageBridge(
 
   const eventsByAgent = useMemo(() => {
     const events = new Map<string, VillageActivityEvent>();
+
+    if (sseEvents && sseEvents.length > 0) {
+      for (const sseEvent of sseEvents) {
+        const villageEvent = sseEventToVillageEvent(sseEvent);
+        const idKey = normalizeToken(villageEvent.agentId);
+        const nameKey = normalizeToken(villageEvent.agentName);
+        if (idKey && !events.has(idKey)) events.set(idKey, villageEvent);
+        if (nameKey && !events.has(nameKey)) events.set(nameKey, villageEvent);
+      }
+    }
+
     for (const activity of activities) {
       const event = activityToEvent(activity);
       if (!event) continue;
@@ -255,7 +301,7 @@ export function useVillageBridge(
       if (nameKey && !events.has(nameKey)) events.set(nameKey, event);
     }
     return events;
-  }, [activities]);
+  }, [activities, sseEvents]);
 
   const intents = useMemo(() => {
     const usedIds = new Set<string>();
@@ -389,16 +435,23 @@ export function useVillageBridge(
   );
 
   const latestStory = useMemo(() => {
+    if (sseEvents && sseEvents.length > 0) {
+      const sseStory = sseEventToVillageEvent(sseEvents[0]);
+      return sseStory.story;
+    }
     const event = activities[0] ? activityToEvent(activities[0]) : null;
     if (event) return event.story;
     if (activeCount > 0) return `${activeCount} 名 Agent 正在村中协作`;
     return "营火区安静待命，等待下一批任务靠港。";
-  }, [activities, activeCount]);
+  }, [activities, activeCount, sseEvents]);
 
   const highlightedAgentId = useMemo(() => {
+    if (sseEvents && sseEvents.length > 0) {
+      return sseEvents[0].agentId || null;
+    }
     const event = activities[0] ? activityToEvent(activities[0]) : null;
     return event?.agentId || null;
-  }, [activities]);
+  }, [activities, sseEvents]);
 
   return {
     agents,

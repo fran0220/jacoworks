@@ -17,6 +17,10 @@ const BUILTIN_AGENT_SPRITE_PACKS: Record<string, string> = {
   researcher: "atlas",
   coder: "coda",
   writer: "lyric",
+  analyst: "prism",
+  designer: "sketch",
+  planner: "nova",
+  secretary: "echo",
 };
 
 const ROLE_SPRITE_PACKS: Record<string, string> = {
@@ -28,6 +32,10 @@ const ROLE_SPRITE_PACKS: Record<string, string> = {
   patrol: "beacon",
   executor: "coda",
   coder: "coda",
+  analyst: "prism",
+  designer: "sketch",
+  secretary: "echo",
+  summarizer: "lyric",
   member: "kael",
   default: DEFAULT_SPRITE_PACK_ID,
 };
