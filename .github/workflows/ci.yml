@@ -18,8 +18,6 @@ jobs:
       gateway: ${{ steps.filter.outputs.gateway }}
       webchat: ${{ steps.filter.outputs.webchat }}
       website: ${{ steps.filter.outputs.website }}
-      openclaw: ${{ steps.filter.outputs.openclaw }}
-      vm-agent: ${{ steps.filter.outputs.vm-agent }}
       desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@v4
@@ -33,13 +31,10 @@ jobs:
               - 'webchat/**'
             website:
               - 'website/**'
-            openclaw:
-              - 'openclaw/**'
-            vm-agent:
-              - 'vm-agent/**'
             desktop:
               - 'desktop/**'
-              - 'vm-agent/**'
+              - 'pi-config/**'
+              - 'skills/**'
 
   # ═══════════════════════════════════════════
   #  Layer 1 — Go 平台核心 (gateway/** 变更时触发)
@@ -131,7 +126,7 @@ jobs:
       - run: npm test
 
   # ═══════════════════════════════════════════
-  #  Layer 2B — WebChat + OpenClaw (local)
+  #  Layer 2B — WebChat + Pi relay (local)
   # ═══════════════════════════════════════════
 
   build-oc-gateway:
@@ -175,23 +170,3 @@ jobs:
           name: webchat-bundle
           path: website/static/chat
           retention-days: 7
-
-  # ═══════════════════════════════════════════
-  #  Layer 2C — vm-agent (oracle)
-  # ═══════════════════════════════════════════
-
-  vm-agent:
-    needs: changes
-    if: needs.changes.outputs.vm-agent == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: vm-agent
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run build

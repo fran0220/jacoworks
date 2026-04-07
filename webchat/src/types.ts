@@ -5,9 +5,12 @@ export interface User {
   role: string;
 }
 
-export type View = "workbench" | "tasks" | "team" | "observe";
+export type View = "agent" | "team" | "city";
+export type AppMode = View;
 
-export type OpsLens = "overview" | "timeline" | "board";
+export type AgentExpression = "idle" | "thinking" | "speaking" | "working" | "happy" | "error";
+
+export type AgentPresenceTone = "idle" | "thinking" | "working";
 
 export type FileCategory =
   | "image"
@@ -85,6 +88,7 @@ export interface ChatSession {
   updatedAt: number;
   type: "chat" | "cowork";
   model: string;
+  workspacePath?: string;
 }
 
 export type StreamBlock =
@@ -100,18 +104,3 @@ export type StreamBlock =
       artifact?: FileArtifact;
     }
   | { type: "status"; text: string };
-
-// ===== Channel-based navigation =====
-
-export type ChannelKind = "dashboard" | "agent" | "team" | "observe";
-
-export interface Channel {
-  id: string;
-  kind: ChannelKind;
-  sessionKey: string;
-  label: string;
-  icon?: string;
-  profileName?: string;
-  templateName?: string;
-  agentCount?: number;
-}

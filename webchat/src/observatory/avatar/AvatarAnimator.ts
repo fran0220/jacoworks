@@ -45,9 +45,9 @@ export class AvatarAnimator {
   private currentAction: THREE.AnimationAction | null = null;
   private useClipAnimation = false;
 
-  constructor(mesh: THREE.Object3D, clips?: Record<string, THREE.AnimationClip>) {
+  constructor(mesh: THREE.Object3D, mixer: THREE.AnimationMixer, clips?: Record<string, THREE.AnimationClip>) {
     this.root = mesh;
-    this.mixer = new THREE.AnimationMixer(this.root);
+    this.mixer = mixer;
     this.baseScaleY = this.root.scale.y;
     this.basePositionY = this.root.position.y;
 

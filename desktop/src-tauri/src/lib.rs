@@ -1153,9 +1153,10 @@ pub fn run() {
             stream::sse_connect,
             stream::sse_close,
             select_directory,
-            sidecar::start_agent,
+            sidecar::ensure_pi_session,
             sidecar::agent_rpc_send,
-            sidecar::stop_agent,
+            sidecar::interrupt_pi_session,
+            sidecar::stop_pi_session,
             sidecar::agent_status,
             sidecar::get_memory_stats,
             sidecar::clear_memory,
@@ -1200,7 +1201,7 @@ pub fn run() {
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
-            let _ = sidecar::stop_agent();
+            let _ = sidecar::stop_pi_session(None);
         }
     });
 }

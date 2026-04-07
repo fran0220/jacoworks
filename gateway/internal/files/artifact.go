@@ -87,9 +87,8 @@ func (s *ArtifactStore) Register(ctx context.Context, statReader StatReader, use
 		return nil, fmt.Errorf("artifact registration requires user and container")
 	}
 
-	// Resolve relative paths: OpenClaw write tool uses relative paths within
-	// its workspace (typically ~/.openclaw/workspace-default/). Use find to
-	// locate the file if stat on the raw path fails.
+	// Resolve relative paths: Pi CLI write tool uses relative paths within
+	// its workspace. Use find to locate the file if stat on the raw path fails.
 	if statReader != nil && !strings.HasPrefix(cleanPath, "/") {
 		cleanPath = resolveRelativePath(ctx, statReader, containerName, cleanPath)
 	}
@@ -202,13 +201,12 @@ func (s *ArtifactStore) expired(createdAt time.Time) bool {
 }
 
 // resolveRelativePath tries to find the absolute path of a relative file inside
-// the container. OpenClaw agents typically write to ~/.openclaw/workspace-default/
-// or /data/workspace/ using relative paths.
+// the container. Pi CLI agents typically write to /data/workspace/ using
+// relative paths.
 func resolveRelativePath(ctx context.Context, sr StatReader, containerName, relativePath string) string {
-	// Common OpenClaw workspace directories to check
 	candidates := []string{
-		"/home/node/.openclaw/workspace-default/" + relativePath,
 		"/data/workspace/" + relativePath,
+		"/home/node/.pi/workspace/" + relativePath,
 	}
 	for _, candidate := range candidates {
 		if _, err := sr.StatFile(ctx, containerName, candidate); err == nil {
@@ -217,7 +215,7 @@ func resolveRelativePath(ctx context.Context, sr StatReader, containerName, rela
 	}
 	// Fallback: use find to search common workspace roots
 	result, err := sr.Exec(ctx, containerName, "find",
-		"/home/node/.openclaw", "/data/workspace",
+		"/data/workspace", "/home/node/.pi",
 		"-name", path.Base(relativePath), "-type", "f",
 		"-maxdepth", "5", "-print", "-quit")
 	if err == nil && strings.TrimSpace(result.Stdout) != "" {

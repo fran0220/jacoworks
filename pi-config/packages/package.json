@@ -1,0 +1,19 @@
+{
+  "name": "jacoworks-pi-packages",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bundled Pi CLI community packages for JAcoworks Desktop",
+  "dependencies": {
+    "pi-messenger": "*",
+    "@db0-ai/pi": "*",
+    "@db0-ai/backends-postgres": "*",
+    "pi-web-access": "*",
+    "@apmantza/greedysearch-pi": "*",
+    "pi-mcp-adapter": "*",
+    "@aliou/pi-guardrails": "*",
+    "@aliou/pi-processes": "*",
+    "pi-rtk": "*",
+    "pi-subagents": "*",
+    "pi-agent-teams": "*"
+  }
+}

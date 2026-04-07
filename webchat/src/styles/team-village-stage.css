@@ -1,0 +1,322 @@
+.village-stage-panel {
+  min-width: 0;
+  display: flex;
+}
+
+.village-stage-frame {
+  flex: 1;
+  min-height: 0;
+  padding: 0.9rem;
+  border-radius: 1.35rem;
+  background:
+    linear-gradient(180deg, rgba(121, 172, 204, 0.28), rgba(255, 244, 219, 0.5)),
+    rgba(255, 250, 241, 0.78);
+  border: 1px solid rgba(107, 152, 174, 0.18);
+}
+
+.village-map-scene {
+  position: relative;
+  width: 100%;
+  border-radius: 1.2rem;
+  overflow: hidden;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  box-shadow: inset 0 -40px 80px rgba(31, 22, 16, 0.14);
+}
+
+.village-map-atmosphere,
+.village-map-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.village-map-atmosphere {
+  background:
+    radial-gradient(circle at 14% 14%, rgba(255, 250, 238, 0.58), transparent 18%),
+    radial-gradient(circle at 86% 18%, rgba(255, 233, 179, 0.24), transparent 20%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(89, 63, 33, 0.18));
+}
+
+.village-map-vignette {
+  box-shadow: inset 0 0 110px rgba(39, 27, 20, 0.18);
+}
+
+.village-zone-chip {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.9rem;
+  background: rgba(32, 24, 18, 0.64);
+  color: #fffaf0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transform: translate(-50%, -100%);
+  backdrop-filter: blur(4px);
+  max-width: 220px;
+}
+
+.village-zone-chip--reserved {
+  border-color: rgba(255, 226, 140, 0.45);
+  box-shadow: 0 0 0 1px rgba(255, 214, 102, 0.2), 0 14px 24px rgba(24, 17, 11, 0.18);
+}
+
+.village-zone-chip strong {
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.village-zone-chip em {
+  display: block;
+  font-style: normal;
+  font-size: 0.64rem;
+  line-height: 1.3;
+  color: rgba(255, 250, 240, 0.75);
+}
+
+.village-crop-plot {
+  position: absolute;
+  width: 10%;
+  min-width: 72px;
+  height: 8%;
+  border-radius: 1rem;
+  transform: translate(-50%, -50%) rotate(-8deg);
+  border: 2px solid rgba(91, 71, 36, 0.18);
+  box-shadow: 0 14px 28px rgba(63, 42, 18, 0.15);
+}
+
+.village-crop-plot span {
+  position: absolute;
+  left: 50%;
+  bottom: -1.6rem;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #5b412d;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.village-crop-plot--seed {
+  background:
+    linear-gradient(180deg, rgba(109, 77, 41, 0.9), rgba(81, 55, 30, 0.94)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0 7px, transparent 7px 15px);
+}
+
+.village-crop-plot--sprout {
+  background:
+    linear-gradient(180deg, rgba(112, 84, 46, 0.85), rgba(92, 64, 32, 0.9)),
+    repeating-linear-gradient(90deg, rgba(130, 188, 88, 0.82) 0 8px, rgba(83, 135, 62, 0.88) 8px 15px);
+}
+
+.village-crop-plot--mature {
+  background:
+    linear-gradient(180deg, rgba(156, 123, 53, 0.82), rgba(118, 88, 28, 0.88)),
+    repeating-linear-gradient(90deg, rgba(220, 195, 92, 0.92) 0 9px, rgba(176, 143, 42, 0.92) 9px 16px);
+}
+
+.village-crop-plot--empty {
+  background: linear-gradient(180deg, rgba(90, 70, 45, 0.5), rgba(70, 50, 30, 0.55));
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.village-crop-plot--dead {
+  background:
+    linear-gradient(180deg, rgba(85, 72, 60, 0.8), rgba(65, 55, 45, 0.85)),
+    repeating-linear-gradient(90deg, rgba(140, 120, 100, 0.6) 0 8px, rgba(110, 92, 75, 0.6) 8px 15px);
+  filter: grayscale(0.5);
+  opacity: 0.7;
+}
+
+.village-crop-plot--sprout.has-task {
+  animation: village-crop-sway 2.4s ease-in-out infinite;
+}
+
+.village-crop-plot--mature.has-task {
+  box-shadow: 0 14px 28px rgba(63, 42, 18, 0.15), 0 0 18px rgba(220, 195, 92, 0.3);
+}
+
+@keyframes village-crop-sway {
+  0%, 100% { transform: translate(-50%, -50%) rotate(-8deg); }
+  50% { transform: translate(-50%, -50%) rotate(-5deg); }
+}
+
+.village-agent {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  transition: left 1.65s linear, top 1.65s linear;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  /* No fixed width — content-sized */
+}
+
+.village-agent.is-highlighted .village-agent-bubble {
+  box-shadow: 0 0 0 3px rgba(255, 229, 166, 0.55), 0 14px 24px rgba(23, 15, 8, 0.22);
+}
+
+.village-agent-bubble {
+  width: max-content;
+  max-width: 150px;
+  padding: 0.42rem 0.58rem;
+  border-radius: 0.9rem;
+  background: rgba(255, 251, 244, 0.96);
+  border: 1px solid rgba(117, 91, 67, 0.14);
+  box-shadow: 0 10px 18px rgba(43, 28, 17, 0.12);
+  text-align: center;
+}
+
+.village-agent-bubble strong,
+.village-agent-bubble span,
+.village-agent-bubble em {
+  display: block;
+}
+
+.village-agent-bubble strong {
+  font-size: 0.74rem;
+  color: #34251a;
+}
+
+.village-agent-bubble span {
+  margin-top: 0.12rem;
+  font-size: 0.64rem;
+  line-height: 1.35;
+  color: #684f3d;
+}
+
+.village-agent-bubble em {
+  margin-top: 0.2rem;
+  font-style: normal;
+  font-size: 0.61rem;
+  line-height: 1.3;
+  color: #98755e;
+}
+
+.village-agent-shadow {
+  width: 40px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(29, 19, 11, 0.2);
+  filter: blur(2px);
+  margin-top: -4px;
+}
+
+.village-agent-sprite {
+  width: 56px;
+  height: 84px;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 336px 84px;
+  image-rendering: pixelated;
+  will-change: background-position;
+  animation: village-agent-sprite-play var(--village-sprite-duration, 0.8s) steps(6) infinite;
+}
+
+.village-agent-sprite--idle,
+.village-agent-sprite--thinking,
+.village-agent-sprite--speaking,
+.village-agent-sprite--working,
+.village-agent-sprite--happy,
+.village-agent-sprite--error {
+  background-position-y: 0;
+}
+
+.village-agent-sprite--idle {
+  --village-sprite-duration: 1.16s;
+}
+
+.village-agent-sprite--thinking {
+  --village-sprite-duration: 0.92s;
+}
+
+.village-agent-sprite--error {
+  --village-sprite-duration: 0.48s;
+}
+
+.village-agent-sprite--working {
+  --village-sprite-duration: 0.72s;
+}
+
+.village-agent-sprite--happy {
+  --village-sprite-duration: 0.62s;
+}
+
+.village-agent-sprite--speaking {
+  --village-sprite-duration: 0.8s;
+}
+
+.village-agent--idle .village-agent-sprite {
+  --village-sprite-duration: 1.2s;
+}
+
+.village-agent--resting .village-agent-sprite {
+  --village-sprite-duration: 1.28s;
+}
+
+.village-agent--walking .village-agent-sprite {
+  --village-sprite-duration: 0.72s;
+}
+
+.village-agent--working .village-agent-sprite {
+  --village-sprite-duration: 0.56s;
+}
+
+.village-agent--thinking .village-agent-sprite,
+.village-agent--reviewing .village-agent-sprite {
+  --village-sprite-duration: 0.92s;
+}
+
+.village-agent--stuck .village-agent-sprite {
+  --village-sprite-duration: 0.48s;
+}
+
+.village-agent--celebrating .village-agent-sprite {
+  --village-sprite-duration: 0.62s;
+}
+
+.village-agent--walking,
+.village-agent--celebrating {
+  z-index: 4;
+}
+
+.village-agent--resting,
+.village-agent--working,
+.village-agent--thinking,
+.village-agent--reviewing {
+  z-index: 5;
+}
+
+.village-agent--stuck {
+  z-index: 6;
+}
+
+.village-agent--celebrating .village-agent-bubble {
+  box-shadow: 0 0 0 3px rgba(255, 228, 160, 0.35), 0 14px 22px rgba(43, 28, 17, 0.16);
+}
+
+.village-agent--stuck .village-agent-bubble {
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.3), 0 14px 22px rgba(67, 22, 22, 0.18);
+}
+
+.village-agent-badge {
+  margin-top: 0.2rem;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #fffdf7;
+  background: var(--agent-accent);
+  box-shadow: 0 8px 14px rgba(46, 33, 18, 0.16);
+}
+
+.village-panel-card--legend p {
+  margin-top: 0.8rem;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: #765840;
+}

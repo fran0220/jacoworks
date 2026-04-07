@@ -1,9 +1,0 @@
-{
-  "name": "researcher",
-  "displayName": "调研助手",
-  "description": "深度调研与分析，擅长多源搜索、信息整合和研究报告",
-  "icon": "sparkles",
-  "model": "proxy/claude-sonnet-4-6",
-  "skills": ["search"],
-  "workspace": "/data/workspace"
-}

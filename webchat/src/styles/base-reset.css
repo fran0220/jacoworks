@@ -1,0 +1,51 @@
+/* ===== Reset ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  height: 100%;
+  overflow: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+:root {
+  --accent: #C4724A;
+  --accent-hover: #A85D3A;
+  --bg-primary: #F5F0EB;
+  --bg-secondary: #FAF7F4;
+  --bg-tertiary: #f3f0ec;
+  --bg-code: #1f2937;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --text-primary: #1f2937;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --text-tertiary: #6b7280;
+  --border: #e5e7eb;
+  --border-light: #f0ece7;
+  --danger: #ef4444;
+  --sprite-idle: #98a2b3;
+  --sprite-thinking: #d3a241;
+  --sprite-working: #2f9f6d;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  --radius: 0.75rem;
+  --radius-sm: 0.375rem;
+  --radius-lg: 1rem;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+button { border: none; background: none; cursor: pointer; font-family: inherit; }
+

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Monitor, Maximize2, Minimize2, ExternalLink } from "lucide-react";
-import { getOpenClawVncUrl } from "../lib/config";
+import { getPiVMVncUrl } from "../lib/config";
 import { openExternalUrl } from "../lib/external-open";
 import { shouldUseExternalDesktop } from "../lib/platform";
 
@@ -11,7 +11,7 @@ function buildNoVncUrl(vncUrl: string): string {
 }
 
 export default function DesktopPanel() {
-  const vncUrl = getOpenClawVncUrl();
+  const vncUrl = getPiVMVncUrl();
   const [fullscreen, setFullscreen] = useState(false);
   const [preferExternal, setPreferExternal] = useState(() => shouldUseExternalDesktop());
 
@@ -100,7 +100,7 @@ export default function DesktopPanel() {
       <iframe
         className="desktop-panel-frame"
         src={noVncSrc}
-        title="OpenClaw 远程桌面 Beta"
+        title="远程桌面"
         allow="clipboard-read; clipboard-write"
       />
     </div>

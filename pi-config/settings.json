@@ -1,0 +1,25 @@
+{
+  "defaultProvider": "proxy-openai",
+  "defaultModel": "gpt-5.4",
+  "defaultThinkingLevel": "off",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 32768,
+    "keepRecentTokens": 40000
+  },
+  "packages": [
+    "npm:pi-messenger",
+    "npm:@db0-ai/pi",
+    "npm:@db0-ai/backends-postgres",
+    "npm:pi-web-access",
+    "npm:@apmantza/greedysearch-pi",
+    "npm:pi-mcp-adapter",
+    "npm:@aliou/pi-guardrails",
+    "npm:@aliou/pi-processes",
+    "npm:pi-rtk",
+    "npm:pi-subagents",
+    "npm:pi-agent-teams"
+  ],
+  "extensions": ["./extensions"],
+  "skills": ["./skills"]
+}

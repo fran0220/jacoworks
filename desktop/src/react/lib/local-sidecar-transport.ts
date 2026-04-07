@@ -1,27 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AgentRpcEvent } from "./agent";
-import type { AgentTransport } from "./agent-transport";
-import type { SkillDefinition } from "./skills";
+import type { AgentSessionOptions, AgentTransport } from "./agent-transport";
 
 export interface SidecarConfig {
   agentDir: string;
   envVars: Record<string, string>;
-}
-
-interface StartAgentResponse {
-  running: boolean;
-  transport: string;
-}
-
-/** Skill info as emitted by sidecar `ready` event. */
-interface SidecarSkillInfo {
-  id: string;
-  name: string;
-  description: string;
-  group?: string;
-  source: "builtin" | "user";
-  editable: boolean;
 }
 
 export class LocalSidecarTransport implements AgentTransport {
@@ -31,19 +15,12 @@ export class LocalSidecarTransport implements AgentTransport {
   private readyHandler: (() => void) | null = null;
   private errorHandler: ((error: Error) => void) | null = null;
   private unlisten: UnlistenFn | null = null;
-
-  /** Skills reported by sidecar in its `ready` event (actual LLM-visible skills). */
-  private _loadedSkills: SkillDefinition[] = [];
+  private ensuredSessions = new Set<string>();
 
   constructor(private readonly config: SidecarConfig) {}
 
   get isReady() {
     return this.ready;
-  }
-
-  /** Skills actually loaded by the sidecar (source of truth for LLM). */
-  get loadedSkills(): SkillDefinition[] {
-    return this._loadedSkills;
   }
 
   async connect(): Promise<void> {
@@ -56,18 +33,7 @@ export class LocalSidecarTransport implements AgentTransport {
       const payload = event.payload;
       if (!payload || typeof payload !== "object") return;
 
-      if (payload.type === "ready") {
-        // Capture skills from sidecar ready event — this is what the LLM actually sees
-        if (Array.isArray(payload.skills)) {
-          this._loadedSkills = (payload.skills as SidecarSkillInfo[]).map((s) => ({
-            id: s.id,
-            name: s.name,
-            description: s.description,
-            group: s.group,
-            source: s.source,
-            editable: s.editable,
-          }));
-        }
+      if (payload.type === "session") {
         this.markReady();
       } else if (payload.type === "error" && typeof payload.error === "string") {
         this.errorHandler?.(new Error(payload.error));
@@ -77,10 +43,6 @@ export class LocalSidecarTransport implements AgentTransport {
     });
 
     try {
-      await invoke<StartAgentResponse>("start_agent", {
-        agentDir: this.config.agentDir,
-        envVars: this.config.envVars,
-      });
       this.markReady();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -96,15 +58,55 @@ export class LocalSidecarTransport implements AgentTransport {
   close(): void {
     this.ready = false;
     this.connecting = false;
+    const sessions = [...this.ensuredSessions];
+    this.ensuredSessions.clear();
     void this.detachListener();
-    invoke("stop_agent").catch(() => {});
+    for (const sessionId of sessions) {
+      invoke("stop_pi_session", { sessionId }).catch(() => {});
+    }
   }
 
-  send(command: Record<string, unknown>): void {
-    invoke("agent_rpc_send", { command }).catch((error) => {
+  async ensureSession(sessionId: string, options?: AgentSessionOptions): Promise<void> {
+    try {
+      await invoke("ensure_pi_session", {
+        sessionId,
+        agentDir: this.config.agentDir,
+        envVars: this.config.envVars,
+        userId: options?.userId,
+        model: options?.model,
+        workspace: options?.workspace,
+        restricted: options?.restricted,
+        streamingBehavior: options?.streamingBehavior,
+        thinkingLevel: options?.thinkingLevel,
+        anonymous: options?.anonymous,
+      });
+      this.ensuredSessions.add(sessionId);
+      this.markReady();
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.errorHandler?.(new Error(message));
-    });
+      throw error;
+    }
+  }
+
+  async sendMessage(sessionId: string, message: string): Promise<void> {
+    try {
+      await invoke("agent_rpc_send", { sessionId, message });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.errorHandler?.(new Error(msg));
+      throw error;
+    }
+  }
+
+  async abortSession(sessionId: string): Promise<void> {
+    try {
+      await invoke("abort_pi_session", { sessionId });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.errorHandler?.(new Error(msg));
+      throw error;
+    }
   }
 
   onMessage(handler: ((packet: AgentRpcEvent) => void) | null): void {

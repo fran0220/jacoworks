@@ -1,15 +1,17 @@
 import TeamPanel from "./TeamPanel";
 
-export default function TeamStudioView({
-  activeSessionKey,
-  onSwitchTeam,
-}: {
+interface TeamStudioViewProps {
   activeSessionKey: string;
   onSwitchTeam: (key: string) => void;
-}) {
+}
+
+export default function TeamStudioView({ activeSessionKey, onSwitchTeam }: TeamStudioViewProps) {
   return (
-    <section className="view-shell view-shell--team">
-      <TeamPanel activeSessionKey={activeSessionKey} onSwitchTeam={onSwitchTeam} />
-    </section>
+    <div className="team-studio-view">
+      <TeamPanel
+        activeSessionKey={activeSessionKey}
+        onSwitchTeam={onSwitchTeam}
+      />
+    </div>
   );
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time Incus setup for JAcoworks OpenClaw containers.
+# One-time Incus setup for JAcoworks Pi VM containers.
 # Run on the local server (x86_64 Ubuntu 22.04+).
 set -euo pipefail
 
@@ -22,12 +22,12 @@ fi
 
 echo ""
 echo "📂 Creating data directories..."
-sudo mkdir -p /srv/jacoworks/openclaw
-sudo chown root:root /srv/jacoworks/openclaw
+sudo mkdir -p /srv/jacoworks/pi-vm
+sudo chown root:root /srv/jacoworks/pi-vm
 
 echo ""
 echo "✅ Incus setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Build golden image: ./deploy/incus/build-openclaw-image.sh"
+echo "  1. Build golden image: ./deploy/incus/build-pi-vm.sh"
 echo "  2. Deploy oc-gateway:  make deploy-oc-gateway"

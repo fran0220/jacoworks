@@ -1,0 +1,68 @@
+{
+  "id": "content-crew",
+  "label": "内容创作团",
+  "description": "从选题策划到成稿发布，一站式内容生产流水线。",
+  "icon": "✍️",
+  "version": "1.0.0",
+  "workspaceKeyPrefix": "team:content-crew",
+  "leaderSystemPrompt": "你是 Muse，一位内容创作团的创意总监。你的团队有：Lyric（文案撰稿）、Sketch（视觉设计）、Echo（调研采编）。接到用户的创作需求后，先让 Echo 调研背景素材，然后自己拟定内容框架，分配 Lyric 撰写文案、Sketch 制作视觉方案。最后汇总审阅、润色后交付给用户。始终用中文沟通。",
+  "members": [
+    {
+      "name": "echo",
+      "role": "researcher",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "spritePackId": "echo",
+      "kickoff": "你是 Echo，团队的调研采编。负责搜集背景资料、竞品案例、数据支撑。输出简洁的调研摘要，标注信息来源。"
+    },
+    {
+      "name": "lyric",
+      "role": "writer",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "spritePackId": "lyric",
+      "kickoff": "你是 Lyric，团队的文案撰稿人。根据创意总监给的框架和调研材料，撰写高质量文案。文风灵活，能驾驭正式报告、营销文案、社交媒体等多种风格。"
+    },
+    {
+      "name": "sketch",
+      "role": "designer",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "spritePackId": "sketch",
+      "kickoff": "你是 Sketch，团队的视觉设计师。根据内容主题提供配色方案、排版建议、插图描述或 SVG 图形。输出清晰的设计规范文档。"
+    }
+  ],
+  "bootstrapCommands": [
+    "/team spawn echo fresh shared --model proxy/gpt-5.4",
+    "/team spawn lyric fresh shared --model proxy/gpt-5.4",
+    "/team spawn sketch fresh shared --model proxy/gpt-5.4"
+  ],
+  "theme": {
+    "sceneKind": "studio",
+    "title": "创意工作室",
+    "icon": "✍️",
+    "palette": {
+      "primary": "#9f1239",
+      "secondary": "#6366f1",
+      "accent": "#b45309",
+      "background": "#1a1520",
+      "surface": "#2d2235"
+    },
+    "roles": {
+      "leader": { "displayName": "创意总监", "color": "#9f1239", "icon": "crown" },
+      "researcher": { "displayName": "调研采编", "color": "#a78bfa", "icon": "search" },
+      "writer": { "displayName": "文案撰稿", "color": "#b45309", "icon": "pen-tool" },
+      "designer": { "displayName": "视觉设计", "color": "#6366f1", "icon": "palette" }
+    },
+    "agents": {
+      "muse": { "displayName": "Muse", "subtitle": "创意总监", "color": "#9f1239" },
+      "echo": { "displayName": "Echo", "subtitle": "调研采编", "color": "#a78bfa" },
+      "lyric": { "displayName": "Lyric", "subtitle": "文案撰稿", "color": "#b45309" },
+      "sketch": { "displayName": "Sketch", "subtitle": "视觉设计", "color": "#6366f1" }
+    },
+    "zones": {}
+  }
+}

@@ -1,16 +1,16 @@
 # Gateway — Go 管理网关
 
-> gateway (jingao :8847) 作为桌面端/后台管控面，保留 LLM 配置下发、memory/skills/feedback/games/feishu 等能力。oc-gateway (local :18700) 现为 **webchat 完整后端**：认证、会话 CRUD、cron、SPA 托管，以及 OpenClaw 容器管理、thin WS relay、JaMOSS、teams/cowork。
+> gateway (jingao :8847) 作为桌面端/后台管控面，保留 LLM 配置下发、memory/skills/feedback/games/feishu 等能力。oc-gateway (local :18700) 现为 **webchat 完整后端**：认证、会话 CRUD、cron、SPA 托管，以及 Pi VM 管理、Pi WS Wrapper relay、teams/cowork。
 
 ## 代码结构
 
 ```
 cmd/gateway/main.go            入口 (桌面端/后台管控面: 认证 + 会话 CRUD + 管理 API + WS 代理)
-cmd/oc-gateway/main.go         入口 (webchat 完整后端: /login + /chat + /static/* + auth/session/cron + OpenClaw 全量路由)
-data/chat.html                 webchat SPA 模板 (注入 __GATEWAY_URL__ / __AUTH_TOKEN__ / __OPENCLAW_TOKEN__ 等)
+cmd/oc-gateway/main.go         入口 (webchat 完整后端: /login + /chat + /static/* + auth/session/cron + Pi relay 路由)
+data/chat.html                 webchat SPA 模板 (注入 __GATEWAY_URL__ / __AUTH_TOKEN__ / __PI_TOKEN__ 等, 不含 Mapbox)
 data/login.html                独立登录页 (POST /api/auth/login, 写入 auth_token Cookie)
 internal/
-  config/config.go             YAML + env override, ChatAgentConfig, GitHubConfig, PostHogConfig, OpenClawConfig
+  config/config.go             YAML + env override, ChatAgentConfig, GitHubConfig, PostHogConfig, VM/relay 配置
   middleware/middleware.go      RequestID + RequestLog + PanicRecovery 中间件
   auth/{middleware,handlers}.go Goth 飞书 SSO + bcrypt + 激活码
   auth/feishu/                 Goth Feishu Provider
@@ -21,12 +21,12 @@ internal/
   proxy/handler.go             ReverseProxy (ChatAgent 代理)
   cowork/handler.go            文件操作 (upload/download/changes)
   agent/types.go               EventCallback 类型定义
-  agent/ws_handler.go          thin WS relay (ticket auth → container lookup → 直连 OpenClaw VM WS → server-side handshake → 双向原样帧转发, ~220 行)
+  agent/ws_handler.go          Pi WS relay (ticket auth → container lookup → 直连 VM `pi-ws-wrapper` → Pi JSONL / 兼容帧翻译)
   agent/ws_ticket.go           WS ticket 签发/验证 (HMAC-SHA256, 30s TTL, 桌面端/飞书 Bot 用)
-  openclaw/                    OpenClaw WS 协议客户端
-    protocol.go                WS 帧类型定义 (req/res/event, challenge, pairing)
-    gateway_client.go          WS 客户端 (challenge-response 握手 + RPC: pair.list/approve/revoke)
-    auto_pairer.go             自动设备配对 (轮询 + 批量审批)
+  pi/
+    manager.go                 管理 VM 内 `pi-ws-wrapper` 与 Pi 运行目录
+    translator.go              Pi JSONL ↔ webchat 兼容帧翻译
+    config.go                  写入 `pi-config/` 到 VM
   github/client.go             GitHub API 客户端 (Issue 创建 + 图片上传到 feedback-assets 分支)
   docker/                      vm-agent Docker 容器管理 (Docker Go SDK + SSH 传输, oracle ARM64)
     client.go                  Docker SDK 客户端 (SSH dial-stdio 传输, 容器 CRUD, 记忆/技能推拉)
@@ -56,9 +56,9 @@ internal/
 | GET/POST/PUT/DELETE | `/api/sessions[/{id}]` | 会话 CRUD (oc-gateway 独立提供, title/messages/model/workspace_path) |
 | POST | `/v1/chat/completions` | ChatAgent HTTP 代理 |
 | GET | `/api/cowork/container-status` | 容器状态（已迁移至 oc-gateway） |
-| POST | `/api/cowork/provision` | 自助分配 OpenClaw VM（已迁移至 oc-gateway） |
+| POST | `/api/cowork/provision` | 自助分配 Pi CLI VM（已迁移至 oc-gateway） |
 | POST | `/api/agent/ws-ticket` | 桌面端 WS ticket 签发 (30s TTL, ticket auth 替代 Bearer) |
-| GET | `/ws/oc` | thin WS relay (ticket auth → OpenClaw VM 直连, 双向原样转发, 仅合成 proxy.ready/proxy.error；已迁移至 oc-gateway) |
+| GET | `/ws/oc` | Pi WS Wrapper relay (ticket auth → VM :18789 → Pi JSONL / OpenClaw-like 帧翻译；已迁移至 oc-gateway) |
 | GET | `/ws/exec` | WebSocket exec (容器内执行命令, 需认证) |
 | POST | `/api/cowork/{sid}/upload` | 上传项目（已迁移至 oc-gateway） |
 | POST | `/api/memory/sync` | 记忆双向同步 (manifest + push/pull) |
@@ -80,23 +80,21 @@ internal/
 | DELETE | `/api/cron/jobs/{id}` | 删除定时任务 (oc-gateway 独立提供) |
 | POST | `/api/cron/jobs/{id}/run` | 手动触发定时任务 (stub) |
 | GET | `/api/cron/jobs/{id}/history` | 查看执行历史 (stub) |
-| POST | `/api/cron/announce` | 接收 vm-agent 定时任务执行结果 → 飞书通知 |
+| POST | `/api/cron/announce` | 接收 Pi cron-proxy 定时任务执行结果 → 飞书通知 |
 | GET | `/api/teams` | 用户可用团队 (installed + available 模板列表，已迁移至 oc-gateway) |
-| POST | `/api/teams/install` | 用户自助安装团队模板到自己的 OpenClaw 容器（已迁移至 oc-gateway） |
-| * | `/api/jamoss/*` | JaMOSS 中间件代理 (路由到 OpenClaw 容器 port 6565，已迁移至 oc-gateway) |
+| POST | `/api/teams/install` | 用户自助安装参考团队模板到自己的 Pi VM（已迁移至 oc-gateway） |
 | GET | `/api/admin/containers` | 列出所有容器 (管理员) |
 | POST | `/api/admin/containers/{id}/start` | 启动容器 (管理员) |
 | POST | `/api/admin/containers/{id}/stop` | 停止容器 (管理员) |
 | GET | `/api/admin/settings` | 读取系统设置 (LLM 密钥等) |
 | PUT | `/api/admin/settings` | 更新系统设置 + 热重载内存配置 |
-| POST | `/api/admin/containers/{id}/sync-config` | 同步 OpenClaw 配置到运行中容器 |
 | POST | `/api/admin/containers/{id}/restart` | 重启容器 (stop + start) |
 | POST | `/api/admin/provision` | 管理员分配容器/VM |
 | POST | `/api/admin/invite-codes` | 创建激活码 |
 | GET | `/api/admin/invite-codes` | 列出激活码 |
 | GET | `/api/admin/logs` | 查询日志 |
-| GET | `/api/admin/templates` | 列出可用团队模板 (读取 openclaw/templates/) |
-| POST | `/api/admin/containers/{id}/install-template` | 安装团队模板到容器 (生成 agents+cron 配置, 复制文件) |
+| GET | `/api/admin/templates` | 列出可用团队模板 (读取 `openclaw/templates/`，迁移参考) |
+| POST | `/api/admin/containers/{id}/install-template` | 安装参考模板到 VM (迁移中，生成 Pi 团队配置) |
 | GET | `/health` | 健康检查 |
 
 ## 双网关职责对比
@@ -106,7 +104,7 @@ internal/
 | 域名 | `jacoapi.jingao.club` | `chat.jingao.club` |
 | 客户端 | 桌面端 + 飞书 Bot + 管理后台 | webchat SPA |
 | 认证会话 | 共享 PostgreSQL `auth_sessions` | 共享 PostgreSQL `auth_sessions` |
-| 独占功能 | memory / skills / feedback / games / feishu | Incus VM / OpenClaw WS / teams / jamoss / VNC / SPA 托管 |
+| 独占功能 | memory / skills / feedback / games / feishu | Incus VM / Pi WS relay / teams / VNC / SPA 托管 |
 | 部署入口 | `make deploy-jingao` | `make deploy-local` |
 
 ## 环境变量
@@ -164,49 +162,45 @@ go test ./...
 cd ../vm-agent && npm run test:gateway-e2e
 ```
 
-覆盖: middleware, handlers, config, ws_ticket, docker client (mock), openclaw gateway_client (mock WS), 全部 API 端点。
+覆盖: middleware, handlers, config, ws_ticket, docker client (mock), relay/translator 路径, 全部 API 端点。
 
 ## 开发规范
 
 - **Go 标准** + golangci-lint
 - **配置集中管理**: LLM 密钥统一由 DB `system_settings` 管理，启动加载 + 热重载
-- **双网关拆分**: gateway 负责桌面端/后台管控面；oc-gateway 负责 webchat 认证 + 会话 + cron + SPA + OpenClaw thin WS relay
+- **双网关拆分**: gateway 负责桌面端/后台管控面；oc-gateway 负责 webchat 认证 + 会话 + cron + SPA + Pi WS Wrapper relay
 - 本地开发: `make dev-gateway` → localhost:8847
-- 本地开发 (OpenClaw): `make dev-oc-gateway` → localhost:18700
-- 部署: `make deploy-jingao` (gateway + website) / `make deploy-local` (oc-gateway + webchat + openclaw) / `make deploy-oracle` (vm-agent)
+- 本地开发 (Pi relay): `make dev-oc-gateway` → localhost:18700
+- 部署: `make deploy-jingao` (gateway + website) / `make deploy-local` (oc-gateway + webchat + pi-config + skills)
 - 前端专项部署: `make deploy-webchat` / `make deploy-webchat-static`
 
-## vm-agent 容器管理 (Docker, oracle 主机)
+## vm-agent 容器管理（已废弃，oracle 主机）
 
 - **Docker Go SDK**: vm-agent 容器 (oracle ARM64) 通过 `github.com/docker/docker/client` SDK, SSH 传输 (`ssh dial-stdio`)
 - **两级空闲策略**: Freezer 按前缀 (`agent-`) 管理, pause → stop 两级回收
-- **注意**: Docker 仅用于 vm-agent (oracle), OpenClaw 使用 Incus VM (local)
+- **注意**: Docker 路径仅为历史回滚保留；当前生产链路不再依赖 oracle vm-agent
 
-## Incus VM 管理 (OpenClaw, local 主机)
+## Incus VM 管理 (Pi CLI, local 主机)
 
-oc-gateway 使用 Incus 管理 OpenClaw VM (每用户一个 Incus 虚拟机):
+oc-gateway 使用 Incus 管理 Pi CLI VM (每用户一个 Incus 虚拟机):
 
-- **Golden Image**: `openclaw-ready` — Ubuntu 24.04 + XFCE4 + TigerVNC + noVNC + OpenClaw + JMOS
+- **Golden Image**: `pi-ready` — Ubuntu 24.04 + XFCE4 + TigerVNC + noVNC + Pi CLI + `pi-ws-wrapper`
 - **构建**: `deploy/incus/build-openclaw-vm.sh --force` (在 local 服务器上构建)
-- **每用户 VM**: `incus launch openclaw-ready oc-{user-hash} --vm` + disk devices (数据持久化), 4 CPU / 4GiB RAM
+- **每用户 VM**: `incus launch pi-ready oc-{user-hash} --vm` + disk devices (数据持久化), 4 CPU / 4GiB RAM
 - **VM 网络**: VM 通过 Incus bridge 自动获取 IP (10.193.112.x)，端口直接暴露，**不使用 proxy device**
-- **Systemd 服务**: OpenClaw (`openclaw.service`) + VNC (`vncserver.service`) + noVNC (`novnc.service`) + JMOS (`jmos.service`)
+- **Systemd 服务**: `pi-ws-wrapper.service` + `vncserver.service` + `novnc.service`
 - **两级空闲策略**: Freezer (freeze → stop)
-- **配置热同步**: SyncConfig 通过 `container.Runtime.WriteFile` 写入 + `systemctl restart openclaw`
-- **自动设备配对**: AutoPairer 轮询审批配对请求
+- **配置写入**: `pi-config/` 与 `skills/` 通过 gateway 写入 VM 运行目录
 - **VNC 代理**: `/vnc/*` 反代 noVNC 静态文件, `/websockify` 代理 WS 到 VM bridge IP:6080
 
-## 团队模板系统
+## 团队模板系统（迁移中）
 
-OpenClaw VM 支持安装团队模板 (如 JaMOSS), Gateway 负责:
+参考模板仍保存在 `openclaw/templates/`，Gateway 负责把它们转换为 Pi 运行时所需的工作区与团队配置：
 
 1. **读取模板** — 从 `openclaw/templates/{name}/template.json` 加载定义
-2. **生成配置** — 将模板 agents 合并到 openclaw.json 的 `agents.list[]`, 设置 cron, 分配 model
+2. **生成配置** — 渲染 Pi 团队配置 / sessionKey / cron 行为
 3. **部署文件** — 复制 prompts/ skills/ workspace/ 到 VM 对应目录
-4. **JMOS 配置** — 渲染 config.yaml 写入 `/etc/jmos/config.yaml`, JMOS 二进制已预装
-
-模板源码: `openclaw/templates/jamoss/` (template.json + prompts/ + skills/ + rules/ + workspace/)
-JMOS 协作网关: `openclaw/jmos/` (Go 单二进制, 预装于 VM, port 6565, SQLite)
+4. **启动运行时** — 确保 `pi-ws-wrapper.service` 可接入并由前端复用现有兼容协议
 
 ## 新增 system_settings 配置项 checklist
 

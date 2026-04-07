@@ -1,0 +1,44 @@
+.village-roster,
+.village-zone-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.village-roster li,
+.village-zone-list li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.village-roster-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.7);
+}
+
+.village-roster li strong,
+.village-zone-list li strong {
+  font-size: 0.8rem;
+  color: #34261d;
+}
+
+.village-roster li span,
+.village-zone-list li span {
+  font-size: 0.72rem;
+  color: #775b47;
+}
+
+.village-roster li em {
+  font-style: normal;
+  font-size: 0.7rem;
+  color: #9b775e;
+  text-align: right;
+}

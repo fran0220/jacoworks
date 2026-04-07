@@ -33,7 +33,7 @@ docker:
 
 openclaw:
   docker_host: "tcp://10.10.0.2:2375"
-  image: "ghcr.io/openclaw/openclaw:latest"
+  image: "pi-ready"
   port: 18789
   host_ip: "10.10.0.2"
   base_port: 18800

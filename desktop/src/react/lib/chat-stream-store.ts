@@ -43,7 +43,6 @@ export interface SessionStreamRuntime {
   dirty: boolean;
 
   partsRaf: number | null;
-  titleRequestVersion: number;
   agentStartedAt: number | null;
 }
 
@@ -79,7 +78,6 @@ function createEntry(session: ChatSession): SessionStreamEntry {
       streamBaseMessages: [],
       dirty: false,
       partsRaf: null,
-      titleRequestVersion: 0,
       agentStartedAt: null,
     },
     listeners: new Set(),

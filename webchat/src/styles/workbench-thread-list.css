@@ -1,0 +1,114 @@
+.thread-panel-list-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.9rem 0.75rem 0.75rem;
+}
+
+.thread-panel-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.3rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.thread-panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.thread-panel-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.45rem;
+}
+
+.thread-panel-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 1rem;
+  background: transparent;
+  border: 1px solid transparent;
+  text-align: left;
+}
+
+.thread-panel-item:hover .thread-panel-item-main {
+  background: rgba(196, 114, 74, 0.08);
+  border-color: rgba(196, 114, 74, 0.12);
+}
+
+.thread-panel-item.active .thread-panel-item-main {
+  background: linear-gradient(135deg, rgba(196, 114, 74, 0.16), rgba(196, 114, 74, 0.08));
+  border-color: rgba(196, 114, 74, 0.24);
+}
+
+.thread-panel-item-title {
+  width: 100%;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-panel-item-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.thread-panel-item-delete {
+  width: 34px;
+  height: 34px;
+  align-self: center;
+  border-radius: 0.85rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.thread-panel-item-delete:hover {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.thread-panel-empty {
+  margin: auto 0;
+  padding: 1rem;
+  border: 1px dashed rgba(196, 114, 74, 0.24);
+  border-radius: 1rem;
+  background: rgba(196, 114, 74, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: flex-start;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.thread-panel-empty-action {
+  min-height: 36px;
+  padding: 0.55rem 0.9rem;
+  border-radius: 0.85rem;
+  background: #fff;
+  border: 1px solid rgba(196, 114, 74, 0.18);
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.thread-panel-empty-action:hover {
+  background: rgba(196, 114, 74, 0.08);
+}

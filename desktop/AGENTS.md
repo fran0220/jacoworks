@@ -1,6 +1,6 @@
 # Desktop — Tauri v2 + React 18 桌面客户端
 
-> 本地优先: vm-agent 作为 sidecar 进程运行 (stdin/stdout JSON lines RPC)，对话、文件操作、记忆全部本地执行。会话数据持久化到本地 SQLite。捆绑 Python/bash/node 运行时，开箱即用无需用户安装。LLM 密钥由 Gateway 下发。Desktop 仅连接 `jacoapi.jingao.club`（jingao gateway），与 `chat.jingao.club`（oc-gateway）完全解耦。支持运行时自动更新 (tauri-plugin-updater)。
+> 本地优先: Desktop 通过 Tauri sidecar 为每个会话拉起 `pi --mode json` 进程，对话、文件操作、记忆全部本地执行。会话数据持久化到本地 SQLite。捆绑 Python/bash/node 运行时，开箱即用无需用户安装。LLM 密钥由 Gateway 下发，并写入本地 `~/.pi/agent/` 配置。Desktop 仅连接 `jacoapi.jingao.club`（jingao gateway），与 `chat.jingao.club`（oc-gateway）完全解耦。支持运行时自动更新 (tauri-plugin-updater)。
 
 ## 代码结构
 
@@ -8,7 +8,7 @@
 src-tauri/src/
   lib.rs                       Tauri 入口 (文件预览/导入/路径解析)
   db.rs                        本地 SQLite 持久化 (jacoworks.db, WAL 模式, sessions + messages 表, sync_status 追踪)
-  sidecar.rs                   Sidecar 进程管理 (start/stop/send) + 本地文件管理 (记忆/技能) + 捆绑运行时 PATH 注入
+  sidecar.rs                   Per-session Pi CLI 进程池 (`pi --mode json`) + `~/.pi/agent/` 配置写入 + 本地文件管理 + PATH 注入
   stream.rs                    http_fetch (网关 API)
   cowork.rs                    远程文件系统 Tauri 命令 (read/write/list/stat + safe_resolve 安全校验) + 目录选择/tar (保留兼容)
 
@@ -57,13 +57,16 @@ src/
 
 - `VITE_GATEWAY_URL` = `https://jacoapi.jingao.club` (本地: `http://localhost:8847`)
 - `DEFAULT_MODEL` = `proxy-claude/claude-opus-4-6`
+- `LLM_PROXY_URL` / `LLM_PROXY_KEY` — 登录后由 Gateway 下发，再注入到 Pi CLI 进程
+
+Pi provider / model / extensions 的静态配置不再来自 `vm-agent/.env`，而是由桌面端把仓库内 `pi-config/` 写入用户本地 `~/.pi/agent/`。
 
 ## 三域边界
 
 - **桌面端 API**: 仅访问 jingao 网关 (`jacoapi.jingao.club`)，不直连 `chat.jingao.club`
 - **Agent 运行链路**: 本地 sidecar 通过 stdin/stdout RPC 直接运行，不经 oc-gateway
 - **WebChat 解耦**: WebChat 独立由 oc-gateway 提供，桌面端与其部署和运行时互不依赖
-- **部署影响面**: `make deploy-jingao` 更新桌面端后端；`make deploy-local` 仅影响 webchat/openclaw
+- **部署影响面**: `make deploy-jingao` 更新桌面端后端；`make deploy-local` 仅影响 webchat / Pi VM 资产
 
 ## 测试
 
@@ -90,15 +93,14 @@ Desktop 在 `resources/runtimes/` 中捆绑 Python (python-build-standalone)、b
 
 Agent 可通过 `render_visual` 工具在对话中内联渲染交互式 HTML widget (图表、动画、图解、表格等)。
 
-**数据流**: vm-agent `render_visual` 工具返回 `{content, details: {type, title, html}}` → `use-chat-stream.ts` tool_execution_end 将 `details` 存入 tool part 的 `visualData` 字段 → `AssistantContent.tsx` 检测到 `visualData` 时跳过工具条，直接渲染 `VisualWidget` 组件 (iframe)，与文字回答融为一体。
+**数据流**: `pi-config/extensions/visual.ts` 的 `render_visual` 工具返回 `{content, details: {type, title, html}}` → `use-chat-stream.ts` `tool_execution_end` 将 `details` 存入 tool part 的 `visualData` 字段 → `AssistantContent.tsx` 检测到 `visualData` 时跳过工具条，直接渲染 `VisualWidget` 组件 (iframe)，与文字回答融为一体。
 
 **样式一致性**: iframe 加载时自动注入基础 CSS (`VISUAL_BASE_CSS`)，匹配应用暖色奶油主题 (背景 `#FAF7F4`、文字 `#1A1A1A`/`#5A5248`、边框 `#E0D8D0`)。系统提示词包含完整色板指引，引导 LLM 生成风格一致的 HTML。
 
 **自适应高度**: `sandbox="allow-scripts allow-same-origin"` + `onLoad` 直接读 `contentDocument.scrollHeight` + `ResizeObserver` 持续监听，消除 iframe 滚动条。
 
 **关键文件**:
-- `vm-agent/src/extensions/visual.ts` — Pi SDK 工具定义
-- `vm-agent/src/prompts/system.ts` — `<visual_tools>` 提示词块 (使用时机 + 色板)
+- `pi-config/extensions/visual.ts` — Pi CLI 自定义扩展
 - `desktop/src/react/components/AssistantContent.tsx` — `VisualWidget` 组件 + `injectVisualBaseStyles()`
 - `desktop/src/react/styles/visual.css` — widget 外框样式
 - `desktop/src/react/types.ts` — `AssistantPart` tool 变体含 `visualData?` 字段
@@ -107,8 +109,8 @@ Agent 可通过 `render_visual` 工具在对话中内联渲染交互式 HTML wid
 
 - **React 18 纯 CSS 变量** (无 CSS-in-JS, 无 Tailwind)
 - **CSS 模块化**: 样式拆分到 `react/styles/` 按组件分文件
-- **本地对话**: vm-agent sidecar 通过 Tauri 命令 `start_agent` / `agent_rpc_send` / `stop_agent` 管理。启动时注入 `LLM_PROXY_URL` / `LLM_PROXY_KEY` (由 Gateway `GET /api/agent/config` 下发)。RPC 协议为 stdin/stdout JSON lines，事件通过 Tauri `agent-rpc-event` 分发到 React 层
-- **本地 Agent**: vm-agent sidecar 为 Bun 编译二进制 (`bun build --compile`)，Pi SDK 提供 `read` / `write` / `glob` / `grep` 等文件操作 (纯 Node.js fs，跨平台)。bash 工具跨平台 (捆绑运行时保证可用, Windows 不再依赖 Git for Windows)
+- **本地对话**: sidecar 通过 Tauri 命令 `start_agent` / `agent_rpc_send` / `stop_agent` 管理 per-session Pi CLI 进程。启动时写入 `pi-config/` 并注入 `LLM_PROXY_URL` / `LLM_PROXY_KEY` (由 Gateway `GET /api/agent/config` 下发)。协议为 Pi JSONL：stdin 发送纯文本 prompt，stdout 直出 `message_update` / `tool_execution_*` / `agent_end`
+- **本地 Agent**: sidecar 不再依赖 vm-agent Bun 二进制；核心运行时为系统可执行的 `pi`。Pi CLI 提供 `read` / `write` / `glob` / `grep` 等文件操作，bash 工具跨平台 (捆绑运行时保证可用, Windows 不再依赖 Git for Windows)
 - **WebSocket 文件通道** (仅云端容器使用, 桌面端不涉及): 云端容器通过 WS 按需读写桌面端本地文件 (替代旧 tar 上传/下载)。`CloudAgentWS` 拦截 `fs.*` 消息 → `onFileRequest` → `cloud-file-handler.ts` 分发到 Tauri 命令 (`read_file_text` / `write_file_text` / `list_directory` / `file_stat`)。`use-cowork-connection.ts` 注入 workspace 路径，`cowork.rs` 用 `dunce::canonicalize` + `safe_resolve` 做路径安全校验 (防 `..` 遍历和符号链接逃逸)。目录列表上限 5000 条
 - **三色模式体系**: 默认 (陶土 `--accent`)、隐私 (紫灰 `--accent-anonymous`)、云端 (蓝 `--accent-cloud`)。通过 composer/input-card 的 `inset box-shadow` + 发送按钮色 + chat-view 背景微调区分
 - **记忆同步**: `memorySyncEnabled` 设置 (默认关)，开启后 syncMemory() 在登录和对话结束后自动执行 (30s 防抖)
@@ -119,7 +121,7 @@ Agent 可通过 `render_visual` 工具在对话中内联渲染交互式 HTML wid
 
 **数据源**: Gateway DB `skill_files` 表 (owner + file_path UNIQUE)。桌面端通过 REST API CRUD。
 
-**内置技能** (`vm-agent/skills/`): 通过 `make push-skills` 上传到 Gateway DB (owner=system)，桌面端启动后拉取并写入本地技能目录供 sidecar 使用。
+**内置技能** (`skills/`): 通过 `make push-skills` 上传到 Gateway DB (owner=system)，桌面端启动后拉取并写入本地技能目录供 sidecar 使用。
 
 **用户自建技能**: 通过设置面板创建/删除，`skills.ts` 调用 Gateway API (`GET/PUT/DELETE /api/skills/{skillId}`)。本地保存到用户 skills 目录后由 sidecar 直接加载。
 
@@ -132,7 +134,7 @@ Agent 可通过 `render_visual` 工具在对话中内联渲染交互式 HTML wid
 ## 排查
 
 1. 看 RPC 日志面板 (`agent-rpc-log`)
-2. Agent 未启动 → 检查 sidecar 二进制是否存在
+2. Agent 未启动 → 检查 `pi` 是否在 PATH 上且 `~/.pi/agent/` 已写入配置
 3. LLM 密钥缺失 (`需要 LLM_PROXY_KEY`) → 检查管理后台「系统设置」中 LLM 密钥配置
 4. bash/Python 不可用 → 检查 `resources/runtimes/` 捆绑运行时是否正确解包
-5. sidecar 需预编译: `cd ../vm-agent && bun build --compile src/index.ts --outfile dist/vm-agent-aarch64-apple-darwin`
+5. Pi 配置异常 → 检查 `pi-config/models.json` / `settings.json` / `extensions/` 是否被正确同步到本地 `~/.pi/agent/`

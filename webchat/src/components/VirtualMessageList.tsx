@@ -1,10 +1,22 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import type { AgentSummary } from "../lib/feed";
-import { DEFAULT_OPENCLAW_SESSION_KEY } from "../lib/config";
-import { parseAgentIdFromSessionKey } from "../lib/team-utils";
-import type { ChatMessage, ChatSender, FileArtifact, StreamBlock } from "../types";
+import { DEFAULT_SESSION_KEY } from "../lib/config";
+import {
+  parseAgentIdFromSessionKey,
+  parseTeamTemplateIdFromSessionKey,
+} from "../lib/team-utils";
+import type {
+  ChatMessage,
+  ChatSender,
+  FileArtifact,
+  StreamBlock,
+} from "../types";
 import { contentToBlocks, extractText } from "../lib/message-extract";
-import { usePretextFont, useShrinkwrap, calcTextHeight } from "../hooks/usePretext";
+import {
+  usePretextFont,
+  useShrinkwrap,
+  calcTextHeight,
+} from "../hooks/usePretext";
 import StreamingCursor from "./StreamingCursor";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolStatus from "./ToolStatus";
@@ -49,10 +61,15 @@ function resolveSender(
   if (message.role !== "assistant") return undefined;
 
   const agentId = parseAgentIdFromSessionKey(activeWorkspaceKey);
+  const teamTemplateId = parseTeamTemplateIdFromSessionKey(activeWorkspaceKey);
   if (agentId) {
     const summary = agentSummaries.find((a) => a.id === agentId);
     if (summary) {
-      return { agentId: summary.id, agentName: summary.name, role: summary.role };
+      return {
+        agentId: summary.id,
+        agentName: summary.name,
+        role: summary.role,
+      };
     }
     return {
       agentId,
@@ -61,8 +78,15 @@ function resolveSender(
     };
   }
 
-  if (activeWorkspaceKey === DEFAULT_OPENCLAW_SESSION_KEY) {
+  if (activeWorkspaceKey === DEFAULT_SESSION_KEY) {
     return { agentId: "default", agentName: "默认助手", role: "default" };
+  }
+  if (teamTemplateId) {
+    return {
+      agentId: teamTemplateId,
+      agentName: teamTemplateId,
+      role: "leader",
+    };
   }
   return undefined;
 }
@@ -70,7 +94,10 @@ function resolveSender(
 function AssistantHeader({ sender }: { sender?: ChatSender }) {
   if (!sender) return null;
 
-  if (sender.role === "default" || (!sender.role && sender.agentId === "default")) {
+  if (
+    sender.role === "default" ||
+    (!sender.role && sender.agentId === "default")
+  ) {
     return (
       <div className="msg-agent-header">
         <span className="msg-agent-name">亦城</span>
@@ -108,14 +135,27 @@ function renderBlock(
   }
 
   if (block.type === "thinking") {
-    return <ThinkingBlock key={`block-think-${idx}`} content={block.content} streaming={streaming} />;
+    return (
+      <ThinkingBlock
+        key={`block-think-${idx}`}
+        content={block.content}
+        streaming={streaming}
+      />
+    );
   }
 
   if (block.type === "tool") {
     return (
       <div className="tool-block-stack" key={`block-tool-${idx}`}>
-        <ToolStatus toolName={block.name} status={block.status} args={block.args} output={block.output} />
-        {block.artifact && <FileCard artifact={block.artifact} onPreview={onPreview} />}
+        <ToolStatus
+          toolName={block.name}
+          status={block.status}
+          args={block.args}
+          output={block.output}
+        />
+        {block.artifact && (
+          <FileCard artifact={block.artifact} onPreview={onPreview} />
+        )}
       </div>
     );
   }
@@ -133,7 +173,13 @@ function estimateUserHeight(
   const maxWidth = containerWidth * USER_MAX_WIDTH_RATIO - USER_BUBBLE_H_PAD;
   if (maxWidth <= 0) return 60;
   if (font) {
-    const { height } = calcTextHeight(content, font, USER_BUBBLE_LINE_HEIGHT, maxWidth, "pre-wrap");
+    const { height } = calcTextHeight(
+      content,
+      font,
+      USER_BUBBLE_LINE_HEIGHT,
+      maxWidth,
+      "pre-wrap",
+    );
     return height + USER_BUBBLE_PAD_V + BUBBLE_ROW_PAD;
   }
   const lines = Math.max(1, Math.ceil((content.length * 7.7) / maxWidth));
@@ -146,7 +192,11 @@ function estimateAssistantHeight(msg: ChatMessage): number {
     const text = extractText(msg.content);
     if (!text) return 0;
     const lines = Math.max(1, text.split("\n").length);
-    return ASSISTANT_HEADER_HEIGHT + lines * TEXT_BLOCK_HEIGHT_PER_LINE + BUBBLE_ROW_PAD;
+    return (
+      ASSISTANT_HEADER_HEIGHT +
+      lines * TEXT_BLOCK_HEIGHT_PER_LINE +
+      BUBBLE_ROW_PAD
+    );
   }
 
   let h = ASSISTANT_HEADER_HEIGHT;
@@ -159,7 +209,10 @@ function estimateAssistantHeight(msg: ChatMessage): number {
     } else if (block.type === "tool") {
       h += TOOL_BLOCK_HEIGHT;
       if (block.artifact) {
-        h += block.artifact.category === "image" ? IMAGE_FILE_CARD_HEIGHT : FILE_CARD_HEIGHT;
+        h +=
+          block.artifact.category === "image"
+            ? IMAGE_FILE_CARD_HEIGHT
+            : FILE_CARD_HEIGHT;
       }
     }
   }
@@ -172,14 +225,21 @@ function estimateHeight(
   containerWidth: number,
 ): number {
   if (msg.type === "orchestration") return ORCHESTRATION_HEIGHT;
-  if (msg.role === "user") return estimateUserHeight(extractText(msg.content), font, containerWidth);
+  if (msg.role === "user")
+    return estimateUserHeight(extractText(msg.content), font, containerWidth);
   if (msg.role === "assistant") return estimateAssistantHeight(msg);
   return DEFAULT_MSG_HEIGHT;
 }
 
 /* ---- UserMessage with shrinkwrap ---- */
 
-function UserMessage({ content, fontInfo }: { content: string; fontInfo: ReturnType<typeof usePretextFont> }) {
+function UserMessage({
+  content,
+  fontInfo,
+}: {
+  content: string;
+  fontInfo: ReturnType<typeof usePretextFont>;
+}) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [maxBubbleWidth, setMaxBubbleWidth] = useState(0);
 
@@ -190,12 +250,19 @@ function UserMessage({ content, fontInfo }: { content: string; fontInfo: ReturnT
     }
   }, []);
 
-  const textWidth = useShrinkwrap(content, maxBubbleWidth - USER_BUBBLE_H_PAD, fontInfo);
-  const bubbleStyle = textWidth > 0 ? { width: textWidth + USER_BUBBLE_H_PAD } : undefined;
+  const textWidth = useShrinkwrap(
+    content,
+    maxBubbleWidth - USER_BUBBLE_H_PAD,
+    fontInfo,
+  );
+  const bubbleStyle =
+    textWidth > 0 ? { width: textWidth + USER_BUBBLE_H_PAD } : undefined;
 
   return (
     <div className="bubble-row user" ref={rowRef}>
-      <div className="user-bubble" style={bubbleStyle}>{content}</div>
+      <div className="user-bubble" style={bubbleStyle}>
+        {content}
+      </div>
     </div>
   );
 }
@@ -237,7 +304,9 @@ export default function VirtualMessageList({
       heights[i] = estimateHeight(messages[i], fontInfo.font, containerWidth);
     }
     if (messages.length < prev) {
-      measuredRef.current = new Set([...measuredRef.current].filter((idx) => idx < messages.length));
+      measuredRef.current = new Set(
+        [...measuredRef.current].filter((idx) => idx < messages.length),
+      );
     }
   }
 
@@ -250,7 +319,7 @@ export default function VirtualMessageList({
       acc += heights[i] || 0;
     }
     return { offsets: offs, totalHeight: acc };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, heights, scrollTop, forceUpdate]);
 
   // Binary search for visible range
@@ -322,7 +391,7 @@ export default function VirtualMessageList({
     });
     observerRef.current = obs;
     return () => obs.disconnect();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Ref callback: observe/unobserve items
@@ -366,7 +435,9 @@ export default function VirtualMessageList({
   }
 
   return (
-    <div style={{ position: "relative", height: totalHeight, minHeight: "100%" }}>
+    <div
+      style={{ position: "relative", height: totalHeight, minHeight: "100%" }}
+    >
       {visibleItems}
     </div>
   );
@@ -399,16 +470,22 @@ function MessageItem({
   }
 
   if (msg.role === "user") {
-    return <UserMessage content={extractText(msg.content)} fontInfo={fontInfo} />;
+    return (
+      <UserMessage content={extractText(msg.content)} fontInfo={fontInfo} />
+    );
   }
 
   if (msg.role === "assistant") {
-    const msgBlocks = msg.blocks?.length ? msg.blocks : contentToBlocks(msg.content);
+    const msgBlocks = msg.blocks?.length
+      ? msg.blocks
+      : contentToBlocks(msg.content);
     if (msgBlocks.length > 0) {
       return (
         <div className="assistant-message-group">
           <AssistantHeader sender={sender} />
-          {msgBlocks.map((block, idx) => renderBlock(block, idx, msgBlocks, false, onPreview))}
+          {msgBlocks.map((block, idx) =>
+            renderBlock(block, idx, msgBlocks, false, onPreview),
+          )}
         </div>
       );
     }

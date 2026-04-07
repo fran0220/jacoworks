@@ -1,4 +1,4 @@
-import { useRef, useCallback, useMemo, useEffect, useState } from "react";
+import { useRef, useCallback, useMemo, useEffect, useState, type ReactNode } from "react";
 import { Paperclip, X, Loader2 } from "lucide-react";
 import type { AgentSummary } from "../lib/feed";
 import { uploadFile, validateFileSize, buildMessageWithAttachments } from "../lib/upload";
@@ -72,12 +72,14 @@ export default function Composer({
   onSend,
   onAbort,
   agents = [],
+  avatarSlot,
 }: {
   disabled: boolean;
   streaming: boolean;
   onSend: (text: string) => void;
   onAbort: () => void;
   agents?: AgentSummary[];
+  avatarSlot?: ReactNode;
 }) {
   const composerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -339,6 +341,7 @@ export default function Composer({
               onSelect={handleMentionSelect}
             />
           </div>
+          {avatarSlot}
           {streaming ? (
             <button className="abort-btn" onClick={onAbort}>停止</button>
           ) : (

@@ -1,0 +1,154 @@
+/* ================================================================
+   Channel Views — AgentView / SettingsDrawer / DashboardView / TeamChannelView
+   ================================================================ */
+
+/* ── AgentView (av-) ───────────────────────────────────────────── */
+
+.av-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.av-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.av-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.av-sidebar > * {
+  height: 100%;
+}
+
+@media (max-width: 768px) {
+  .av-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 150;
+    width: 280px;
+    background: var(--bg-secondary);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+  .av-sidebar--open {
+    transform: translateX(0);
+  }
+}
+
+.av-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 140;
+}
+
+.av-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.av-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.av-toolbar-start,
+.av-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.av-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.av-toolbar-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.av-agent-icon {
+  color: var(--accent);
+}
+
+.av-agent-name {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.av-conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.av-conn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.av-conn--connected { background: #ecfdf5; color: #047857; }
+.av-conn--connected .av-conn-dot { background: #10b981; }
+.av-conn--connecting { background: #fffbeb; color: #b45309; }
+.av-conn--connecting .av-conn-dot { background: #f59e0b; }
+.av-conn--disconnected { background: #fef2f2; color: #b91c1c; }
+.av-conn--disconnected .av-conn-dot { background: #ef4444; }
+
+.av-preview {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  overflow: auto;
+}
+
+.av-preview-modal {
+  position: fixed;
+  inset: 1rem;
+  z-index: 250;
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  overflow: auto;
+}
+

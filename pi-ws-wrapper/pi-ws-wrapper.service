@@ -1,0 +1,24 @@
+[Unit]
+Description=Pi WS Wrapper
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/home/node/.pi/agent/runtime.env
+
+[Service]
+Type=simple
+User=node
+Group=node
+WorkingDirectory=/opt/pi-ws-wrapper
+Environment=HOME=/home/node
+Environment=PORT=18789
+Environment=PI_WORKSPACE_DIR=/data/workspace
+EnvironmentFile=-/home/node/.pi/agent/runtime.env
+ExecStart=/usr/local/bin/bun /opt/pi-ws-wrapper/server.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-ws-wrapper
+
+[Install]
+WantedBy=multi-user.target

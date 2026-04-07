@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   abortAgentSession,
-  requestTitleGeneration,
   startAgentStream,
 } from "../lib/agent";
 import type { AgentRpcEvent } from "../lib/agent";
@@ -122,12 +121,6 @@ export function useChatStream({
     syncSessionFromProps(session);
   }, [session]);
 
-  // Bump titleRequestVersion when session changes
-  useEffect(() => {
-    const entry = getOrCreateEntry(session);
-    entry.runtime.titleRequestVersion += 1;
-  }, [session.id]);
-
   const visibleMessages = useMemo(
     () => sessionState.messages.filter((m) => m.role !== "system"),
     [sessionState.messages],
@@ -221,32 +214,8 @@ export function useChatStream({
         isUntitled && assistantCount === 1 ? generateTitle(assistantText) : undefined;
 
       await persistSession(ctx, finalMessages, fallbackTitle);
-
-      // AI title generation (fire-and-forget)
-      if (isUntitled && assistantCount === 1 && !ctx.anonymous && transport?.isReady) {
-        const lastUserContent =
-          entry.runtime.streamBaseMessages.filter((m) => m.role === "user").pop()?.content || "";
-        const userMessage = typeof lastUserContent === "string" ? lastUserContent : "";
-        const titleVersion = entry.runtime.titleRequestVersion;
-
-        requestTitleGeneration(transport, userMessage, assistantText)
-          .then(async (aiTitle) => {
-            if (!aiTitle) return;
-            if (entry.runtime.titleRequestVersion !== titleVersion) return;
-            updateSessionState(ctx.id, (prev) =>
-              prev.id === ctx.id ? { ...prev, title: aiTitle } : prev,
-            );
-            if (entry.runtime.titleRequestVersion !== titleVersion) return;
-            await sessionStore.updateMeta(ctx.id, { title: aiTitle });
-            syncDirtyToServer().catch(() => {});
-            await onSessionUpdate();
-          })
-          .catch((err) => {
-            console.warn("[title] AI title generation failed:", err);
-          });
-      }
     },
-    [onSessionUpdate, persistSession, transport],
+    [persistSession],
   );
 
   // ── Send message ───────────────────────────────────
@@ -315,27 +284,27 @@ export function useChatStream({
             if (entry.runtime.aborted) break;
             resetInactivityTimer();
 
-            if (packet.type === "response") {
-              if (packet.success === false) {
-                throw new Error(String(packet.error || "请求失败"));
-              }
-              continue;
-            }
-
             if (packet.type === "error") {
               throw new Error(String(packet.error || "请求失败"));
             }
 
-            if (packet.type === "done") break;
-            if (packet.type !== "session_event" || !packet.event) continue;
-            if ((packet.event as { type?: string }).type === "keepalive") {
-              resetInactivityTimer();
+            if (packet.type === "session") {
               continue;
             }
 
-            const event = packet.event as {
+            const event = packet as {
               type: string;
               assistantMessageEvent?: { type?: string; delta?: string };
+              message?: {
+                usage?: {
+                  input?: number;
+                  output?: number;
+                  totalTokens?: number;
+                };
+                model?: {
+                  contextWindow?: number;
+                };
+              };
               toolCallId?: unknown;
               toolName?: unknown;
               args?: unknown;
@@ -519,11 +488,14 @@ export function useChatStream({
               patchSnapshot(streamCtx.id, { agentPhase: "thinking", turnCount: prev.turnCount + 1 });
             }
 
-            if (event.type === "context_usage") {
-              const cu = event as { usedTokens?: number; maxTokens?: number };
-              if (cu.usedTokens != null && cu.maxTokens != null) {
+            if (event.type === "turn_end") {
+              const usage = event.message?.usage;
+              if (usage) {
                 patchSnapshot(streamCtx.id, {
-                  contextUsage: { usedTokens: cu.usedTokens, maxTokens: cu.maxTokens },
+                  contextUsage: {
+                    usedTokens: usage.totalTokens ?? (usage.input || 0) + (usage.output || 0),
+                    maxTokens: event.message?.model?.contextWindow ?? 200_000,
+                  },
                 });
               }
             }

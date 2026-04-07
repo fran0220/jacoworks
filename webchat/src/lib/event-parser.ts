@@ -1,4 +1,4 @@
-import type { StreamBlock } from "../types";
+import type { ChatSender, StreamBlock } from "../types";
 import { applyToolEvent, type ToolApplyResult } from "./tool-stream";
 
 export interface ParsedEvent {
@@ -23,6 +23,7 @@ export interface ParsedEvent {
   toolArgs?: unknown;
   toolOutput?: unknown;
   toolError?: string;
+  sender?: ChatSender;
 }
 
 export interface ApplyResult {
@@ -38,12 +39,23 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function parseSender(raw: unknown): ChatSender | undefined {
+  const rec = asRecord(raw);
+  const agentId = asString(rec.agentId);
+  if (!agentId) return undefined;
+  return {
+    agentId,
+    agentName: asString(rec.agentName),
+    role: asString(rec.role),
+  };
+}
+
 export function parseFrame(frame: unknown): ParsedEvent {
   const rec = asRecord(frame);
   const type = asString(rec.type);
 
   if (type === "proxy.ready") return { kind: "proxy_ready" };
-  if (type === "error" || type === "proxy.error") {
+  if (type === "error" || type === "proxy.error" || type === "session_error") {
     return { kind: "error", error: asString(rec.error || rec.message) || "未知错误" };
   }
 
@@ -67,18 +79,19 @@ export function parseFrame(frame: unknown): ParsedEvent {
 function parseAgentEvent(payload: Record<string, unknown>): ParsedEvent {
   const stream = asString(payload.stream);
   const data = asRecord(payload.data);
+  const sender = parseSender(payload.sender) || parseSender(data.sender);
 
   if (stream === "text" || stream === "assistant") {
     const text = asString(data.delta || data.text);
-    return text ? { kind: "text_delta", text } : { kind: "ignore" };
+    return text ? { kind: "text_delta", text, sender } : { kind: "ignore" };
   }
 
   if (stream === "thinking" || stream === "reasoning") {
     const phase = asString(data.phase).toLowerCase();
-    if (phase === "start") return { kind: "thinking_start" };
-    if (phase === "end" || phase === "stop" || phase === "final") return { kind: "thinking_end" };
+    if (phase === "start") return { kind: "thinking_start", sender };
+    if (phase === "end" || phase === "stop" || phase === "final") return { kind: "thinking_end", sender };
     const text = asString(data.text || data.delta || data.thinking);
-    return text ? { kind: "thinking_delta", text } : { kind: "ignore" };
+    return text ? { kind: "thinking_delta", text, sender } : { kind: "ignore" };
   }
 
   if (stream === "tool") {
@@ -87,13 +100,13 @@ function parseAgentEvent(payload: Record<string, unknown>): ParsedEvent {
     const toolName = asString(data.name) || "tool";
 
     if (phase === "start") {
-      return { kind: "tool_start", toolId, toolName, toolArgs: data.args };
+      return { kind: "tool_start", toolId, toolName, toolArgs: data.args, sender };
     }
     if (phase === "update") {
-      return { kind: "tool_update", toolId, toolName, toolOutput: data.partialResult ?? data.result };
+      return { kind: "tool_update", toolId, toolName, toolOutput: data.partialResult ?? data.result, sender };
     }
     if (phase === "result") {
-      return { kind: "tool_end", toolId, toolName, toolOutput: data.result };
+      return { kind: "tool_end", toolId, toolName, toolOutput: data.result, sender };
     }
     if (phase === "error") {
       return {
@@ -102,6 +115,7 @@ function parseAgentEvent(payload: Record<string, unknown>): ParsedEvent {
         toolName,
         toolOutput: data.result,
         toolError: asString(data.error || data.message || "tool error"),
+        sender,
       };
     }
   }
@@ -115,13 +129,14 @@ function parseAgentEvent(payload: Record<string, unknown>): ParsedEvent {
 
 function parseChatEvent(payload: Record<string, unknown>): ParsedEvent {
   const state = asString(payload.state).toLowerCase();
+  const sender = parseSender(payload.sender);
   // Ignore chat deltas — we already get token-level text from agent stream events.
   // Using both would cause duplicate/doubled text in the UI.
   if (state === "delta") {
     return { kind: "ignore" };
   }
   if (state === "final" || state === "aborted") {
-    return { kind: "done", message: payload.message };
+    return { kind: "done", message: payload.message, sender };
   }
   if (state === "error") {
     return { kind: "error", error: asString(payload.errorMessage) || "未知错误" };

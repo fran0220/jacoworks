@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { AvatarPool } from "../avatar/AvatarPool";
+import type { GLBAvatar } from "../avatar/AvatarPool";
 import { AvatarAnimator } from "../avatar/AvatarAnimator";
 
 export class LeaderScene {
@@ -59,6 +60,7 @@ export class LeaderScene {
 
     let root: THREE.Object3D;
     let clips: Record<string, THREE.AnimationClip> | undefined;
+    let glb: GLBAvatar | undefined;
 
     // Try GLB avatar from API
     try {
@@ -66,7 +68,7 @@ export class LeaderScene {
       const profile = await fetchAvatar(role);
       if (profile && profile.model_url) {
         console.info("[LeaderScene] Loading GLB for role:", role);
-        const glb = await pool.loadGLBAvatar("__leader__", profile.model_url, profile.anim_urls);
+        glb = await pool.loadGLBAvatar("__leader__", profile.model_url, profile.anim_urls);
         root = glb.scene;
         clips = glb.clips;
         console.info("[LeaderScene] GLB loaded, clips:", Object.keys(clips));
@@ -102,7 +104,8 @@ export class LeaderScene {
 
     this.modelRoot = root;
     this.scene.add(root);
-    this.animator = new AvatarAnimator(root, clips);
+    const mixer = glb ? glb.mixer : new THREE.AnimationMixer(root);
+    this.animator = new AvatarAnimator(root, mixer, clips);
   }
 
   getAnimator(): AvatarAnimator | null {

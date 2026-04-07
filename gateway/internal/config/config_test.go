@@ -32,6 +32,15 @@ database:
 	if cfg.Auth.SessionTTLHours != 720 {
 		t.Fatalf("session ttl hours = %d, want %d", cfg.Auth.SessionTTLHours, 720)
 	}
+	if cfg.PiVM.Port != 18789 {
+		t.Fatalf("pi vm port = %d, want %d", cfg.PiVM.Port, 18789)
+	}
+	if cfg.PiVM.Image != "pi-ready" {
+		t.Fatalf("pi vm image = %q, want %q", cfg.PiVM.Image, "pi-ready")
+	}
+	if cfg.PiVM.DataRoot != "/srv/jacoworks/openclaw" {
+		t.Fatalf("pi vm data root = %q, want %q", cfg.PiVM.DataRoot, "/srv/jacoworks/openclaw")
+	}
 }
 
 func TestLoad_InvalidYAMLReturnsError(t *testing.T) {
@@ -67,6 +76,8 @@ server:
   port: 8080
 database:
   url: postgresql://yaml-value
+openclaw:
+  host_ip: 10.0.0.10
 llm:
   proxy_url: http://yaml-proxy
 `)
@@ -79,6 +90,8 @@ llm:
 	t.Setenv("GATEWAY_LLM_GROK_API_URL", "http://grok.local/v1")
 	t.Setenv("GATEWAY_LLM_GROK_API_KEY", "grok-secret")
 	t.Setenv("GATEWAY_LLM_ASSET_GATEWAY_TOKEN", "asset-token")
+	t.Setenv("GATEWAY_PIVM_IMAGE", "pi-ready-custom")
+	t.Setenv("GATEWAY_PIVM_PORT", "19000")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -108,6 +121,43 @@ llm:
 	}
 	if cfg.LLM.AssetGatewayToken != "asset-token" {
 		t.Fatalf("llm asset gateway token = %q, want %q", cfg.LLM.AssetGatewayToken, "asset-token")
+	}
+	if cfg.PiVM.HostIP != "10.0.0.10" {
+		t.Fatalf("pi vm host ip = %q, want %q", cfg.PiVM.HostIP, "10.0.0.10")
+	}
+	if cfg.PiVM.Image != "pi-ready-custom" {
+		t.Fatalf("pi vm image = %q, want %q", cfg.PiVM.Image, "pi-ready-custom")
+	}
+	if cfg.PiVM.Port != 19000 {
+		t.Fatalf("pi vm port = %d, want %d", cfg.PiVM.Port, 19000)
+	}
+}
+
+func TestLoad_OpenClawYAMLKeyStillPopulatesPiVM(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfigFile(t, `
+database:
+  url: postgresql://user:pass@localhost:5432/jacoworks
+openclaw:
+  image: pi-ready-staging
+  host_ip: 192.168.31.10
+  base_port: 19900
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.PiVM.Image != "pi-ready-staging" {
+		t.Fatalf("pi vm image = %q, want %q", cfg.PiVM.Image, "pi-ready-staging")
+	}
+	if cfg.PiVM.HostIP != "192.168.31.10" {
+		t.Fatalf("pi vm host ip = %q, want %q", cfg.PiVM.HostIP, "192.168.31.10")
+	}
+	if cfg.PiVM.BasePort != 19900 {
+		t.Fatalf("pi vm base port = %d, want %d", cfg.PiVM.BasePort, 19900)
 	}
 }
 

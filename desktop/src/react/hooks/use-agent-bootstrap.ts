@@ -4,7 +4,7 @@ import { fetchAgentConfig } from "../lib/auth";
 import type { AgentTransport } from "../lib/agent-transport";
 import { ensureDefaultWorkspace, getSettings, setServerModels } from "../lib/config";
 import { LocalSidecarTransport } from "../lib/local-sidecar-transport";
-import { setSkills } from "../lib/skills";
+import { fetchSkills, setSkills } from "../lib/skills";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -112,8 +112,7 @@ export function useAgentBootstrap(authenticated: boolean) {
       transportRef.current = nextTransport;
       setTransport(nextTransport);
 
-      // Use skills from sidecar ready event — this is the actual LLM-visible skill list.
-      setSkills(nextTransport.loadedSkills);
+      setSkills(await fetchSkills());
     })(), 30_000, "本地 Agent 初始化超时，请重试")
       .then(() => {
         if (cancelled) return;
