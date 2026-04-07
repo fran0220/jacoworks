@@ -881,6 +881,8 @@ packages=(
   "@aliou/pi-guardrails"
   "@aliou/pi-processes"
   "pi-rtk"
+  "pi-subagents"
+  "pi-agent-teams"
 )
 for package in "${packages[@]}"; do
     if ! runuser -u node -- env \

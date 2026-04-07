@@ -1,5 +1,5 @@
 {
-  "defaultProvider": "proxy-gpt",
+  "defaultProvider": "proxy-openai",
   "defaultModel": "gpt-5.4",
   "defaultThinkingLevel": "off",
   "compaction": {
@@ -16,7 +16,9 @@
     "npm:pi-mcp-adapter",
     "npm:@aliou/pi-guardrails",
     "npm:@aliou/pi-processes",
-    "npm:pi-rtk"
+    "npm:pi-rtk",
+    "npm:pi-subagents",
+    "npm:pi-agent-teams"
   ],
   "extensions": ["./extensions"],
   "skills": ["./skills"]

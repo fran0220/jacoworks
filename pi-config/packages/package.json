@@ -12,6 +12,8 @@
     "pi-mcp-adapter": "*",
     "@aliou/pi-guardrails": "*",
     "@aliou/pi-processes": "*",
-    "pi-rtk": "*"
+    "pi-rtk": "*",
+    "pi-subagents": "*",
+    "pi-agent-teams": "*"
   }
 }

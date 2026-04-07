@@ -340,6 +340,10 @@ func main() {
 	defer schedCancel()
 	go sched.Run(schedCtx)
 
+	// Start heartbeat for always-on teams
+	hb := scheduler.NewHeartbeat(taskStore, dispatcher, s)
+	go hb.Start(schedCtx)
+
 	go func() {
 		time.Sleep(10 * time.Second)
 		if err := ocClient.SyncAllVMs(context.Background()); err != nil {

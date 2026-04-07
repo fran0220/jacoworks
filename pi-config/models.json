@@ -114,27 +114,6 @@
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
-    },
-    "proxy-glm": {
-      "baseUrl": "http://67.230.182.59:8317/v1",
-      "api": "openai-completions",
-      "apiKey": "LLM_PROXY_KEY",
-      "compat": {
-        "supportsDeveloperRole": false,
-        "supportsStore": false,
-        "maxTokensField": "max_tokens"
-      },
-      "models": [
-        {
-          "id": "glm-5",
-          "name": "GLM-5",
-          "reasoning": false,
-          "input": ["text", "image"],
-          "contextWindow": 128000,
-          "maxTokens": 16384,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-        }
-      ]
     }
   }
 }
