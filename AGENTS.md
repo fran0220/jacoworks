@@ -10,7 +10,7 @@
 | `gateway/AGENTS.md` | 双网关说明: gateway(:8847) 桌面端管控面 + oc-gateway(:18700) WebChat 完整后端，含路由拆分、环境变量、测试 |
 | `vm-agent/AGENTS.md` | 已废弃的 vm-agent 参考说明（代码保留供 review / 回滚对照） |
 | `desktop/AGENTS.md` | local-first sidecar 架构、bundled runtimes、本地 SQLite 持久化、组件结构、Design Token、React 规范 |
-| `webchat/AGENTS.md` | React SPA 聊天前端 (chat.jingao.club)、双模式布局 (workspace 对话核心 + city 数字之城)、ModeBar + ConfigDrawer、状态分域 hooks、群聊 (agent attribution + @mention)、对话三栏 WorkbenchView、数字之城 (Mapbox + CitySimulation)、移动端适配、WS 协议 |
+| `webchat/AGENTS.md` | React SPA 聊天前端 (chat.jingao.club)、三模式导航 (agent 助手 + team 团队小镇 + city 数字之城)、NavRail、精灵动画、Village 小镇系统、状态分域 hooks、群聊 (@mention)、WS 协议 |
 | `website/AGENTS.md` | 路由、Askama 模板、Rust 规范 |
 | `deploy/AGENTS.md` | SQL schema、测试账号、基础设施、部署策略 |
 | `.agents/skills/openclaw-integration/` | 旧 OpenClaw 集成参考（仅历史迁移资料） |

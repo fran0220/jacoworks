@@ -34,15 +34,15 @@ const ZONES: CityZone[] = [
 
 const MOCK_AGENTS: CityAgent[] = [
   { id: "u1-a1", userName: "Alice", agentName: "研究员", role: "researcher", state: "working", spritePackId: "kael", position: { x: 18, y: 25 }, zoneId: "office" },
-  { id: "u1-a2", userName: "Alice", agentName: "写手", role: "writer", state: "thinking", spritePackId: "mira", position: { x: 52, y: 58 }, zoneId: "studio" },
+  { id: "u1-a2", userName: "Alice", agentName: "写手", role: "writer", state: "thinking", spritePackId: "muse", position: { x: 52, y: 58 }, zoneId: "studio" },
   { id: "u2-a1", userName: "Bob", agentName: "工程师", role: "coder", state: "working", spritePackId: "rex", position: { x: 78, y: 60 }, zoneId: "datacenter" },
-  { id: "u2-a2", userName: "Bob", agentName: "规划师", role: "planner", state: "idle", spritePackId: "nyx", position: { x: 22, y: 62 }, zoneId: "park" },
+  { id: "u2-a2", userName: "Bob", agentName: "规划师", role: "planner", state: "idle", spritePackId: "nova", position: { x: 22, y: 62 }, zoneId: "park" },
   { id: "u3-a1", userName: "Carol", agentName: "分析师", role: "executor", state: "reviewing", spritePackId: "kael", position: { x: 45, y: 18 }, zoneId: "market" },
-  { id: "u3-a2", userName: "Carol", agentName: "审查员", role: "reviewer", state: "working", spritePackId: "mira", position: { x: 15, y: 20 }, zoneId: "office" },
+  { id: "u3-a2", userName: "Carol", agentName: "审查员", role: "reviewer", state: "working", spritePackId: "echo", position: { x: 15, y: 20 }, zoneId: "office" },
   { id: "u4-a1", userName: "Dave", agentName: "巡逻兵", role: "patrol", state: "walking", spritePackId: "rex", position: { x: 72, y: 20 }, zoneId: "residential" },
-  { id: "u4-a2", userName: "Dave", agentName: "设计师", role: "writer", state: "celebrating", spritePackId: "nyx", position: { x: 55, y: 55 }, zoneId: "studio" },
-  { id: "u5-a1", userName: "Eve", agentName: "协调员", role: "planner", state: "thinking", spritePackId: "kael", position: { x: 80, y: 55 }, zoneId: "datacenter" },
-  { id: "u6-a1", userName: "Frank", agentName: "运营", role: "executor", state: "working", spritePackId: "mira", position: { x: 48, y: 15 }, zoneId: "market" },
+  { id: "u4-a2", userName: "Dave", agentName: "设计师", role: "writer", state: "celebrating", spritePackId: "pixel", position: { x: 55, y: 55 }, zoneId: "studio" },
+  { id: "u5-a1", userName: "Eve", agentName: "协调员", role: "planner", state: "thinking", spritePackId: "luna", position: { x: 80, y: 55 }, zoneId: "datacenter" },
+  { id: "u6-a1", userName: "Frank", agentName: "运营", role: "executor", state: "working", spritePackId: "aria", position: { x: 48, y: 15 }, zoneId: "market" },
 ];
 
 const STORIES = [
