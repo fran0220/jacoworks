@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -79,9 +78,7 @@ func ListTeamTemplates() ([]TeamTemplate, error) {
 		templates = append(templates, template)
 	}
 
-	sort.Slice(templates, func(i, j int) bool {
-		return templates[i].ID < templates[j].ID
-	})
+	// entries from ReadDir are already sorted by filename (01-, 02-, etc.)
 	return templates, nil
 }
 

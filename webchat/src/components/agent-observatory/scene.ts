@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import type { AgentSummary } from "../../lib/feed";
 import type { WorldAgent } from "../../observatory/types";
 import type { SceneRefs } from "./types";
@@ -131,7 +132,8 @@ export async function syncSceneAgents(refs: SceneRefs, agents: AgentSummary[]) {
   for (const agent of added) {
     refs.navigators.set(agent.id, new AvatarNavigator(agent));
     const glb = refs.factory.getGLBAvatar(agent.id);
-    refs.animators.set(agent.id, new AvatarAnimator(agent.root, glb?.clips));
+    const mixer = glb ? glb.mixer : new THREE.AnimationMixer(agent.root);
+    refs.animators.set(agent.id, new AvatarAnimator(agent.root, mixer, glb?.clips));
   }
 
   for (const agent of removed) {

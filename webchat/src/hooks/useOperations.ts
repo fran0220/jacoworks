@@ -12,7 +12,7 @@ import type { DashboardStats } from "../lib/ops-types";
 
 const MAX_FEED_ITEMS = 200;
 
-interface OperationsState {
+export interface OperationsState {
   loading: boolean;
   enabled: boolean;
   statusMessage: string;

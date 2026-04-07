@@ -1,0 +1,68 @@
+{
+  "id": "research-crew",
+  "label": "研究分析组",
+  "description": "数据驱动的深度研究团队，从信息采集到可视化报告一条龙。",
+  "icon": "🔬",
+  "version": "1.0.0",
+  "workspaceKeyPrefix": "team:research-crew",
+  "leaderSystemPrompt": "你是 Luna，研究分析组的首席分析师。你的团队有：Coral（信息搜集）、Byte（数据处理）、Render（可视化报告）。收到研究课题后，先让 Coral 广泛搜集资料，然后 Byte 做数据整理和分析，Render 制作可视化图表和报告。你负责审阅分析质量、补充洞察、最终交付研究报告。始终用中文沟通。",
+  "members": [
+    {
+      "name": "coral",
+      "role": "scout",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "spritePackId": "coral",
+      "kickoff": "你是 Coral，团队的信息搜集员。负责从各种渠道广泛搜集与课题相关的资料、数据源、行业报告、新闻动态。输出结构化的资料清单，标注来源和可信度。"
+    },
+    {
+      "name": "byte",
+      "role": "analyst",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "spritePackId": "byte",
+      "kickoff": "你是 Byte，团队的数据工程师。负责整理原始数据、做统计分析、发现趋势和异常。擅长用表格、数据对比来呈现发现。输出清晰的分析结论。"
+    },
+    {
+      "name": "render",
+      "role": "reporter",
+      "mode": "fresh",
+      "workspace": "shared",
+      "model": "proxy/gpt-5.4",
+      "spritePackId": "render",
+      "kickoff": "你是 Render，团队的可视化专家。负责将分析结论转化为易读的图表描述、信息图规范、报告排版。输出美观专业的最终报告。"
+    }
+  ],
+  "bootstrapCommands": [
+    "/team spawn coral fresh shared --model proxy/gpt-5.4",
+    "/team spawn byte fresh shared --model proxy/gpt-5.4",
+    "/team spawn render fresh shared --model proxy/gpt-5.4"
+  ],
+  "theme": {
+    "sceneKind": "lab",
+    "title": "分析实验室",
+    "icon": "🔬",
+    "palette": {
+      "primary": "#6b4f9e",
+      "secondary": "#3b82f6",
+      "accent": "#0d9488",
+      "background": "#101828",
+      "surface": "#1e293b"
+    },
+    "roles": {
+      "leader": { "displayName": "首席分析", "color": "#6b4f9e", "icon": "brain" },
+      "scout": { "displayName": "信息搜集", "color": "#e07b5f", "icon": "compass" },
+      "analyst": { "displayName": "数据工程", "color": "#3b82f6", "icon": "bar-chart" },
+      "reporter": { "displayName": "可视化", "color": "#0d9488", "icon": "pie-chart" }
+    },
+    "agents": {
+      "luna": { "displayName": "Luna", "subtitle": "首席分析师", "color": "#6b4f9e" },
+      "coral": { "displayName": "Coral", "subtitle": "信息搜集", "color": "#e07b5f" },
+      "byte": { "displayName": "Byte", "subtitle": "数据工程", "color": "#3b82f6" },
+      "render": { "displayName": "Render", "subtitle": "可视化报告", "color": "#0d9488" }
+    },
+    "zones": {}
+  }
+}
