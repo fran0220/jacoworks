@@ -16,4 +16,3 @@ export const PIVM_TOKEN = getPiVMToken();
 
 export const DEFAULT_SESSION_KEY = window.__PI_SESSION_KEY__ || "agent:default";
 
-export const MAPBOX_TOKEN: string = window.__MAPBOX_TOKEN__ || "";

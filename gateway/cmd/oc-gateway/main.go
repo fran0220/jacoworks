@@ -122,8 +122,6 @@ func main() {
 				cfg.PostHog.APIKey = setting.Value
 			case "posthog_endpoint":
 				cfg.PostHog.Endpoint = setting.Value
-			case "mapbox_token":
-				cfg.MapboxToken = setting.Value
 			case "feishu_client_id":
 				cfg.Auth.FeishuClientID = setting.Value
 			case "feishu_client_secret":
@@ -423,7 +421,6 @@ type chatPageData struct {
 	PiVncURL    string
 	PostHogKey  string
 	PostHogHost string
-	MapboxToken string
 	CacheBust   string
 }
 
@@ -476,7 +473,6 @@ func chatPageHandler(s *store.Store, cfg *config.Config, tpl *template.Template,
 			PiVncURL:    piVncURL,
 			PostHogKey:  cfg.PostHog.APIKey,
 			PostHogHost: cfg.PostHog.Endpoint,
-			MapboxToken: cfg.MapboxToken,
 			CacheBust:   cacheBust,
 		}); err != nil {
 			log.Error().Err(err).Str("user_id", user.ID).Msg("render chat page")

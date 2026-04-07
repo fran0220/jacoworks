@@ -1,8 +1,7 @@
 @import "./observatory-scene.css";
 @import "./leader-assistant.css";
-@import "./digital-city.css";
 
-/* ===== Digital City View ===== */
+/* ===== City / Observatory View ===== */
 
 .city-view {
   flex: 1;

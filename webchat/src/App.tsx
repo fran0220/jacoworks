@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useState } from "react";
-import { getPiVMToken, MAPBOX_TOKEN } from "./lib/config";
+import { getPiVMToken } from "./lib/config";
 import NavRail from "./components/NavRail";
 import SetupGate from "./components/SetupGate";
 import AgentModeView from "./components/AgentModeView";
@@ -8,7 +8,7 @@ import useConversation from "./hooks/useConversation";
 import useUIShell from "./hooks/useUIShell";
 import useWorkspace from "./hooks/useWorkspace";
 
-const DigitalCityPanel = lazy(() => import("./components/DigitalCityPanel"));
+const CityPanel = lazy(() => import("./city-3d/CityPanel"));
 
 export default function App() {
   const [ocToken, setOcToken] = useState<string | null>(() => getPiVMToken() || null);
@@ -57,11 +57,7 @@ export default function App() {
         )}
         {ui.view === "city" && (
           <Suspense fallback={<div className="city-placeholder">加载数字之城…</div>}>
-            {MAPBOX_TOKEN ? (
-              <DigitalCityPanel mapboxToken={MAPBOX_TOKEN} />
-            ) : (
-              <div className="city-placeholder">尚未配置 MAPBOX_TOKEN</div>
-            )}
+            <CityPanel />
           </Suspense>
         )}
       </div>

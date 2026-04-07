@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { MAPBOX_TOKEN } from "../lib/config";
 import AgentObservatory from "./AgentObservatory";
-import DigitalCityPanel from "./DigitalCityPanel";
+import CityPanel from "../city-3d/CityPanel";
 
 interface ObserveViewProps {
   observatoryEventRef: React.MutableRefObject<any>;
@@ -47,7 +46,7 @@ export default function ObserveView(props: ObserveViewProps) {
             connState={props.connState}
           />
         ) : (
-          <DigitalCityPanel mapboxToken={MAPBOX_TOKEN} />
+          <CityPanel />
         )}
       </div>
     </div>

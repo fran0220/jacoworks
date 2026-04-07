@@ -61,8 +61,7 @@
   flex-direction: column;
 }
 
-.observe-view-heading-main,
-.digital-city-focus-copy {
+.observe-view-heading-main {
   min-width: 0;
 }
 

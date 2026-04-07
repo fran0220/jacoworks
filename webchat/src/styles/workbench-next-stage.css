@@ -447,177 +447,7 @@
   flex-wrap: wrap;
 }
 
-.digital-city-grid-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(125, 211, 252, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(125, 211, 252, 0.05) 1px, transparent 1px);
-  background-size: 54px 54px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0));
-}
 
-.digital-city-header {
-  display: flex;
-  gap: 0.75rem;
-  align-items: stretch;
-}
-
-.digital-city-command-ribbon,
-.digital-city-footerbar,
-.digital-city-panel {
-  pointer-events: auto;
-}
-
-.digital-city-command-ribbon {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 0.5rem;
-  min-width: 220px;
-  padding: 0.9rem 1rem;
-  border-radius: 1rem;
-  background: rgba(7, 11, 24, 0.88);
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  box-shadow: 0 16px 32px rgba(2, 8, 23, 0.34);
-}
-
-.digital-city-ribbon-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  color: var(--city-text);
-  font-size: 0.75rem;
-}
-
-.digital-city-sidepanel {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.digital-city-panel {
-  min-height: 0;
-  padding: 0.85rem 0.9rem;
-  border-radius: 1rem;
-  background: rgba(7, 11, 24, 0.82);
-  border: 1px solid rgba(125, 211, 252, 0.16);
-  box-shadow: 0 16px 32px rgba(2, 8, 23, 0.34);
-}
-
-.digital-city-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
-  margin-bottom: 0.7rem;
-}
-
-.digital-city-panel-head strong {
-  font-size: 0.8rem;
-  color: var(--city-text);
-}
-
-.digital-city-panel-head span,
-.digital-city-panel-empty {
-  font-size: 0.72rem;
-  color: var(--city-text-muted);
-}
-
-.digital-city-focus-card {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-}
-
-.digital-city-focus-sprite {
-  width: 128px;
-  height: 192px;
-  border-radius: 1rem;
-  background-repeat: no-repeat;
-  background-position: 0 0;
-  background-size: 768px 192px;
-  image-rendering: pixelated;
-  background-color: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  transform: scale(0.82);
-  transform-origin: center;
-  animation: city-agent-sprite-sheet-play 0.8s steps(6) infinite;
-}
-
-.digital-city-focus-copy strong,
-.digital-city-roster-item strong,
-.digital-city-zone-card strong {
-  display: block;
-  font-size: 0.8rem;
-  color: var(--city-text);
-}
-
-.digital-city-focus-copy span,
-.digital-city-focus-copy em,
-.digital-city-roster-item span,
-.digital-city-roster-item em,
-.digital-city-zone-card span,
-.digital-city-zone-card em {
-  display: block;
-  margin-top: 0.18rem;
-  font-size: 0.7rem;
-  color: var(--city-text-muted);
-  font-style: normal;
-}
-
-.digital-city-focus-copy p {
-  margin: 0.28rem 0 0;
-  font-size: 0.76rem;
-  line-height: 1.5;
-  color: var(--city-text);
-}
-
-.digital-city-roster,
-.digital-city-zones {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-
-.digital-city-roster-item,
-.digital-city-zone-card {
-  width: 100%;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.72rem 0.78rem;
-  border-radius: 0.95rem;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(15, 23, 42, 0.68);
-  text-align: left;
-}
-
-.digital-city-roster-item.is-active,
-.digital-city-zone-card.is-active {
-  border-color: rgba(125, 211, 252, 0.32);
-  background: rgba(8, 47, 73, 0.58);
-}
-
-.digital-city-roster-dot {
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 999px;
-}
-
-.digital-city-zone-card {
-  grid-template-columns: minmax(0, 1fr) auto;
-  border-color: color-mix(in srgb, var(--zone-accent) 32%, transparent);
-}
-
-.digital-city-footerbar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
 
 .city-agent {
   width: auto;
@@ -683,13 +513,10 @@
 
 @media (max-width: 1180px) {
   .workbench-stage-hero,
-  .digital-city-sidepanel,
   .tasks-grid {
     grid-template-columns: 1fr;
   }
 
-  .digital-city-header,
-  .digital-city-footerbar,
   .tasks-stage-card--hero {
     flex-direction: column;
   }
@@ -730,31 +557,5 @@
     align-items: stretch;
   }
 
-  .digital-city-hud {
-    inset: 12px 12px auto 12px;
-  }
-
-  .digital-city-sidepanel {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .digital-city-focus-card {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .digital-city-focus-sprite {
-    transform: scale(0.72);
-    margin-left: -18px;
-  }
-
-  .digital-city-command-ribbon,
-  .digital-city-panel,
-  .digital-city-title-card,
-  .digital-city-legend {
-    min-width: 0;
-    max-width: none;
-  }
 }
 

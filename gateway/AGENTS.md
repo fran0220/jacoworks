@@ -7,7 +7,7 @@
 ```
 cmd/gateway/main.go            入口 (桌面端/后台管控面: 认证 + 会话 CRUD + 管理 API + WS 代理)
 cmd/oc-gateway/main.go         入口 (webchat 完整后端: /login + /chat + /static/* + auth/session/cron + Pi relay 路由)
-data/chat.html                 webchat SPA 模板 (注入 __GATEWAY_URL__ / __AUTH_TOKEN__ / __OPENCLAW_TOKEN__ 等)
+data/chat.html                 webchat SPA 模板 (注入 __GATEWAY_URL__ / __AUTH_TOKEN__ / __PI_TOKEN__ 等, 不含 Mapbox)
 data/login.html                独立登录页 (POST /api/auth/login, 写入 auth_token Cookie)
 internal/
   config/config.go             YAML + env override, ChatAgentConfig, GitHubConfig, PostHogConfig, VM/relay 配置
