@@ -5,9 +5,8 @@ export interface User {
   role: string;
 }
 
-export type View = "workbench" | "tasks" | "team" | "observe";
+export type View = "agent" | "team" | "city";
 export type AppMode = View;
-export type OpsLens = "overview" | "timeline" | "board";
 
 export type AgentExpression = "idle" | "thinking" | "speaking" | "working" | "happy" | "error";
 

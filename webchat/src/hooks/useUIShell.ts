@@ -1,32 +1,26 @@
 import { useEffect, useMemo, useReducer } from "react";
 import { isCompactViewport } from "../lib/platform";
+import type { View } from "../types";
 
-export type View = "workbench" | "tasks" | "team" | "observe";
-export type OpsLens = "overview" | "timeline" | "board";
+export type { View };
 
 export interface UIShellState {
   view: View;
   compact: boolean;
-  sidebarOpen: boolean;     // 移动端线程列表抽屉
-  opsPanelOpen: boolean;    // 右栏运营面板
-  opsLens: OpsLens;
+  sidebarOpen: boolean;
 }
 
 type UIShellAction =
   | { type: "set_view"; view: View }
   | { type: "set_compact"; compact: boolean }
   | { type: "toggle_sidebar" }
-  | { type: "close_sidebar" }
-  | { type: "toggle_ops_panel" }
-  | { type: "set_ops_lens"; lens: OpsLens };
+  | { type: "close_sidebar" };
 
 function createInitialState(): UIShellState {
   return {
-    view: "workbench",
+    view: "agent",
     compact: isCompactViewport(),
     sidebarOpen: false,
-    opsPanelOpen: true,
-    opsLens: "overview",
   };
 }
 
@@ -44,10 +38,6 @@ function reducer(state: UIShellState, action: UIShellAction): UIShellState {
       return { ...state, sidebarOpen: !state.sidebarOpen };
     case "close_sidebar":
       return state.sidebarOpen ? { ...state, sidebarOpen: false } : state;
-    case "toggle_ops_panel":
-      return { ...state, opsPanelOpen: !state.opsPanelOpen };
-    case "set_ops_lens":
-      return { ...state, opsLens: action.lens };
     default:
       return state;
   }
@@ -57,8 +47,6 @@ export interface UseUIShellResult extends UIShellState {
   setView: (view: View) => void;
   toggleSidebar: () => void;
   closeSidebar: () => void;
-  toggleOpsPanel: () => void;
-  setOpsLens: (lens: OpsLens) => void;
 }
 
 export default function useUIShell(): UseUIShellResult {
@@ -85,8 +73,6 @@ export default function useUIShell(): UseUIShellResult {
       setView: (view: View) => dispatch({ type: "set_view", view }),
       toggleSidebar: () => dispatch({ type: "toggle_sidebar" }),
       closeSidebar: () => dispatch({ type: "close_sidebar" }),
-      toggleOpsPanel: () => dispatch({ type: "toggle_ops_panel" }),
-      setOpsLens: (lens: OpsLens) => dispatch({ type: "set_ops_lens", lens }),
     }),
     [state],
   );

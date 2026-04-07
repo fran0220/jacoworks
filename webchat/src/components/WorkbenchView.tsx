@@ -3,6 +3,8 @@ import { type UseUIShellResult } from "../hooks/useUIShell";
 import { type UseWorkspaceResult } from "../hooks/useWorkspace";
 import { type UseConversationResult } from "../hooks/use-conversation/types";
 import { type UseOperationsResult } from "../hooks/useOperations";
+
+type OpsLens = "overview" | "timeline" | "board";
 import {
   resolveSpritePackIdForWorkspace,
   subscribeSpritePackChanges,
@@ -23,6 +25,7 @@ interface WorkbenchViewProps {
 }
 
 export default function WorkbenchView({ ui, workspace, conversation, ops }: WorkbenchViewProps) {
+  const [opsLens, setOpsLens] = useState<OpsLens>("overview");
   const [spriteExpanded, setSpriteExpanded] = useState(true);
   const [spritePackId, setSpritePackId] = useState(() =>
     resolveSpritePackIdForWorkspace(workspace.activeWorkspaceKey),
@@ -104,8 +107,8 @@ export default function WorkbenchView({ ui, workspace, conversation, ops }: Work
       {/* 右栏: 运营 (桌面端) */}
       {!ui.compact && (
         <OpsSidebar
-          lens={ui.opsLens}
-          onLensChange={ui.setOpsLens}
+          lens={opsLens}
+          onLensChange={setOpsLens}
           ops={ops}
           onAgentClick={(id) => ops.selectAgent(id)}
         />

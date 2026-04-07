@@ -1,4 +1,4 @@
-import { Command, ListTodo, Orbit, Users } from "lucide-react";
+import { Bot, Globe2, Users } from "lucide-react";
 import type { View } from "../types";
 import UserMenu from "./UserMenu";
 
@@ -10,17 +10,16 @@ interface NavRailProps {
 }
 
 const TABS = [
-  { key: "workbench" as const, label: "指挥台", Icon: Command },
-  { key: "tasks" as const, label: "任务", Icon: ListTodo },
+  { key: "agent" as const, label: "助手", Icon: Bot },
   { key: "team" as const, label: "团队", Icon: Users },
-  { key: "observe" as const, label: "观测", Icon: Orbit },
+  { key: "city" as const, label: "城市", Icon: Globe2 },
 ];
 
 export default function NavRail({ mode, onModeChange, compact, connState }: NavRailProps) {
   if (compact) {
     return (
       <nav className="nav-mobile-bar" aria-label="导航">
-        {TABS.slice(0, 3).map(({ key, label, Icon }) => (
+        {TABS.map(({ key, label, Icon }) => (
           <button
             key={key}
             className={`nav-mobile-tab${mode === key ? " active" : ""}`}
@@ -31,13 +30,6 @@ export default function NavRail({ mode, onModeChange, compact, connState }: NavR
             <span>{label}</span>
           </button>
         ))}
-        <button
-          className={`nav-mobile-tab${mode === "observe" ? " active" : ""}`}
-          onClick={() => onModeChange("observe")}
-        >
-          <Orbit size={18} />
-          <span>更多</span>
-        </button>
       </nav>
     );
   }

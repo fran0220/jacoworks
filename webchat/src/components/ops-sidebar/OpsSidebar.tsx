@@ -1,5 +1,6 @@
-import { type OpsLens } from "../../hooks/useUIShell";
 import { type UseOperationsResult } from "../../hooks/useOperations";
+
+type OpsLens = "overview" | "timeline" | "board";
 import OpsOverview from "./OpsOverview";
 import OpsTimeline from "./OpsTimeline";
 import OpsTaskSummary from "./OpsTaskSummary";
