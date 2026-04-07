@@ -5,12 +5,7 @@ export interface User {
   role: string;
 }
 
-/** @deprecated Use AppMode instead */
-export type View = "workbench" | "tasks" | "team" | "observe";
-
-export type AppMode = "workspace" | "city";
-
-export type OpsLens = "overview" | "timeline" | "board";
+export type AppMode = "agent" | "team" | "city";
 
 export type AgentExpression = "idle" | "thinking" | "speaking" | "working" | "happy" | "error";
 
@@ -92,6 +87,7 @@ export interface ChatSession {
   updatedAt: number;
   type: "chat" | "cowork";
   model: string;
+  workspacePath?: string;
 }
 
 export type StreamBlock =

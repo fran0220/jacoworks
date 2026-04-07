@@ -21,10 +21,12 @@ export interface TaskCropInput {
   label?: string;
 }
 
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 export const VILLAGE_MAP_ASSETS = {
-  overview: "/village/scene-overview.png",
-  buildings: "/village/village-buildings.png",
-  buildingShadow: "/village/village-buildings-shadow.png",
+  overview: `${BASE}/village/scene-overview.png`,
+  buildings: `${BASE}/village/village-buildings.png`,
+  buildingShadow: `${BASE}/village/village-buildings-shadow.png`,
 } as const;
 
 const CROP_PLOTS: Array<Pick<VillageCropPlot, "id" | "label" | "x" | "y">> = [

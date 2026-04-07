@@ -9,6 +9,7 @@ interface SessionSummary {
   updated_at: string | number;
   type?: string;
   model?: string;
+  workspace_path?: string;
 }
 
 interface ServerSession {
@@ -19,6 +20,7 @@ interface ServerSession {
   updated_at: string | number;
   type?: string;
   model?: string;
+  workspace_path?: string;
 }
 
 async function apiFetch(
@@ -57,13 +59,14 @@ function toSession(s: ServerSession): ChatSession {
     updatedAt: parseTime(s.updated_at),
     type: (s.type as ChatSession["type"]) || "chat",
     model: s.model || "",
+    workspacePath: s.workspace_path || "",
   };
 }
 
-export async function createSession(): Promise<ChatSession> {
+export async function createSession(workspacePath?: string): Promise<ChatSession> {
   const res = await apiFetch("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ type: "chat" }),
+    body: JSON.stringify({ type: "chat", workspace_path: workspacePath || "" }),
   });
   if (res.status !== 201) throw new Error("创建会话失败");
   return toSession(JSON.parse(res.body));
@@ -83,6 +86,7 @@ export async function listSessions(): Promise<ChatSession[]> {
       updatedAt: parseTime(s.updated_at),
       type: "chat" as const,
       model: s.model || "",
+      workspacePath: s.workspace_path || "",
     }));
 }
 

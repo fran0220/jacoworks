@@ -109,7 +109,7 @@ export default function ChatView({
   error: string | null;
   activeWorkspaceKey: string;
   agentSummaries?: AgentSummary[];
-  onPreview: (artifact: FileArtifact) => void;
+  onPreview?: (artifact: FileArtifact) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -133,7 +133,7 @@ export default function ChatView({
           messages={messages}
           activeWorkspaceKey={activeWorkspaceKey}
           agentSummaries={agentSummaries}
-          onPreview={onPreview}
+          onPreview={onPreview ?? (() => {})}
           scrollRef={scrollRef}
         />
       )}
@@ -149,7 +149,7 @@ export default function ChatView({
       )}
       {streaming && blocks.length > 0 && (
         <>
-          {blocks.map((block, i) => renderBlock(block, i, blocks, true, onPreview))}
+          {blocks.map((block, i) => renderBlock(block, i, blocks, true, onPreview ?? (() => {})))}
           <StreamingActivity blocks={blocks} />
         </>
       )}

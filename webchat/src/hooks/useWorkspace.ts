@@ -203,8 +203,13 @@ export default function useWorkspace(): UseWorkspaceResult {
         if (cancelled) return;
 
         const threads = sessions.map((session) => {
-          const workspaceKey = workspaceMapRef.current[session.id] || stateRef.current.activeWorkspaceKey;
-          if (!workspaceMapRef.current[session.id]) {
+          // Priority: server workspace_path > localStorage cache > default
+          const serverWorkspace = session.workspacePath ? normalizeWorkspaceKey(session.workspacePath) : "";
+          const cachedWorkspace = workspaceMapRef.current[session.id] || "";
+          const workspaceKey = serverWorkspace || cachedWorkspace || DEFAULT_SESSION_KEY;
+
+          // Sync localStorage cache with resolved value
+          if (workspaceMapRef.current[session.id] !== workspaceKey) {
             rememberThreadWorkspace(session.id, workspaceKey);
           }
 
@@ -249,8 +254,8 @@ export default function useWorkspace(): UseWorkspaceResult {
     async (options?: { capture?: boolean }): Promise<string | null> => {
       try {
         const capture = options?.capture !== false;
-        const session = await createSession();
         const workspaceKey = stateRef.current.activeWorkspaceKey;
+        const session = await createSession(workspaceKey);
         const thread: ThreadMeta = {
           id: session.id,
           workspaceKey,

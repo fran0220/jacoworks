@@ -9,6 +9,7 @@ export default function SpriteAvatarPanel({
   title,
   subtitle,
   statusText,
+  defaultExpanded = true,
 }: {
   spritePackId?: string;
   expression: AgentExpression;
@@ -16,8 +17,9 @@ export default function SpriteAvatarPanel({
   title?: string;
   subtitle?: string;
   statusText?: string;
+  defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
 
   const toggleExpanded = () => {
     setExpanded((current) => !current);
@@ -46,15 +48,15 @@ export default function SpriteAvatarPanel({
 
   return (
     <div className={`sprite-avatar-panel${expanded ? " is-expanded" : ""}`}>
-      {expanded && (
-        <div className="sprite-avatar-popover">
+      {expanded ? (
+        <div className="sprite-avatar-expanded">
           <SpriteAvatar spritePackId={spritePackId} expression={expression} size="lg" onToggle={toggleExpanded} />
         </div>
+      ) : (
+        <div className="sprite-avatar-slot">
+          <SpriteAvatar spritePackId={spritePackId} expression={expression} size="sm" onToggle={toggleExpanded} />
+        </div>
       )}
-
-      <div className={`sprite-avatar-slot${expanded ? " is-hidden" : ""}`}>
-        <SpriteAvatar spritePackId={spritePackId} expression={expression} size="sm" onToggle={toggleExpanded} />
-      </div>
     </div>
   );
 }

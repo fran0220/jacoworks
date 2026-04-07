@@ -1,168 +1,19 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Activity, Radio, Users, Workflow } from "lucide-react";
-import { fetchAgentSummary, fetchFeedLogs } from "../lib/feed";
-import type { AgentSummary, FeedLog } from "../lib/feed";
-import type { WorldAgent } from "../observatory/types";
-import { setRoleLabels } from "../lib/feed-translate";
-import { fetchAgentPresets, fetchTeams } from "../lib/teams";
-import type { AgentPreset, TeamsResponse, TemplateTheme } from "../lib/teams";
-import {
-  buildTeamOptions,
-  matchesTemplateSessionKey,
-  resolveLeaderInfo,
-} from "../lib/team-utils";
+import type { AgentSummary } from "../lib/feed";
+import type { AgentPreset, TeamsResponse } from "../lib/teams";
+import { resolveLeaderInfo } from "../lib/team-utils";
 import LeaderAssistant from "../observatory/hud/LeaderAssistant";
 import type { LeaderAssistantHandle } from "../observatory/hud/LeaderAssistant";
-
-const ROLE_OVERRIDES_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ROLE_OVERRIDES__";
-const ZONE_LABELS_GLOBAL_KEY = "__JACOWORKS_OBSERVATORY_ZONE_LABELS__";
-
-interface ActivityItem {
-  id: string;
-  agentName: string;
-  agentRole: string;
-  action: string;
-  timestamp: number;
-}
-
-function feedLogToActivity(log: FeedLog): ActivityItem {
-  const ts = log.timestamp ? new Date(log.timestamp).getTime() : Date.now();
-  let action = `${log.method} ${log.path}`;
-  if (log.path.includes("submit")) action = "提交了任务";
-  else if (log.path.includes("review")) action = "审核了任务";
-  else if (log.path.includes("claim")) action = "领取了任务";
-  else if (log.path.includes("score")) action = "得分变更";
-  else if (log.path.includes("task")) action = "处理任务";
-  return {
-    id: log.id,
-    agentName: log.agent_name || "未知",
-    agentRole: log.agent_role || "agent",
-    action,
-    timestamp: ts,
-  };
-}
-
-const DEFAULT_ROLE_COLORS: Record<string, string> = {
-  planner: "#3b82f6",
-  executor: "#f97316",
-  reviewer: "#22c55e",
-  patrol: "#a855f7",
-};
-
-function hashStringToHue(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i += 1)
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
-  return ((hash % 360) + 360) % 360;
-}
-
-function hslToHex(h: number, s: number, l: number): string {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = l - c / 2;
-  let r = 0;
-  let g = 0;
-  let b = 0;
-
-  if (h < 60) {
-    r = c;
-    g = x;
-  } else if (h < 120) {
-    r = x;
-    g = c;
-  } else if (h < 180) {
-    g = c;
-    b = x;
-  } else if (h < 240) {
-    g = x;
-    b = c;
-  } else if (h < 300) {
-    r = x;
-    b = c;
-  } else {
-    r = c;
-    b = x;
-  }
-
-  const toHex = (value: number) =>
-    Math.round((value + m) * 255)
-      .toString(16)
-      .padStart(2, "0");
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-function roleColor(role: string, theme?: TemplateTheme): string {
-  const themedColor = theme?.roles?.[role]?.color;
-  if (themedColor) return themedColor;
-  return (
-    DEFAULT_ROLE_COLORS[role] ?? hslToHex(hashStringToHue(role), 0.7, 0.55)
-  );
-}
-
-function setObservatoryRoleOverrides(
-  overrides: Record<
-    string,
-    { color: number; emissive: number; namePrefix: string }
-  > | null,
-): void {
-  const globalState = globalThis as Record<string, unknown>;
-  globalState[ROLE_OVERRIDES_GLOBAL_KEY] = overrides;
-}
-
-function setObservatoryZoneLabels(labels: Record<string, string> | null): void {
-  const globalState = globalThis as Record<string, unknown>;
-  globalState[ZONE_LABELS_GLOBAL_KEY] = labels;
-}
-
-interface SceneRefs {
-  scene: InstanceType<
-    typeof import("../observatory/world/ObservatoryScene").ObservatoryScene
-  >;
-  env: { update(time: number): void };
-  zones: InstanceType<
-    typeof import("../observatory/world/ZoneManager").ZoneManager
-  >;
-  pool: InstanceType<
-    typeof import("../observatory/avatar/AvatarPool").AvatarPool
-  >;
-  factory: InstanceType<
-    typeof import("../observatory/avatar/AvatarFactory").AvatarFactory
-  >;
-  waypointGraph: InstanceType<
-    typeof import("../observatory/world/WaypointGraph").WaypointGraph
-  >;
-  stateManager: InstanceType<
-    typeof import("../observatory/bridge/AgentStateManager").AgentStateManager
-  >;
-  eventBridge: InstanceType<
-    typeof import("../observatory/bridge/EventBridge").EventBridge
-  >;
-  worldAgents: Map<string, WorldAgent>;
-  navigators: Map<
-    string,
-    InstanceType<
-      typeof import("../observatory/avatar/AvatarNavigator").AvatarNavigator
-    >
-  >;
-  animators: Map<
-    string,
-    InstanceType<
-      typeof import("../observatory/avatar/AvatarAnimator").AvatarAnimator
-    >
-  >;
-}
-
-interface AgentObservatoryProps {
-  onWsEvent?: React.MutableRefObject<
-    ((event: { kind: string; text?: string; toolName?: string }) => void) | null
-  >;
-  activeTeamSessionKey: string;
-  onTeamChange: (sessionKey: string) => void;
-  onSend: (text: string) => void;
-  onAbort: () => void;
-  streaming: boolean;
-  connState: "disconnected" | "connecting" | "connected";
-}
+import { buildRoleMatrix, buildTeamOptionsWithFallback } from "./agent-observatory/hud";
+import {
+  useLeaderAssistantBridge,
+  useObservatoryPolling,
+  useObservatoryScene,
+  useObservatoryThemeData,
+} from "./agent-observatory/hooks";
+import { roleColor } from "./agent-observatory/theme";
+import type { ActivityItem, AgentObservatoryProps } from "./agent-observatory/types";
 
 export default function AgentObservatory(props: AgentObservatoryProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -173,78 +24,16 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
   const [teamsData, setTeamsData] = useState<TeamsResponse | null>(null);
   const [presets, setPresets] = useState<AgentPreset[]>([]);
   const lastFeedTimestampRef = useRef<string | undefined>(undefined);
-  const sceneRef = useRef<SceneRefs | null>(null);
   const leaderRef = useRef<LeaderAssistantHandle>(null);
-  const appliedThemeRef = useRef<string | null>(null);
-
-  // Apply theme overrides to observatory types and feed labels
-  const applyTheme = useCallback((theme: TemplateTheme | undefined) => {
-    const themeKey = theme?.sceneKind ?? "default";
-    if (appliedThemeRef.current === themeKey) return;
-    appliedThemeRef.current = themeKey;
-
-    if (theme) {
-      // Apply role color overrides
-      if (theme.roles) {
-        const overrides: Record<
-          string,
-          { color: number; emissive: number; namePrefix: string }
-        > = {};
-        for (const [role, cfg] of Object.entries(theme.roles)) {
-          const hex = parseInt(cfg.color.replace("#", ""), 16);
-          const darkerHex = Math.floor(hex * 0.6);
-          overrides[role] = {
-            color: hex,
-            emissive: darkerHex,
-            namePrefix: cfg.displayName.slice(0, 1),
-          };
-        }
-        setObservatoryRoleOverrides(overrides);
-      }
-      // Apply zone label overrides
-      if (theme.zones) {
-        const labels: Record<string, string> = {};
-        for (const [zoneId, cfg] of Object.entries(theme.zones)) {
-          labels[zoneId] = cfg.label;
-        }
-        setObservatoryZoneLabels(labels);
-      }
-      // Apply feed role labels
-      if (theme.roles) {
-        const labels: Record<string, string> = {};
-        for (const [role, cfg] of Object.entries(theme.roles)) {
-          labels[role] = cfg.displayName;
-        }
-        setRoleLabels(labels);
-      }
-    } else {
-      setObservatoryRoleOverrides(null);
-      setObservatoryZoneLabels(null);
-      setRoleLabels(null as unknown as Record<string, string>);
-    }
-  }, []);
-
-  // Fetch teams data (re-fetch when team changes)
-  const loadTeams = useCallback(async () => {
-    try {
-      const [data, agentPresets] = await Promise.all([
-        fetchTeams(),
-        fetchAgentPresets(),
-      ]);
-      setTeamsData(data);
-      setPresets(agentPresets);
-      const activeTemplate = data.templates.find((template) =>
-        matchesTemplateSessionKey(template, props.activeTeamSessionKey),
-      );
-      applyTheme(activeTemplate?.theme ?? data.theme);
-    } catch {
-      // silent
-    }
-  }, [applyTheme, props.activeTeamSessionKey]);
-
-  useEffect(() => {
-    void loadTeams();
-  }, [loadTeams, props.activeTeamSessionKey]);
+  const sceneRef = useObservatoryScene(containerRef, setLoading, setError);
+  useObservatoryThemeData(props.activeTeamSessionKey, setTeamsData, setPresets);
+  useObservatoryPolling(
+    sceneRef,
+    lastFeedTimestampRef,
+    setAgents,
+    setActivities,
+  );
+  useLeaderAssistantBridge(props.onWsEvent, leaderRef);
 
   // Derive leader info from teams data + active session key + agent summaries
   const leaderInfo = useMemo(() => {
@@ -257,29 +46,15 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
     );
   }, [teamsData, props.activeTeamSessionKey, agents, presets]);
 
-  // Build team selector options
-  const teamOptions = useMemo(() => {
-    if (!teamsData) return [];
-    const options = buildTeamOptions(teamsData, presets);
-    if (
-      options.some((option) => option.sessionKey === props.activeTeamSessionKey)
-    ) {
-      return options;
-    }
-
-    const activeTemplate = teamsData.templates.find((template) =>
-      matchesTemplateSessionKey(template, props.activeTeamSessionKey),
-    );
-    const activeLabel = activeTemplate?.label || props.activeTeamSessionKey;
-    return [
-      {
-        sessionKey: props.activeTeamSessionKey,
-        label: activeLabel,
-        source: "default" as const,
-      },
-      ...options,
-    ];
-  }, [teamsData, presets, props.activeTeamSessionKey]);
+  const teamOptions = useMemo(
+    () =>
+      buildTeamOptionsWithFallback(
+        teamsData,
+        presets,
+        props.activeTeamSessionKey,
+      ),
+    [teamsData, presets, props.activeTeamSessionKey],
+  );
 
   const leaderSummary = useMemo(() => {
     if (!leaderInfo) return undefined;
@@ -296,268 +71,10 @@ export default function AgentObservatory(props: AgentObservatoryProps) {
 
   const activityPreview = useMemo(() => activities.slice(0, 8), [activities]);
 
-  const roleMatrix = useMemo(() => {
-    const grouped = new Map<
-      string,
-      { role: string; label: string; color: string; count: number }
-    >();
-
-    for (const agent of agents) {
-      const next = grouped.get(agent.role);
-      if (next) {
-        next.count += 1;
-        continue;
-      }
-      grouped.set(agent.role, {
-        role: agent.role,
-        label: teamsData?.theme?.roles?.[agent.role]?.displayName ?? agent.role,
-        color: roleColor(agent.role, teamsData?.theme),
-        count: 1,
-      });
-    }
-
-    return Array.from(grouped.values());
-  }, [agents, teamsData?.theme]);
-
-  const initScene = useCallback(async () => {
-    if (!containerRef.current) return;
-    try {
-      const [
-        { ObservatoryScene },
-        { ZoneManager },
-        { WaypointGraph },
-        { AvatarPool },
-        { AvatarFactory },
-        { AvatarNavigator },
-        { AvatarAnimator },
-        { EventBridge },
-        { AgentStateManager },
-      ] = await Promise.all([
-        import("../observatory/world/ObservatoryScene"),
-        import("../observatory/world/ZoneManager"),
-        import("../observatory/world/WaypointGraph"),
-        import("../observatory/avatar/AvatarPool"),
-        import("../observatory/avatar/AvatarFactory"),
-        import("../observatory/avatar/AvatarNavigator"),
-        import("../observatory/avatar/AvatarAnimator"),
-        import("../observatory/bridge/EventBridge"),
-        import("../observatory/bridge/AgentStateManager"),
-      ]);
-
-      const scene = new ObservatoryScene();
-      const threeScene = scene.getScene();
-
-      const { IslandEnvironment } =
-        await import("../observatory/world/IslandEnvironment");
-      const env = new IslandEnvironment(threeScene);
-
-      const zones = new ZoneManager(threeScene);
-      const waypointGraph = new WaypointGraph();
-      const pool = new AvatarPool();
-      const factory = new AvatarFactory(pool, threeScene);
-      const worldAgents = new Map<string, WorldAgent>();
-      const navigators = new Map<
-        string,
-        InstanceType<typeof AvatarNavigator>
-      >();
-      const animators = new Map<string, InstanceType<typeof AvatarAnimator>>();
-
-      const stateManager = new AgentStateManager(
-        worldAgents,
-        zones,
-        waypointGraph,
-      );
-
-      const eventBridge = new EventBridge((event) => {
-        stateManager.handleEvent(event);
-      });
-
-      let elapsed = 0;
-      scene.setOnUpdate((delta) => {
-        elapsed += delta;
-        env.update(elapsed);
-        zones.update(elapsed);
-        stateManager.update(delta);
-
-        // Move agents along their walk paths
-        for (const [id, nav] of navigators) {
-          const agent = worldAgents.get(id);
-          if (!agent) continue;
-
-          // Feed pending walkPath from state manager to navigator
-          if (agent.walkPath.length > 0 && !nav.isMoving()) {
-            nav.setDestination(agent.walkPath);
-            agent.walkPath = [];
-            agent.state = "walking";
-          }
-
-          const moving = nav.update(delta);
-          if (!moving && agent.state === "walking") {
-            agent.state = "idle";
-          }
-        }
-
-        // Update agent animators + sync root position
-        for (const [id, animator] of animators) {
-          const agent = worldAgents.get(id);
-          if (!agent) continue;
-          animator.setState(agent.state);
-          animator.update(delta);
-          agent.root.position.copy(agent.position);
-        }
-      });
-
-      scene.mount(containerRef.current);
-      sceneRef.current = {
-        scene,
-        env,
-        zones,
-        pool,
-        factory,
-        waypointGraph,
-        stateManager,
-        eventBridge,
-        worldAgents,
-        navigators,
-        animators,
-      };
-      setLoading(false);
-    } catch (err) {
-      console.error("Observatory init failed:", err);
-      setError(err instanceof Error ? err.message : "初始化失败");
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    initScene();
-    return () => {
-      sceneRef.current?.scene.dispose();
-      sceneRef.current = null;
-    };
-  }, [initScene]);
-
-  // Resize observer
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      sceneRef.current?.scene.resize();
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Poll agent summary every 5s — sync 3D agents
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const data = await fetchAgentSummary();
-        if (cancelled) return;
-        setAgents(data);
-
-        const refs = sceneRef.current;
-        if (!refs) return;
-
-        const { factory, worldAgents, navigators, animators } = refs;
-        const summaries = data.map((a) => ({
-          id: a.id,
-          name: a.name,
-          role: a.role,
-          total_score: a.total_score,
-          current_sub_task: a.current_sub_task,
-        }));
-
-        const { added, removed } = await factory.syncAgents(
-          summaries,
-          worldAgents,
-        );
-
-        // Create navigators + animators for new agents
-        const [{ AvatarNavigator }, { AvatarAnimator }] = await Promise.all([
-          import("../observatory/avatar/AvatarNavigator"),
-          import("../observatory/avatar/AvatarAnimator"),
-        ]);
-        for (const agent of added) {
-          navigators.set(agent.id, new AvatarNavigator(agent));
-          const glb = factory.getGLBAvatar(agent.id);
-          animators.set(agent.id, new AvatarAnimator(agent.root, glb?.clips));
-        }
-
-        // Cleanup removed
-        for (const agent of removed) {
-          navigators.delete(agent.id);
-          animators.delete(agent.id);
-        }
-      } catch {
-        // silent
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
-  // Poll feed logs incrementally every 5s
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const logs = await fetchFeedLogs(lastFeedTimestampRef.current, undefined, 20);
-        if (cancelled || logs.length === 0) return;
-        lastFeedTimestampRef.current = logs[0]?.timestamp ?? lastFeedTimestampRef.current;
-        const newItems = logs.map(feedLogToActivity);
-        setActivities((prev) => [...newItems, ...prev].slice(0, 50));
-
-        // Feed events to the 3D world bridge
-        sceneRef.current?.eventBridge.feedNewLogs(logs);
-      } catch {
-        // silent
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
-  // Wire WS events to LeaderAssistant
-  useEffect(() => {
-    if (!props.onWsEvent) return;
-    props.onWsEvent.current = (event) => {
-      const ref = leaderRef.current;
-      if (!ref) return;
-      switch (event.kind) {
-        case "thinking_start":
-          ref.onThinkingStart();
-          break;
-        case "thinking_delta":
-          ref.onThinkingDelta(event.text || "");
-          break;
-        case "text_delta":
-          ref.onTextDelta(event.text || "");
-          break;
-        case "tool_start":
-          ref.onToolStart(event.toolName || "tool");
-          break;
-        case "tool_end":
-          ref.onToolEnd(event.toolName || "tool");
-          break;
-        case "done":
-          ref.onDone();
-          break;
-      }
-    };
-    return () => {
-      if (props.onWsEvent) props.onWsEvent.current = null;
-    };
-  }, [props.onWsEvent]);
+  const roleMatrix = useMemo(
+    () => buildRoleMatrix(agents, teamsData?.theme),
+    [agents, teamsData?.theme],
+  );
 
   if (error) {
     return (

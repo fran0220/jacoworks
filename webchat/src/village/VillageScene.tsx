@@ -1,74 +1,76 @@
-import { useMemo, type CSSProperties } from "react";
 import {
-  ArrowLeft,
-  Flame,
-  MapPin,
-  Play,
-  RefreshCw,
-  Sparkles,
-  Sprout,
-  TreePine,
-  Users,
-} from "lucide-react";
-import CrewProgressBar from "../components/CrewProgressBar";
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { Flame, Loader, Minus, Plus, Maximize2, Users, X } from "lucide-react";
 import useOperations from "../hooks/useOperations";
 import type { CrewTask } from "../lib/feed";
 import { matchesTemplateSessionKey } from "../lib/team-utils";
 import type { TeamTemplate } from "../lib/teams";
 import {
+  buildSpriteSheetPath,
+  buildSpriteReferencePath,
+} from "../lib/sprite-packs";
+import {
   mapVillageStateToExpression,
   type VillageAgentModel,
 } from "./VillageAgent";
-import { buildSpriteSheetPath } from "../lib/sprite-packs";
+import { useVillageCamera, getMapStyle, MAP_W, MAP_H } from "./VillageCamera";
+import {
+  useYSortedElements,
+  VILLAGE_BUILDINGS,
+  type VillageBuilding,
+} from "./VillageYSort";
+import VillageVFX from "./VillageVFX";
+import { useVillageBridge } from "./VillageBridge";
 import {
   buildCropPlots,
-  getVillageAspectRatio,
-  getZonePresence,
   listVillageZones,
   type TaskCropInput,
   VILLAGE_MAP_ASSETS,
 } from "./VillageMap";
-import { useVillageBridge } from "./VillageBridge";
+import type { VillageZoneId } from "./VillageZone";
 
 interface VillageSceneProps {
   template: TeamTemplate;
   activeSessionKey: string;
   onBack: () => void;
   onLaunchTeam: (template: TeamTemplate) => Promise<void> | void;
+  variant?: "modal" | "inline";
 }
 
-function renderVillageAgent(
-  agent: VillageAgentModel,
-  highlightedAgentId: string | null,
-) {
-  const expression = mapVillageStateToExpression(agent.state);
-  const isHighlighted = highlightedAgentId === agent.id;
+type AssetLoadState = "loading" | "ready" | "error";
 
-  return (
-    <div
-      key={agent.id}
-      className={`village-agent village-agent--${agent.state}${isHighlighted ? " is-highlighted" : ""}`}
-      style={
-        {
-          left: `${agent.position.x}%`,
-          top: `${agent.position.y}%`,
-          "--agent-accent": agent.accent,
-        } as CSSProperties
+function useMapAssetLoader(): { state: AssetLoadState; progress: number } {
+  const [state, setState] = useState<AssetLoadState>("loading");
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (!cancelled) {
+        setProgress(100);
+        setState("ready");
       }
-    >
-      <div className="village-agent-bubble">
-        <strong>{agent.name}</strong>
-        <span>{agent.statusText}</span>
-        {agent.detailText && <em>{agent.detailText}</em>}
-      </div>
-      <div className="village-agent-shadow" />
-      <div
-        className={`village-agent-sprite-sheet village-agent-sprite-sheet--${expression}`}
-        style={{ backgroundImage: `url(${buildSpriteSheetPath(agent.spritePackId, expression)})` }}
-      />
-      <span className="village-agent-badge">{agent.roleLabel}</span>
-    </div>
-  );
+    };
+    img.onerror = () => {
+      if (!cancelled) {
+        setProgress(100);
+        setState("error");
+      }
+    };
+    img.src = VILLAGE_MAP_ASSETS.overview;
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { state, progress };
 }
 
 function mapCrewTaskToCropStatus(task: CrewTask): TaskCropInput["status"] {
@@ -112,12 +114,122 @@ function buildCrewCropInputs(tasks: CrewTask[]): TaskCropInput[] | undefined {
   }));
 }
 
+const ZONE_COLORS: Record<VillageZoneId, string> = {
+  hq: "#5b74ff",
+  watchtower: "#9076ff",
+  market: "#e38a3d",
+  library: "#4f8d57",
+  campfire: "#ff9f1c",
+  plaza: "#6366f1",
+  docks: "#3fa873",
+  crops: "#bc6b4a",
+};
+
+function AgentPopover({
+  agent,
+  onClose,
+}: {
+  agent: VillageAgentModel;
+  onClose: () => void;
+}) {
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    function handleClick(e: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", handleKey);
+    document.addEventListener("pointerdown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("pointerdown", handleClick);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={popoverRef}
+      className="village-agent-popover"
+      style={{
+        left: `${(agent.position.x / 100) * MAP_W}px`,
+        top: `${(agent.position.y / 100) * MAP_H}px`,
+      }}
+    >
+      <button className="village-popover-close" type="button" onClick={onClose}>
+        <X size={12} />
+      </button>
+      <div className="village-popover-header">
+        <img
+          className="village-popover-ref"
+          src={buildSpriteReferencePath(agent.spritePackId)}
+          alt={agent.name}
+        />
+        <div>
+          <strong>{agent.name}</strong>
+          <span
+            className="village-popover-role"
+            style={{ backgroundColor: agent.accent }}
+          >
+            {agent.roleLabel}
+          </span>
+        </div>
+      </div>
+      <div className="village-popover-body">
+        <span className={`village-popover-state village-popover-state--${agent.state}`}>
+          {agent.statusText}
+        </span>
+        {agent.detailText && <em>{agent.detailText}</em>}
+      </div>
+    </div>
+  );
+}
+
+function BuildingMarker({
+  building,
+  zIndex,
+}: {
+  building: VillageBuilding;
+  zIndex: number;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const color = ZONE_COLORS[building.zoneId];
+
+  return (
+    <div
+      className="village-building-marker"
+      style={{
+        left: `${(building.position.x / 100) * MAP_W}px`,
+        top: `${(building.position.y / 100) * MAP_H}px`,
+        zIndex,
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span
+        className="village-building-dot"
+        style={{ backgroundColor: color }}
+      />
+      {hovered && (
+        <span className="village-building-tooltip">{building.label}</span>
+      )}
+    </div>
+  );
+}
+
 export default function VillageScene({
   template,
   activeSessionKey,
   onBack,
   onLaunchTeam,
+  variant = "modal",
 }: VillageSceneProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapAssets = useMapAssetLoader();
   const isLive = matchesTemplateSessionKey(template, activeSessionKey);
   const operations = useOperations(
     isLive ? activeSessionKey : template.workspaceKeyPrefix,
@@ -128,195 +240,255 @@ export default function VillageScene({
     operations.activities,
     operations.dashboardStats,
   );
+  const { camera, handlers, zoomIn, zoomOut, resetView, panTo } =
+    useVillageCamera(containerRef);
+
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+
   const cropTaskInputs = useMemo(
     () => buildCrewCropInputs(operations.crewTasks),
     [operations.crewTasks],
   );
-
   const cropPlots = useMemo(
     () => buildCropPlots(operations.dashboardStats, bridge.activeCount, cropTaskInputs),
     [bridge.activeCount, cropTaskInputs, operations.dashboardStats],
   );
-  const zonePresence = useMemo(
-    () => getZonePresence(bridge.agents),
-    [bridge.agents],
-  );
   const villageZones = useMemo(() => listVillageZones(), []);
+  const ySortedElements = useYSortedElements(bridge.agents, VILLAGE_BUILDINGS);
+
+  const agentMap = useMemo(() => {
+    const map = new Map<string, VillageAgentModel>();
+    for (const agent of bridge.agents) {
+      map.set(agent.id, agent);
+    }
+    return map;
+  }, [bridge.agents]);
+
+  const buildingMap = useMemo(() => {
+    const map = new Map<string, VillageBuilding>();
+    for (const b of VILLAGE_BUILDINGS) {
+      map.set(b.id, b);
+    }
+    return map;
+  }, []);
+
+  const selectedAgent = selectedAgentId ? agentMap.get(selectedAgentId) ?? null : null;
+
+  const handleAgentClick = useCallback((agentId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedAgentId((prev) => (prev === agentId ? null : agentId));
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = handlers.onWheel;
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [handlers.onWheel]);
+
+  const mapReady = mapAssets.state !== "loading";
+
+  const mapStyle: CSSProperties = {
+    ...getMapStyle(camera),
+    position: "absolute",
+    left: "50%",
+    top: "50%",
+    marginLeft: -(MAP_W / 2),
+    marginTop: -(MAP_H / 2),
+    backgroundImage: `url(${VILLAGE_MAP_ASSETS.overview})`,
+    backgroundSize: "100% 100%",
+    imageRendering: "pixelated",
+  };
+
+  const viewport = (
+    <>
+      {!mapReady && (
+        <div className="village-load-screen village-load-screen--overlay">
+          <Loader size={24} className="spin-icon" />
+          <strong>搭建协作小镇…</strong>
+          <div className="village-load-bar">
+            <div className="village-load-fill" style={{ width: `${mapAssets.progress}%` }} />
+          </div>
+          <span>{mapAssets.progress}%</span>
+        </div>
+      )}
+
+      <div
+        className="village-viewport"
+        ref={containerRef}
+        onPointerDown={handlers.onPointerDown as unknown as React.PointerEventHandler}
+        onPointerMove={handlers.onPointerMove as unknown as React.PointerEventHandler}
+        onPointerUp={handlers.onPointerUp as unknown as React.PointerEventHandler}
+      >
+        <div className="village-map" style={mapStyle}>
+          <VillageVFX />
+
+          {villageZones.map((zone) => (
+            <div
+              key={zone.id}
+              className={`village-zone-chip${bridge.zoneEffects[zone.id] ? " village-zone-chip--reserved" : ""}`}
+              style={{
+                left: `${(zone.anchor.x / 100) * MAP_W}px`,
+                top: `${(zone.anchor.y / 100) * MAP_H}px`,
+                zIndex: 2000,
+                cursor: "pointer",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                panTo(zone.anchor.x, zone.anchor.y);
+              }}
+            >
+              <span aria-hidden="true">{zone.icon}</span>
+              <div>
+                <strong>{zone.label}</strong>
+                <em>{zone.caption}</em>
+                {bridge.zoneEffects[zone.id] && (
+                  <em>
+                    锁定 {bridge.zoneEffects[zone.id]?.reserveCount ?? 0} 项 · {bridge.zoneEffects[zone.id]?.reservedPaths[0]}
+                  </em>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {cropPlots.map((plot) => (
+            <div
+              key={plot.id}
+              className={`village-crop-plot village-crop-plot--${plot.stage}${plot.taskId ? " has-task" : ""}`}
+              style={{
+                left: `${(plot.x / 100) * MAP_W}px`,
+                top: `${(plot.y / 100) * MAP_H}px`,
+              }}
+            >
+              <span>{plot.label}</span>
+            </div>
+          ))}
+
+          {ySortedElements.map((element) => {
+            if (element.type === "building") {
+              const building = buildingMap.get(element.id);
+              if (!building) return null;
+              return (
+                <BuildingMarker
+                  key={element.id}
+                  building={building}
+                  zIndex={element.zIndex}
+                />
+              );
+            }
+
+            const agent = agentMap.get(element.id);
+            if (!agent) return null;
+            const expression = mapVillageStateToExpression(agent.state);
+            const isHighlighted = bridge.highlightedAgentId === agent.id;
+
+            return (
+              <div
+                key={agent.id}
+                className={`village-agent village-agent--${agent.state}${isHighlighted ? " is-highlighted" : ""}`}
+                style={{
+                  left: `${(agent.position.x / 100) * MAP_W}px`,
+                  top: `${(agent.position.y / 100) * MAP_H}px`,
+                  zIndex: element.zIndex,
+                  "--agent-accent": agent.accent,
+                } as CSSProperties}
+                onClick={(e) => handleAgentClick(agent.id, e)}
+              >
+                <div className="village-agent-bubble">
+                  <strong>{agent.name}</strong>
+                  <span>{agent.statusText}</span>
+                  {agent.detailText && <em>{agent.detailText}</em>}
+                </div>
+                <div className="village-agent-shadow" />
+                <div
+                  className={`village-agent-sprite village-agent-sprite--${expression}`}
+                  style={{
+                    backgroundImage: `url(${buildSpriteSheetPath(agent.spritePackId, expression)})`,
+                  }}
+                />
+                <span className="village-agent-badge">{agent.roleLabel}</span>
+              </div>
+            );
+          })}
+
+          {selectedAgent && (
+            <AgentPopover
+              agent={selectedAgent}
+              onClose={() => setSelectedAgentId(null)}
+            />
+          )}
+        </div>
+      </div>
+
+      <div className="village-zoom-controls">
+        <button type="button" onClick={zoomIn} title="放大">
+          <Plus size={14} />
+        </button>
+        <button type="button" onClick={zoomOut} title="缩小">
+          <Minus size={14} />
+        </button>
+        <button type="button" onClick={resetView} title="重置视角">
+          <Maximize2 size={14} />
+        </button>
+      </div>
+    </>
+  );
+
+  if (variant === "inline") {
+    return (
+      <div className="village-inline">
+        {viewport}
+        <div className="village-inline-status">
+          <span>
+            <Flame size={12} />
+            {bridge.activeCount} 活跃
+          </span>
+          <span className="village-inline-story">{bridge.latestStory}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="village-overlay" role="dialog" aria-modal="true">
       <div className="village-overlay-backdrop" onClick={onBack} />
-      <section className="village-shell">
+      <section className="village-shell village-shell--viewport">
         <header className="village-topbar">
           <button className="village-back-btn" type="button" onClick={onBack}>
-            <ArrowLeft size={16} />
-            <span>返回团队页</span>
+            <X size={16} />
+            <span>关闭</span>
           </button>
-
           <div className="village-title-block">
-            <span className="village-kicker">
-              {template.icon || "🏘️"} Team Village Preview
-            </span>
-            <h2>{template.label} 协作小镇</h2>
-            <p>
-              {isLive
-                ? "实时映射团队在村庄里的分工流动，营火、广场和各建筑会随着协作状态变化。"
-                : "离线预演视角。先看看角色分布，准备好后再启动团队进入实时模式。"}
-            </p>
+            <h2>{template.icon || "🏘️"} {template.label} 协作小镇</h2>
           </div>
-
           <div className="village-topbar-actions">
-            <button
-              className="village-ghost-btn"
-              type="button"
-              onClick={() => void operations.refresh()}
-              disabled={operations.loading}
-            >
-              <RefreshCw size={14} className={operations.loading ? "spin-icon" : undefined} />
-              <span>刷新实况</span>
-            </button>
             {!isLive && (
               <button
                 className="village-primary-btn"
                 type="button"
                 onClick={() => void onLaunchTeam(template)}
               >
-                <Play size={15} />
-                <span>启动团队</span>
+                启动团队
               </button>
             )}
-            {isLive && <span className="village-live-pill">实时连接中</span>}
+            {isLive && (
+              <span className="village-live-pill">
+                <Users size={12} />
+                {bridge.activeCount} 活跃
+              </span>
+            )}
           </div>
         </header>
-
-        <div className="village-body">
-          <aside className="village-sidebar village-sidebar--left">
-            <div className="village-panel-card village-panel-card--hero">
-              <span className="village-panel-eyebrow">
-                <Sparkles size={14} />
-                实时故事线
-              </span>
-              <p className="village-story">{bridge.latestStory}</p>
-              <div className="village-stat-row">
-                <span>
-                  <Users size={14} />
-                  成员 {template.members.length}
-                </span>
-                <span>
-                  <Flame size={14} />
-                  活跃 {bridge.activeCount}
-                </span>
-              </div>
-            </div>
-
-            <div className="village-panel-card">
-              <h3>村民名册</h3>
-              <ul className="village-roster">
-                {bridge.agents.map((agent) => (
-                  <li key={agent.id}>
-                    <span
-                      className="village-roster-dot"
-                      style={{ backgroundColor: agent.accent }}
-                    />
-                    <div>
-                      <strong>{agent.name}</strong>
-                      <span>{agent.roleLabel}</span>
-                    </div>
-                    <em>{agent.statusText}</em>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </aside>
-
-          <main className="village-stage-panel">
-            <div className="village-stage-frame">
-              <div
-                className="village-map-scene"
-                style={
-                  {
-                    backgroundImage: `url(${VILLAGE_MAP_ASSETS.overview})`,
-                    aspectRatio: String(getVillageAspectRatio()),
-                  } as CSSProperties
-                }
-              >
-                <div className="village-map-atmosphere" />
-                <div className="village-map-vignette" />
-
-                {cropPlots.map((plot) => (
-                  <div
-                    key={plot.id}
-                    className={`village-crop-plot village-crop-plot--${plot.stage}${plot.taskId ? " has-task" : ""}`}
-                    style={{ left: `${plot.x}%`, top: `${plot.y}%` }}
-                  >
-                    <span>{plot.label}</span>
-                  </div>
-                ))}
-
-                {villageZones.map((zone) => (
-                  <div
-                    key={zone.id}
-                    className={`village-zone-chip${bridge.zoneEffects[zone.id] ? " village-zone-chip--reserved" : ""}`}
-                    style={{ left: `${zone.anchor.x}%`, top: `${zone.anchor.y}%` }}
-                  >
-                    <span aria-hidden="true">{zone.icon}</span>
-                    <div>
-                      <strong>{zone.label}</strong>
-                      <em>{zone.caption}</em>
-                      {bridge.zoneEffects[zone.id] && (
-                        <em>
-                          锁定 {bridge.zoneEffects[zone.id]?.reserveCount ?? 0} 项 · {bridge.zoneEffects[zone.id]?.reservedPaths[0]}
-                        </em>
-                      )}
-                    </div>
-                  </div>
-                ))}
-
-                {bridge.agents.map((agent) =>
-                  renderVillageAgent(agent, bridge.highlightedAgentId),
-                )}
-              </div>
-            </div>
-          </main>
-
-          <aside className="village-sidebar village-sidebar--right">
-            <div className="village-panel-card">
-              <h3>建筑热度</h3>
-              <ul className="village-zone-list">
-                {villageZones.map((zone) => (
-                  <li key={zone.id}>
-                    <span>
-                      {zone.icon} {zone.label}
-                    </span>
-                    <strong>{zonePresence[zone.id] ?? 0}</strong>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="village-panel-card village-panel-card--legend">
-              <h3>农田进度</h3>
-              <div className="village-legend-grid">
-                <div>
-                  <Sprout size={14} />
-                  <span>播种</span>
-                </div>
-                <div>
-                  <TreePine size={14} />
-                  <span>生长</span>
-                </div>
-                <div>
-                  <MapPin size={14} />
-                  <span>交付</span>
-                </div>
-              </div>
-              <p>
-                三块农田分别代表任务拆解、执行推进与交付成熟，活跃度越高，庄稼越繁盛。
-              </p>
-            </div>
-
-            {operations.crewTasks.length > 0 && <CrewProgressBar tasks={operations.crewTasks} />}
-          </aside>
+        <div className="village-modal-viewport">
+          {viewport}
+        </div>
+        <div className="village-inline-status">
+          <span>
+            <Flame size={12} />
+            {bridge.activeCount} 活跃
+          </span>
+          <span className="village-inline-story">{bridge.latestStory}</span>
         </div>
       </section>
     </div>

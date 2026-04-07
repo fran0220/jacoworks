@@ -1,0 +1,73 @@
+.presence-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  overflow-x: auto;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.7);
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.presence-empty {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.presence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.48rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(229, 231, 235, 0.86);
+  white-space: nowrap;
+}
+
+.presence-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.presence-dot--working { background: #22c55e; }
+.presence-dot--thinking { background: #f59e0b; }
+.presence-dot--idle { background: #d1d5db; }
+.presence-dot--stuck {
+  background: #ef4444;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+  animation: presence-dot-alert 1.2s ease-out infinite;
+}
+
+@keyframes presence-dot-alert {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+}
+
+.presence-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.presence-role,
+.presence-status {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.presence-reserve {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #315d9a;
+  font-size: 0.68rem;
+}

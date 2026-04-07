@@ -1,0 +1,145 @@
+@import "./observatory-scene.css";
+@import "./leader-assistant.css";
+@import "./digital-city.css";
+
+/* ===== Digital City View ===== */
+
+.city-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #0f172a 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.city-canvas {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.city-zone {
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.03);
+  transition: background 0.3s;
+}
+.city-zone:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.city-zone-label {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.625rem;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+.city-zone-label strong {
+  color: var(--zone-accent, rgba(255, 255, 255, 0.7));
+  font-weight: 600;
+}
+.city-zone-label em {
+  font-style: normal;
+  font-size: 0.625rem;
+  padding: 0.1rem 0.375rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.city-agent {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  transition: left 2.8s ease-in-out, top 2.8s ease-in-out;
+  z-index: 10;
+}
+
+.city-agent-bubble {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  font-size: 0.625rem;
+  color: rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  margin-bottom: 0.25rem;
+}
+.city-agent:hover .city-agent-bubble {
+  opacity: 1;
+}
+.city-agent-bubble strong {
+  font-weight: 600;
+  color: #fff;
+}
+
+.city-agent-sprite {
+  width: 48px;
+  height: 48px;
+  background-size: 400% 100%;
+  background-position: 0 0;
+  image-rendering: pixelated;
+}
+.city-agent-sprite--idle { animation: sprite-idle 1.2s steps(4) infinite; }
+.city-agent-sprite--thinking { animation: sprite-think 1s steps(4) infinite; }
+.city-agent-sprite--speaking { animation: sprite-speak 0.8s steps(4) infinite; }
+.city-agent-sprite--working { animation: sprite-work 0.6s steps(4) infinite; }
+.city-agent-sprite--happy { animation: sprite-happy 0.7s steps(4) infinite; }
+.city-agent-sprite--error { animation: sprite-idle 2s steps(4) infinite; }
+
+@keyframes sprite-idle { from { background-position: 0 0; } to { background-position: -400% 0; } }
+@keyframes sprite-think { from { background-position: 0 0; } to { background-position: -400% 0; } }
+@keyframes sprite-speak { from { background-position: 0 0; } to { background-position: -400% 0; } }
+@keyframes sprite-work { from { background-position: 0 0; } to { background-position: -400% 0; } }
+@keyframes sprite-happy { from { background-position: 0 0; } to { background-position: -400% 0; } }
+
+.city-agent--walking .city-agent-sprite {
+  animation: sprite-walk 0.5s steps(4) infinite;
+}
+@keyframes sprite-walk { from { background-position: 0 0; } to { background-position: -400% 0; } }
+
+.city-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.75rem 1.25rem;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.city-status-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+}
+
+.city-status-story {
+  flex: 1;
+  font-size: 0.8125rem;
+  color: rgba(255, 255, 255, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

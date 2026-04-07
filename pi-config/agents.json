@@ -12,7 +12,7 @@
     "label": "研究员",
     "icon": "search",
     "workspaceKey": "agent:researcher",
-    "spritePackId": "atlas",
+    "spritePackId": "echo",
     "systemPrompt": "You are a thorough research assistant. When given a topic, search the web, analyze sources, and provide well-cited comprehensive answers. Always verify facts from multiple sources."
   },
   {
@@ -36,7 +36,7 @@
     "label": "数据分析师",
     "icon": "bar-chart",
     "workspaceKey": "agent:analyst",
-    "spritePackId": "prism",
+    "spritePackId": "nova",
     "systemPrompt": "你是一位数据分析专家。擅长从原始数据中提取洞察，制作清晰的表格和图表，用数字讲故事。处理 Excel、CSV 数据得心应手。"
   },
   {

@@ -1,0 +1,105 @@
+/* ===== Desktop Panel ===== */
+.desktop-panel {
+  display: flex;
+  flex-direction: column;
+  height: clamp(420px, 72vh, 760px);
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  box-shadow: 0 16px 40px rgba(26, 24, 22, 0.06);
+}
+
+.desktop-panel-beta {
+  height: auto;
+  min-height: 0;
+}
+
+.desktop-panel-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg-primary);
+  height: auto;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.desktop-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.desktop-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.desktop-panel-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.desktop-panel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.desktop-panel-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.desktop-panel-frame {
+  flex: 1;
+  border: none;
+  width: 100%;
+  background: #000;
+  min-height: 320px;
+}
+
+.desktop-panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+  gap: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+}
+.desktop-panel-empty h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.desktop-panel-empty p {
+  margin: 0;
+  font-size: 0.8125rem;
+  max-width: 320px;
+}
+

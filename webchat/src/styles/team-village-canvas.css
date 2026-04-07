@@ -1,0 +1,188 @@
+/* ===== Village Viewport (Game Camera) ===== */
+
+.village-viewport {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  background: #1a2634;  /* deep sea color visible around map edges */
+}
+
+.village-viewport:active {
+  cursor: grabbing;
+}
+
+.village-map {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin-left: -2750px;  /* -MAP_W/2 */
+  margin-top: -1750px;   /* -MAP_H/2 */
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
+
+/* ===== Village Buildings ===== */
+
+.village-building {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.village-building:hover {
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+.village-building-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(196, 160, 100, 0.6);
+  border: 2px solid rgba(255, 240, 200, 0.5);
+  box-shadow: 0 0 8px rgba(196, 160, 100, 0.3);
+}
+
+.village-building-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  background: rgba(30, 22, 14, 0.85);
+  border: 1px solid rgba(196, 160, 100, 0.3);
+  border-radius: 6px;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(240, 220, 180, 0.9);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  backdrop-filter: blur(4px);
+}
+
+.village-building:hover .village-building-tooltip {
+  opacity: 1;
+}
+
+/* ===== Village Zoom Controls ===== */
+
+.village-zoom-controls {
+  position: absolute;
+  bottom: calc(36px + 0.75rem);  /* above status bar */
+  right: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 20;
+}
+
+.village-zoom-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(30, 25, 18, 0.8);
+  border: 1px solid rgba(196, 160, 100, 0.25);
+  color: rgba(240, 220, 180, 0.8);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  backdrop-filter: blur(4px);
+}
+
+.village-zoom-btn:hover {
+  background: rgba(50, 40, 28, 0.9);
+  color: #fff;
+}
+
+/* ===== Village Agent Popover ===== */
+
+.village-agent-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.village-agent-popover {
+  position: absolute;
+  z-index: 101;
+  width: 200px;
+  background: rgba(255, 252, 245, 0.96);
+  border: 1px solid rgba(128, 102, 78, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(20, 14, 8, 0.2);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transform: translate(-50%, calc(-100% - 12px));
+}
+
+.village-agent-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.village-agent-popover-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top center;
+  border: 2px solid rgba(196, 114, 74, 0.3);
+}
+
+.village-agent-popover-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.village-agent-popover-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2a1e14;
+}
+
+.village-agent-popover-role {
+  font-size: 11px;
+  color: #7c5a44;
+}
+
+.village-agent-popover-status {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #5b4333;
+}
+
+.village-agent-popover-detail {
+  font-size: 10px;
+  color: #9b7a60;
+  font-style: italic;
+}
+
+.village-agent-popover-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #9b7a60;
+  font-size: 12px;
+}
+
+.village-agent-popover-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #5b4333;
+}

@@ -1,0 +1,355 @@
+.web-preview-shell {
+  background: rgba(250, 247, 244, 0.94);
+}
+
+.web-preview-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.web-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1rem 0.85rem;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.85);
+}
+
+.web-preview-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.web-preview-title strong,
+.web-preview-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-preview-title strong {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.web-preview-title span {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.web-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.web-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.preview-loading,
+.preview-error,
+.preview-empty,
+.preview-loading-inline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 160px;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.preview-loading-inline {
+  min-height: 0;
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 999px;
+  box-shadow: 0 8px 18px rgba(26, 24, 22, 0.08);
+}
+
+.preview-error {
+  color: #991b1b;
+  background: rgba(254, 242, 242, 0.88);
+}
+
+.preview-image-stage,
+.preview-doc,
+.preview-code-pane,
+.preview-csv,
+.preview-binary,
+.preview-archive,
+.preview-design,
+.preview-media,
+.preview-pdf {
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 12px 28px rgba(26, 24, 22, 0.05);
+}
+
+.preview-image-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  padding: 1rem;
+  background: rgba(243, 240, 236, 0.7);
+}
+
+.preview-image-full {
+  max-width: 100%;
+  max-height: min(72vh, 840px);
+  object-fit: contain;
+  border-radius: 0.8rem;
+}
+
+.preview-pdf {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+
+.preview-pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.preview-nav-btn,
+.preview-zoom-btn {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--border-light);
+  background: rgba(250, 247, 244, 0.95);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-nav-btn:disabled,
+.preview-zoom-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.preview-pdf-page,
+.preview-zoom-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.preview-pdf-divider {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--border);
+}
+
+.preview-pdf-frame {
+  position: relative;
+  overflow: auto;
+  min-height: 200px;
+  border-radius: 0.9rem;
+  background: rgba(243, 240, 236, 0.72);
+  padding: 1rem;
+}
+
+.preview-pdf-canvas {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  box-shadow: 0 8px 24px rgba(26, 24, 22, 0.1);
+}
+
+.preview-media {
+  padding: 0.9rem;
+}
+
+.preview-video,
+.preview-audio {
+  width: 100%;
+}
+
+.preview-media-meta,
+.preview-code-meta,
+.preview-csv-header,
+.preview-archive-header,
+.preview-design-meta {
+  margin-top: 0.7rem;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.preview-doc,
+.preview-text,
+.preview-archive,
+.preview-code-pane,
+.preview-csv,
+.preview-design,
+.preview-binary {
+  padding: 0.95rem;
+}
+
+.preview-doc {
+  overflow: auto;
+}
+
+.preview-doc table,
+.preview-csv-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.preview-doc th,
+.preview-doc td,
+.preview-csv-table th,
+.preview-csv-table td {
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.preview-doc th,
+.preview-csv-table th {
+  background: rgba(243, 240, 236, 0.9);
+}
+
+.preview-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  font-family: var(--font-mono);
+}
+
+.preview-csv-table-wrap,
+.preview-code-scroll {
+  overflow: auto;
+}
+
+.preview-csv-th {
+  cursor: pointer;
+  user-select: none;
+}
+
+.preview-code-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.preview-code-table td {
+  vertical-align: top;
+}
+
+.preview-code-line {
+  width: 3rem;
+  padding: 0.15rem 0.75rem 0.15rem 0;
+  color: var(--text-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.preview-code-content {
+  width: 100%;
+  white-space: pre;
+  color: var(--text-primary);
+}
+
+.preview-code-content code {
+  background: none;
+  padding: 0;
+}
+
+.preview-archive-tree {
+  margin-top: 0.7rem;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.preview-design {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.preview-design-icon,
+.preview-binary-icon {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 1rem;
+  background: rgba(196, 114, 74, 0.12);
+}
+
+.preview-design-title,
+.preview-binary-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.preview-design-subtitle,
+.preview-binary-hint,
+.preview-binary-size {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.preview-design-grid {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.preview-design-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.preview-xlsx-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+}
+
+.preview-xlsx-tab {
+  min-height: 34px;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(243, 240, 236, 0.9);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.preview-xlsx-tab.active {
+  background: var(--accent);
+  color: #fff;
+}

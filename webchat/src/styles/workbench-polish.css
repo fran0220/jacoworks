@@ -1,0 +1,68 @@
+/* ===== Final polish for next-stage layout ===== */
+.workbench-stage {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.workbench-stage-side {
+  min-height: 0;
+}
+
+.workbench-stage-task {
+  padding: 0.9rem 0.95rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(150, 111, 73, 0.1);
+}
+
+.workbench-stage-task span {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9a6742;
+}
+
+.workbench-stage-task strong {
+  display: block;
+  margin-top: 0.24rem;
+  font-size: 0.9rem;
+  color: #2f2019;
+}
+
+.workbench-stage-task p,
+.workbench-stage-task em,
+.workbench-squad-empty,
+.workbench-console-state {
+  display: block;
+  margin-top: 0.28rem;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: #6e4f3d;
+  font-style: normal;
+}
+
+.workbench-squad-empty {
+  padding: 0.9rem 0.95rem;
+  border-radius: 1rem;
+  border: 1px dashed rgba(150, 111, 73, 0.18);
+  background: rgba(255, 249, 242, 0.84);
+}
+
+.workbench-console {
+  min-height: 0;
+}
+
+.workbench-console-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.observe-view-heading-main,
+.digital-city-focus-copy {
+  min-width: 0;
+}
+
