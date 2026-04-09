@@ -176,5 +176,22 @@ build_bun_tool "asset-gateway" "$ASSET_GATEWAY_ENTRY" "$TOOLS_DIR/asset-gateway$
 echo ""
 copy_native_tool "agent-browser" "$AGENT_BROWSER_SOURCE" "$TOOLS_DIR/agent-browser$TOOL_EXT"
 
+# ─── macOS code signing (required for notarization) ──────────────
+
+case "$TARGET" in
+  *apple-darwin*)
+    SIGN_ID="${APPLE_SIGNING_IDENTITY:-Developer ID Application: fan Z (9UUWCMKMDH)}"
+    echo "🔏 Signing CLI tools with: $SIGN_ID"
+    for tool in "$TOOLS_DIR"/ai-search "$TOOLS_DIR"/asset-gateway "$TOOLS_DIR"/agent-browser; do
+      if [[ -f "$tool" ]]; then
+        codesign --force --options runtime --timestamp \
+          --sign "$SIGN_ID" "$tool" 2>/dev/null && \
+          echo "  ✅ $(basename "$tool")" || \
+          echo "  ❌ Failed to sign $(basename "$tool")"
+      fi
+    done
+    ;;
+esac
+
 echo ""
 echo "✅ Bundled CLI tools are ready in $TOOLS_DIR"
