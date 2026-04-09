@@ -13,7 +13,7 @@ permissions:
   actions: read
 
 jobs:
-  # ── Cross-compile Windows sidecar ──
+  # ── Cross-compile Windows sidecar + CLI tools ──
   build-sidecar:
     runs-on: ubuntu-latest
     steps:
@@ -30,10 +30,18 @@ jobs:
           bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/vm-agent-x86_64-pc-windows-msvc.exe
           echo "📦 Sidecar binary:"
           ls -lh dist/vm-agent-*
+      - name: Cross-compile Windows CLI tools
+        run: |
+          npm install -g @doufunao123/ai-search @doufunao123/asset-gateway agent-browser
+          bash deploy/scripts/compile-tools.sh x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@v4
         with:
           name: vm-agent-sidecar
           path: vm-agent/dist/vm-agent-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-cli-tools
+          path: desktop/src-tauri/resources/tools/*.exe
 
   # ── Windows Tauri build ──
   build-windows:
@@ -62,9 +70,16 @@ jobs:
           name: vm-agent-sidecar
           path: sidecar-bin/
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-cli-tools
+          path: desktop/src-tauri/resources/tools/
+
       - name: Prepare release resources
         shell: bash
         run: |
+          # CLI tools already cross-compiled in build-sidecar job — skip compile-tools
+          export SKIP_COMPILE_TOOLS=1
           bash desktop/src-tauri/scripts/prepare-release.sh \
             "x86_64-pc-windows-msvc" \
             --sidecar-from "sidecar-bin/vm-agent-x86_64-pc-windows-msvc.exe"

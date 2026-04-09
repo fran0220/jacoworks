@@ -71,7 +71,12 @@ if [[ ! -x "$COMPILE_TOOLS_SCRIPT" ]]; then
   exit 1
 fi
 
-bash "$COMPILE_TOOLS_SCRIPT" "$TARGET"
+if [[ "${SKIP_COMPILE_TOOLS:-}" == "1" ]]; then
+  echo "⏭️  Skipping compile-tools (SKIP_COMPILE_TOOLS=1, pre-compiled tools expected)"
+  ls "$RESOURCES_DIR/tools/"* 2>/dev/null || echo "  ⚠️  No tools found in $RESOURCES_DIR/tools/"
+else
+  bash "$COMPILE_TOOLS_SCRIPT" "$TARGET"
+fi
 
 # ─── 3. Document processing packages ────────────────────────────
 
@@ -228,24 +233,43 @@ fi
 
 # ─── 7a. Ensure Python skill dependencies are installed ─────────
 # Runs on every invocation (idempotent) — pip skips already-installed packages.
+# Windows embeddable Python may lack pip; bootstrap it first via get-pip.py.
 {
   if [[ "$TARGET" == *"windows"* ]]; then
     PIP_CMD="$PYTHON_DIR/python.exe -m pip"
+    # Windows embeddable Python needs get-pip.py and ._pth fix for pip to work
+    if ! $PIP_CMD --version >/dev/null 2>&1; then
+      echo "📦 Bootstrapping pip for Windows embeddable Python..."
+      # Enable site-packages by removing the "import site" comment in ._pth
+      PTH_FILE=$(find "$PYTHON_DIR" -name "python*._pth" | head -1)
+      if [[ -n "$PTH_FILE" ]]; then
+        sed -i 's/^#import site/import site/' "$PTH_FILE" 2>/dev/null || true
+      fi
+      curl -sSL https://bootstrap.pypa.io/get-pip.py -o "$PYTHON_DIR/get-pip.py"
+      "$PYTHON_DIR/python.exe" "$PYTHON_DIR/get-pip.py" --no-warn-script-location 2>&1 | tail -3 || {
+        echo "  ⚠️  pip bootstrap failed (slide-deck PPTX/PDF features may be unavailable)"
+      }
+      rm -f "$PYTHON_DIR/get-pip.py"
+    fi
   else
     PIP_CMD="$PYTHON_DIR/bin/python3 -m pip"
   fi
-  # Check if already installed
-  MISSING=""
-  $PIP_CMD show python-pptx >/dev/null 2>&1 || MISSING="python-pptx"
-  $PIP_CMD show PyMuPDF >/dev/null 2>&1 || MISSING="$MISSING PyMuPDF"
-  if [[ -n "$MISSING" ]]; then
-    echo "📦 Installing missing Python deps:$MISSING"
-    $PIP_CMD install --no-cache-dir --quiet $MISSING 2>&1 | tail -3 || {
-      echo "  ⚠️  pip install failed (slide-deck PPTX/PDF features may be unavailable)"
-    }
-    find "$PYTHON_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+  # Check if pip is available before attempting installs
+  if $PIP_CMD --version >/dev/null 2>&1; then
+    MISSING=""
+    $PIP_CMD show python-pptx >/dev/null 2>&1 || MISSING="python-pptx"
+    $PIP_CMD show PyMuPDF >/dev/null 2>&1 || MISSING="$MISSING PyMuPDF"
+    if [[ -n "$MISSING" ]]; then
+      echo "📦 Installing missing Python deps:$MISSING"
+      $PIP_CMD install --no-cache-dir --quiet $MISSING 2>&1 | tail -3 || {
+        echo "  ⚠️  pip install failed (slide-deck PPTX/PDF features may be unavailable)"
+      }
+      find "$PYTHON_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    else
+      echo "  ✅ Python skill deps: already installed"
+    fi
   else
-    echo "  ✅ Python skill deps: already installed"
+    echo "  ⚠️  pip not available, skipping Python skill deps"
   fi
 }
 
