@@ -1,9 +1,0 @@
-{
-  "exa": "YOUR_EXA_API_KEY",
-  "tavily": "YOUR_TAVILY_API_KEY",
-  "grok": {
-    "apiUrl": "http://your-grok-proxy/v1",
-    "apiKey": "YOUR_GROK_API_KEY",
-    "model": "grok-4.1-fast"
-  }
-}

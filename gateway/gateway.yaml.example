@@ -13,7 +13,7 @@ database:
   url: "postgresql://postgres:YOUR_DB_PASSWORD@127.0.0.1:5432/jacoworks"
 
 llm:
-  proxy_url: "http://67.230.182.59:8317"
+  proxy_url: "https://api.xiaomao.chat"
   proxy_key: "change-me"
   openai_api_key: ""      # OpenAI Embedding API (记忆向量搜索, 中转站不支持 Embedding)
   exa_api_key: ""          # Exa 搜索 (可选)
@@ -23,22 +23,6 @@ github:
   token: ""                # GitHub PAT (repo scope), 用于反馈 Issue + 截图上传
   repo: "fran0220/jacoworks"
 
-docker:
-  docker_host: "tcp://100.94.98.106:2375"
-  image: "jacoworks/vm-agent:latest"
-  network: "agent-net"
-  agent_port: 18789
-  host_ip: "100.94.98.106"
-  gateway_token: ""
-
-openclaw:
-  docker_host: "tcp://10.10.0.2:2375"
-  image: "ghcr.io/openclaw/openclaw:latest"
-  port: 18789
-  host_ip: "10.10.0.2"
-  base_port: 18800
-  data_root: "/srv/jacoworks/openclaw"
-
 chat_agent:
   url: "http://127.0.0.1:18790"
   token: ""
@@ -47,4 +31,4 @@ posthog:
   api_key: ""                # PostHog project API key (phc_...)
   endpoint: "https://us.i.posthog.com"  # PostHog endpoint
 
-oc_gateway_url: "https://gw.local.jingao.club"  # oc-gateway URL for feishu bot proxy
+oc_gateway_url: "https://gw.local.jingao.club"  # jaco-cloud oc-gateway URL for feishu bot proxy

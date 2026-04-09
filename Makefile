@@ -1,25 +1,18 @@
-# JAcoworks — 本地开发 & 部署命令
+# JAcoworks — 桌面端 + Gateway + Website
 # 用法: make <target>
 # 列出所有: make help
 
-.PHONY: help dev dev-gateway dev-oc-gateway dev-website dev-webchat dev-agent dev-desktop \
-        build build-gateway build-oc-gateway build-website build-webchat build-agent build-desktop \
+.PHONY: help dev dev-gateway dev-website dev-desktop \
+        build build-gateway build-website build-desktop \
         compile-agent prepare-win-deps \
-        deploy deploy-jingao deploy-local deploy-oracle \
-        deploy-gateway deploy-oc-gateway deploy-website deploy-webchat deploy-webchat-static deploy-agent push-skills \
-        check check-gateway check-website check-webchat check-agent check-desktop \
-        check-gateway-e2e check-journeys check-all \
-        db-reset db-migrate clean \
-        docker-build-agent docker-run-agent \
-        release release-build release-upload release-bump \
-        setup-incus build-openclaw-image rebuild-openclaw-image
+        deploy deploy-jingao deploy-gateway deploy-website push-skills deploy-sync \
+        check check-gateway check-website check-desktop \
+        db-migrate clean \
+        release release-build release-upload release-bump
 
 # ─── 配置 ───
 JINGAO_HOST   ?= jingao
-ORACLE_HOST   ?= oracle
-LOCAL_HOST    ?= root@100.97.254.31
 GATEWAY_PORT  ?= 8847
-OC_GATEWAY_PORT ?= 18700
 WEBSITE_PORT  ?= 9527
 REPO_DIR      ?= /opt/jacoworks/repo
 
@@ -29,99 +22,67 @@ help: ## 显示所有可用命令
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # ═══════════════════════════════════════════
-#  本地开发 (各模块独立启动)
+#  本地开发
 # ═══════════════════════════════════════════
 
-dev: ## 并行启动所有开发服务 (gateway + website + desktop)
-	@echo "🚀 启动所有开发服务..."
+dev: ## 显示开发服务启动指引
+	@echo "🚀 启动开发服务..."
 	@echo "  Gateway  → http://localhost:$(GATEWAY_PORT)"
-	@echo "  OC Gateway → http://localhost:$(OC_GATEWAY_PORT)"
 	@echo "  Website  → http://localhost:$(WEBSITE_PORT)"
 	@echo "  Desktop  → Tauri dev window"
 	@echo ""
 	@echo "请在各自终端分别运行:"
 	@echo "  make dev-gateway"
-	@echo "  make dev-oc-gateway"
 	@echo "  make dev-website"
-	@echo "  make dev-agent    (仅调试 agent 时)"
-	@echo "  make dev-desktop  (启动桌面端, 会自动启 sidecar)"
+	@echo "  make dev-desktop"
 
 dev-gateway: ## 启动 Gateway 开发服务
 	cd gateway && go run ./cmd/gateway -config gateway.yaml
 
-dev-oc-gateway: ## 启动 OC Gateway 开发服务
-	cd gateway && go run ./cmd/oc-gateway oc-gateway.yaml
-
 dev-website: ## 启动 Website 开发服务
 	cd website && cargo run
-
-dev-agent: ## 启动 vm-agent 开发模式 (热重载)
-	cd vm-agent && npm run dev
 
 dev-desktop: ## 启动 Desktop 开发模式 (Tauri + Vite HMR)
 	cd desktop && cargo tauri dev
 
-dev-webchat: ## 启动 Web 聊天 SPA 开发模式
-	cd webchat && npx vite
-
 # ═══════════════════════════════════════════
-#  构建 (本地)
+#  构建
 # ═══════════════════════════════════════════
 
-build: build-gateway build-website build-agent ## 构建所有服务端组件
+build: build-gateway build-website ## 构建所有服务端组件
 
 build-gateway: ## 构建 Gateway (本地)
 	cd gateway && go build -ldflags="-s -w" -o bin/gateway ./cmd/gateway
 	@echo "✅ gateway/bin/gateway"
 
-build-oc-gateway: ## 构建 OC Gateway (本地)
-	mkdir -p dist
-	cd gateway && CGO_ENABLED=0 go build -ldflags='-s -w' -o ../dist/oc-gateway ./cmd/oc-gateway
-	@echo "✅ dist/oc-gateway"
-
 build-website: ## 构建 Website (release)
 	cd website && cargo build --release
 	@echo "✅ website/target/release/jacoworks-website"
 
-build-agent: ## 构建 vm-agent
-	cd vm-agent && npm run build
-	@echo "✅ vm-agent/dist/"
-
-build-webchat: ## 构建 Web 聊天 SPA → website/static/chat/
-	cd webchat && npm run build
-	@echo "✅ website/static/chat/"
-
-compile-agent: ## 编译 vm-agent + 打包所有 release 资源 (sidecar + doc-packages + validation)
+compile-agent: ## 编译 sidecar + 打包 release 资源
 	@TARGET=$$(rustc -vV | grep host | cut -d' ' -f2) && \
 	echo "🔧 Building for target: $$TARGET" && \
 	bash desktop/src-tauri/scripts/prepare-release.sh "$$TARGET"
 
-prepare-win-deps: ## 下载 Windows 构建依赖 (bash + bun, 用于交叉编译)
+prepare-win-deps: ## 下载 Windows 构建依赖
 	bash desktop/src-tauri/scripts/prepare-win-deps.sh
 
-build-desktop: compile-agent ## 构建 Desktop 安装包 (Windows 需先 make prepare-win-deps)
+build-desktop: compile-agent ## 构建 Desktop 安装包
 	cd desktop && cargo tauri build
 	@echo "✅ Desktop 安装包在 desktop/src-tauri/target/release/bundle/"
 
 # ═══════════════════════════════════════════
-#  部署 — 三域分离
-#  deploy-jingao : 桌面端管控面 (gateway + website)
-#  deploy-local  : WebChat + OpenClaw (oc-gateway + webchat + openclaw)
-#  deploy-oracle : vm-agent Docker
+#  部署 — jingao (桌面端管控面)
 # ═══════════════════════════════════════════
 
-deploy: deploy-jingao deploy-local push-skills ## 部署所有服务
+deploy: deploy-jingao push-skills ## 部署所有服务
 
 deploy-jingao: deploy-gateway deploy-website ## 部署桌面端管控面到 jingao
 
-deploy-local: deploy-oc-gateway ## 部署 WebChat + OpenClaw 到 local
-
-deploy-oracle: deploy-agent ## 部署 vm-agent 到 oracle
-
-push-skills: ## 推送 vm-agent/skills/ 到网关 (system skills)
+push-skills: ## 推送 skills 到网关 (system skills)
 	./deploy/push-skills.sh
 
-deploy-sync: ## 同步代码到 jingao (git pull + submodule)
+deploy-sync: ## 同步代码到 jingao
 	@echo "📥 同步代码到 jingao..."
 	ssh $(JINGAO_HOST) "cd $(REPO_DIR) && git fetch origin && git reset --hard origin/main && git submodule update --init --recursive 2>/dev/null || true"
 	@echo "✅ 代码已同步"
@@ -134,7 +95,6 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		export GOTOOLCHAIN=local && \
 		export GOPROXY=https://goproxy.cn,direct && \
 		CGO_ENABLED=0 go build -buildvcs=false -ldflags='-s -w' -o /tmp/jacoworks-gateway ./cmd/gateway && \
-		sudo ln -sfn $(REPO_DIR)/openclaw /opt/jacoworks/openclaw && \
 		sudo systemctl stop jacoworks-gateway && \
 		sudo mv /tmp/jacoworks-gateway /opt/jacoworks/gateway && \
 		sudo chmod +x /opt/jacoworks/gateway && \
@@ -142,28 +102,6 @@ deploy-gateway: deploy-sync ## 部署 Gateway 到 jingao (远程编译)
 		sleep 2 && \
 		curl -sf http://localhost:8847/health"
 	@echo "✅ Gateway 已部署"
-
-deploy-oc-gateway: ## 部署 OC Gateway 到 local (交叉编译 amd64 + 同步 openclaw/ + webchat + data)
-	@echo "📦 部署 OC Gateway → $(LOCAL_HOST)..."
-	cd gateway && CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags='-s -w' -o /tmp/oc-gateway ./cmd/oc-gateway
-	scp /tmp/oc-gateway $(LOCAL_HOST):/opt/jacoworks/oc-gateway.new
-	@echo "📂 同步 openclaw/ 目录..."
-	ssh $(LOCAL_HOST) "mkdir -p /opt/jacoworks/openclaw /opt/jacoworks/data /opt/jacoworks/www/static"
-	rsync -a --delete openclaw/templates/ $(LOCAL_HOST):/opt/jacoworks/openclaw/templates/
-	rsync -a --delete openclaw/skills/ $(LOCAL_HOST):/opt/jacoworks/openclaw/skills/
-	@echo "📂 同步 HTML 模板..."
-	scp gateway/data/chat.html gateway/data/login.html $(LOCAL_HOST):/opt/jacoworks/data/
-	@echo "📂 同步 webchat 静态文件..."
-	rsync -a --delete website/static/chat/ $(LOCAL_HOST):/opt/jacoworks/www/static/chat/
-	ssh $(LOCAL_HOST) "mv /opt/jacoworks/oc-gateway.new /opt/jacoworks/oc-gateway && chmod +x /opt/jacoworks/oc-gateway && systemctl restart jacoworks-oc-gateway && sleep 5 && curl -sf http://localhost:18700/health"
-	@echo "✅ OC Gateway 已部署"
-
-deploy-webchat: build-webchat deploy-webchat-static ## 构建并部署 webchat 到 local + jingao
-
-deploy-webchat-static: ## 仅同步 webchat 静态文件到 local (无需重启 oc-gateway)
-	@echo "📂 同步 webchat → local..."
-	rsync -a --delete website/static/chat/ $(LOCAL_HOST):/opt/jacoworks/www/static/chat/
-	@echo "✅ webchat 静态文件已同步到 local"
 
 deploy-website: deploy-sync ## 部署 Website 到 jingao (远程编译)
 	@echo "📦 部署 Website → $(JINGAO_HOST) (远程编译)..."
@@ -183,10 +121,10 @@ deploy-website: deploy-sync ## 部署 Website 到 jingao (远程编译)
 	@echo "✅ Website 已部署"
 
 # ═══════════════════════════════════════════
-#  检查 (Lint / Typecheck / Test)
+#  检查
 # ═══════════════════════════════════════════
 
-check: check-gateway check-website check-webchat check-agent check-desktop ## 全量检查
+check: check-gateway check-website check-desktop ## 全量检查
 
 check-gateway: ## Go vet + test
 	cd gateway && go vet ./... && go test ./...
@@ -194,22 +132,8 @@ check-gateway: ## Go vet + test
 check-website: ## Cargo check + test
 	cd website && cargo check && cargo test
 
-check-webchat: ## WebChat typecheck + build 验证
-	cd webchat && npx tsc --noEmit
-
-check-agent: ## TypeScript typecheck + 单元测试
-	cd vm-agent && npm run typecheck && npm test
-
 check-desktop: ## Desktop typecheck
 	cd desktop && npm run check
-
-check-gateway-e2e: ## Gateway API E2E (需真实网关)
-	cd vm-agent && npm run test:gateway-e2e
-
-check-journeys: ## 全链路 E2E (需完整基础设施)
-	cd vm-agent && npm run test:journeys
-
-check-all: check check-gateway-e2e ## 全量检查 (hermetic + E2E)
 
 # ═══════════════════════════════════════════
 #  数据库
@@ -227,31 +151,10 @@ db-migrate: ## 执行数据库迁移 (需本地 psql 连到 jingao)
 clean: ## 清理所有构建产物
 	rm -rf gateway/bin/
 	cd website && cargo clean
-	rm -rf vm-agent/dist/
-	rm -rf webchat/dist/
 	rm -rf desktop/dist/ desktop/src-tauri/target/
 
 # ═══════════════════════════════════════════
-#  vm-agent Docker (oracle ARM64)
-# ═══════════════════════════════════════════
-
-docker-build-agent: ## 在 Oracle 上原地构建 vm-agent ARM64 镜像 (无需 Mac 跨架构)
-	@echo "🔄 Oracle 拉取最新代码..."
-	ssh $(ORACLE_HOST) "cd $(REPO_DIR) && git fetch origin && git reset --hard origin/main"
-	@echo "🔨 Oracle 本地构建 ARM64 镜像..."
-	$(eval GIT_SHA := $(shell git rev-parse --short HEAD))
-	ssh $(ORACLE_HOST) '\
-		cd $(REPO_DIR)/vm-agent && \
-		docker build -t jacoworks/vm-agent:$(GIT_SHA) -t jacoworks/vm-agent:latest . && \
-		echo "✅ 构建完成: jacoworks/vm-agent:$(GIT_SHA)" && \
-		docker image prune -f && \
-		docker buildx prune -f --keep-storage=2g'
-
-docker-run-agent: ## 本地启动 vm-agent Docker 容器
-	cd vm-agent && docker compose up -d
-
-# ═══════════════════════════════════════════
-#  发布 Desktop (本地构建 + 上传 COS)
+#  发布 Desktop
 # ═══════════════════════════════════════════
 
 release: ## 完整发布 (构建 macOS + 上传 COS + 注册 DB) — make release V=1.5.0
@@ -269,34 +172,3 @@ release-upload: ## 仅上传 + 注册 — make release-upload V=1.5.0
 release-bump: ## 仅更新版本号 — make release-bump V=1.5.0
 	@test -n "$(V)" || (echo "❌ 用法: make release-bump V=1.5.0" && exit 1)
 	bash deploy/release.sh "$(V)" bump
-
-deploy-agent: docker-build-agent ## 构建并部署 vm-agent 到 oracle (零停机：旧容器继续运行到自然重启)
-	@echo "✅ 新镜像已就绪 (jacoworks/vm-agent:latest)"
-	@echo "   运行中的容器继续使用旧镜像直到下次 provision/restart"
-	@echo "   如需立即重建所有容器: make redeploy-agent"
-
-redeploy-agent: docker-build-agent ## 强制重建所有 vm-agent 容器 (有停机，谨慎使用)
-	@echo "⚠️  停止并删除所有 vm-agent 容器..."
-	ssh $(ORACLE_HOST) '\
-		docker ps -q --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker stop && \
-		docker ps -aq --filter ancestor=jacoworks/vm-agent:latest | xargs -r docker rm && \
-		echo "✅ 旧容器已清理，新容器将由网关按需创建"'
-
-# ═══════════════════════════════════════════
-#  Incus (OpenClaw VM → local)
-# ═══════════════════════════════════════════
-
-setup-incus: ## 初始化 local 服务器 Incus 环境
-	scp deploy/incus/setup-incus.sh $(LOCAL_HOST):/tmp/
-	ssh $(LOCAL_HOST) "chmod +x /tmp/setup-incus.sh && /tmp/setup-incus.sh"
-	@echo "✅ Incus 环境已初始化"
-
-build-openclaw-image: ## 构建 OpenClaw Incus VM 基础镜像
-	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
-	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh"
-	@echo "✅ OpenClaw 镜像已构建"
-
-rebuild-openclaw-image: ## 重建 OpenClaw Incus VM 基础镜像
-	scp deploy/incus/build-openclaw-image.sh $(LOCAL_HOST):/tmp/
-	ssh $(LOCAL_HOST) "chmod +x /tmp/build-openclaw-image.sh && /tmp/build-openclaw-image.sh --force"
-	@echo "✅ OpenClaw 镜像已重建"

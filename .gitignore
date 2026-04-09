@@ -20,11 +20,7 @@ AGENTS.md
 !.env.test.example
 gateway/gateway.yaml
 gateway/gateway-prod.yaml
-gateway/data/*
-!gateway/data/chat.html
-!gateway/data/login.html
 website/website.toml
-openclaw/credentials/
 
 # === Go ===
 gateway/jacoworks-gateway
@@ -40,12 +36,7 @@ website/target/
 node_modules/
 desktop/dist/
 
-# === TypeScript / Build ===
-vm-agent/dist/
-vm-agent/memory/
-
-# === Sidecar binaries (built by bun compile) ===
-desktop/src-tauri/binaries/vm-agent-*
+# === Sidecar resources ===
 desktop/src-tauri/resources/doc-packages.tar.gz
 desktop/src-tauri/resources/runtimes/bash/*
 desktop/src-tauri/resources/runtimes/python/*
@@ -60,8 +51,6 @@ dist-release/
 # === Vite ===
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-desktop/.env
-
 
 # === COS CLI / temp files ===
 coscli.log

@@ -7,7 +7,9 @@ import (
 )
 
 const (
-	ContainerTypeOpenClaw = "openclaw"
+	// ContainerTypePiVM is the DB-stored container_type value.
+	// The literal "openclaw" is kept for backward compatibility with existing rows.
+	ContainerTypePiVM = "openclaw"
 )
 
 type ContainerInfo struct {
