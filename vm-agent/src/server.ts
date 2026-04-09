@@ -5,7 +5,6 @@ import {
   destroyAllSessions,
   cleanupStaleSessions,
   listAvailableSkills,
-  setTransportSender,
   agentEvents,
 } from "./agent.js";
 import { handleCommand, clearAllInFlight, type RawCommand } from "./transport/handler.js";
@@ -54,7 +53,6 @@ const server = Bun.serve({
         },
       };
       (ws as any).__sender = sender;
-      setTransportSender(sender);
 
       // Forward cron result events to the connected desktop client via WS.
       const onCronResult = (event: Record<string, unknown>) => {
@@ -92,7 +90,6 @@ const server = Bun.serve({
     close(ws, code, reason) {
       log.info("ws client disconnected", { code, reason: String(reason) });
       clearAllInFlight();
-      setTransportSender(null);
       const onCronResult = (ws as any).__cronResultListener;
       if (onCronResult) agentEvents.off("cron_result", onCronResult);
     },

@@ -236,13 +236,10 @@ Combine:
 ### Step 6: Generate Image
 
 1. **Check for existing file**: If `poster.png` exists, rename to `poster-backup-YYYYMMDD-HHMMSS.png`
-2. Call nano-banana-pro:
+2. Call asset-gateway:
 
 ```bash
-node {skillsBaseDir}/nano-banana-pro/scripts/generate-image.mjs \
-  --prompt "$(cat prompts/poster.md)" \
-  --filename "poster.png" \
-  --resolution 2K
+asset-gateway generate image --prompt "$(cat prompts/poster.md)" --size 1024x1024 --output-dir .
 ```
 
 3. On failure, auto-retry once with simplified prompt

@@ -2,8 +2,9 @@
 # ============================================================================
 # prepare-release.sh — Unified desktop release preparation
 #
-# Single source of truth for: sidecar placement, doc-packages bundling,
-# bundled runtimes (Python all-platform, bash/bun Windows-only),
+# Single source of truth for: sidecar placement, bundled CLI tools,
+# doc-packages bundling, bundled runtimes (Python all-platform,
+# bash/bun Windows-only),
 # skills validation, and resource integrity checks.
 #
 # Usage:
@@ -23,6 +24,7 @@ REPO_ROOT="$(cd "$TAURI_DIR/../.." && pwd)"
 BINARIES_DIR="$TAURI_DIR/binaries"
 RESOURCES_DIR="$TAURI_DIR/resources"
 RUNTIMES_DIR="$RESOURCES_DIR/runtimes"
+COMPILE_TOOLS_SCRIPT="$REPO_ROOT/deploy/scripts/compile-tools.sh"
 
 SIDECAR_FROM=""
 while [[ $# -gt 0 ]]; do
@@ -62,7 +64,16 @@ if [[ "$SIDECAR_SIZE" -lt 1024 ]]; then
 fi
 echo "  ✅ Sidecar: $SIDECAR_NAME ($(numfmt --to=iec "$SIDECAR_SIZE" 2>/dev/null || echo "${SIDECAR_SIZE}B"))"
 
-# ─── 2. Document processing packages ────────────────────────────
+# ─── 2. Bundled CLI tools ───────────────────────────────────────
+
+if [[ ! -x "$COMPILE_TOOLS_SCRIPT" ]]; then
+  echo "❌ compile-tools script is missing or not executable: $COMPILE_TOOLS_SCRIPT"
+  exit 1
+fi
+
+bash "$COMPILE_TOOLS_SCRIPT" "$TARGET"
+
+# ─── 3. Document processing packages ────────────────────────────
 
 mkdir -p "$RESOURCES_DIR"
 DOC_PKG_ARCHIVE="$RESOURCES_DIR/doc-packages.tar.gz"
@@ -100,7 +111,7 @@ if [[ "$DOC_SIZE" -lt 102400 ]]; then
 fi
 echo "  ✅ doc-packages.tar.gz ($(numfmt --to=iec "$DOC_SIZE" 2>/dev/null || echo "${DOC_SIZE}B"))"
 
-# ─── 3. Validate skills ─────────────────────────────────────────
+# ─── 4. Validate skills ─────────────────────────────────────────
 
 SKILLS_SRC="$REPO_ROOT/vm-agent/skills"
 SKILL_COUNT=$(find "$SKILLS_SRC" -name "*.md" -type f 2>/dev/null | wc -l | tr -d ' ')
@@ -110,7 +121,7 @@ if [[ "$SKILL_COUNT" -lt 1 ]]; then
 fi
 echo "  ✅ Skills: $SKILL_COUNT .md files in vm-agent/skills/"
 
-# ─── 4. Validate fonts (optional, warn only) ────────────────────
+# ─── 5. Validate fonts (optional, warn only) ────────────────────
 
 if [[ -f "$RESOURCES_DIR/fonts/NotoSansSC-Regular.otf" ]]; then
   echo "  ✅ Fonts: NotoSansSC-Regular.otf"
@@ -118,7 +129,7 @@ else
   echo "  ⚠️  Fonts: NotoSansSC-Regular.otf not found (optional)"
 fi
 
-# ─── 5. Validate pi-meta ────────────────────────────────────────
+# ─── 6. Validate pi-meta ────────────────────────────────────────
 
 if [[ -f "$RESOURCES_DIR/pi-meta/package.json" ]]; then
   echo "  ✅ pi-meta: package.json"
@@ -126,7 +137,7 @@ else
   echo "  ⚠️  pi-meta: package.json not found (optional)"
 fi
 
-# ─── 6. Bundled Python (ALL platforms — guaranteed available) ────
+# ─── 7. Bundled Python (ALL platforms — guaranteed available) ────
 
 # python-build-standalone: self-contained CPython for all targets.
 # https://github.com/indygreg/python-build-standalone
@@ -215,7 +226,30 @@ if $NEED_DOWNLOAD; then
   echo "$EXPECTED_STAMP" > "$PYTHON_STAMP"
 fi
 
-# ─── 6b. Sign Python binaries for macOS notarization ────────────
+# ─── 7a. Ensure Python skill dependencies are installed ─────────
+# Runs on every invocation (idempotent) — pip skips already-installed packages.
+{
+  if [[ "$TARGET" == *"windows"* ]]; then
+    PIP_CMD="$PYTHON_DIR/python.exe -m pip"
+  else
+    PIP_CMD="$PYTHON_DIR/bin/python3 -m pip"
+  fi
+  # Check if already installed
+  MISSING=""
+  $PIP_CMD show python-pptx >/dev/null 2>&1 || MISSING="python-pptx"
+  $PIP_CMD show PyMuPDF >/dev/null 2>&1 || MISSING="$MISSING PyMuPDF"
+  if [[ -n "$MISSING" ]]; then
+    echo "📦 Installing missing Python deps:$MISSING"
+    $PIP_CMD install --no-cache-dir --quiet $MISSING 2>&1 | tail -3 || {
+      echo "  ⚠️  pip install failed (slide-deck PPTX/PDF features may be unavailable)"
+    }
+    find "$PYTHON_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+  else
+    echo "  ✅ Python skill deps: already installed"
+  fi
+}
+
+# ─── 7b. Sign Python binaries for macOS notarization ────────────
 # NOTE: This pre-signs in the source tree. For maximum reliability,
 # also sign inside the final .app bundle before outer app signing.
 # See Makefile release target for post-bundle signing step.
@@ -239,7 +273,7 @@ if [[ "$TARGET" == *"apple-darwin"* ]]; then
   echo "  ✅ Signed $SIGN_COUNT Python binaries"
 fi
 
-# ─── 7. Windows runtimes (bash + bun) ───────────────────────────
+# ─── 8. Windows runtimes (bash + bun) ───────────────────────────
 
 if [[ "$TARGET" == *"windows"* ]]; then
   echo ""

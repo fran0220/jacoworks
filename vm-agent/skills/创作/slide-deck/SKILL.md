@@ -545,9 +545,9 @@ options:
 
 **Standard flow**:
 1. Select available image generation skill
-   **JAcoworks Integration**: Use the built-in `nano-banana-pro` skill for image generation:
+   **JAcoworks Integration**: Use the `asset-gateway` CLI for image generation:
    ```bash
-   node {skillsBaseDir}/nano-banana-pro/scripts/generate-image.mjs --prompt "$(cat prompts/NN-slide-slug.md)" --filename "NN-slide-slug.png"
+   asset-gateway generate image --prompt "$(cat prompts/NN-slide-slug.md)" --output-dir ./slides
    ```
 2. Generate session ID: `slides-{topic-slug}-{timestamp}`
 3. For each slide:

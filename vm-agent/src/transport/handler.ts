@@ -14,19 +14,6 @@ import { promptWithRetry, sanitizePromptMessage } from "../lib/prompt-retry.js";
 
 type RpcId = string | number;
 
-// ─── Response Handler Registry (for remote-fs etc.) ──
-
-type ResponseHandler = (msg: Record<string, unknown>) => boolean;
-const responseHandlers: ResponseHandler[] = [];
-
-export function registerTransportResponseHandler(handler: ResponseHandler) {
-  responseHandlers.push(handler);
-  return () => {
-    const idx = responseHandlers.indexOf(handler);
-    if (idx >= 0) responseHandlers.splice(idx, 1);
-  };
-}
-
 interface RpcCommandBase {
   id?: RpcId;
   type: string;
@@ -232,16 +219,6 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
 }
 
 export async function handleCommand(config: Config, sender: TransportSender, command: RawCommand) {
-  // Route transport response messages to registered response handlers (remote-fs, etc.)
-  const msgType = typeof command.type === "string" ? command.type : "";
-  const isTransportResult = msgType.startsWith("fs.") && msgType.endsWith(".result");
-  if (isTransportResult) {
-    for (const handler of responseHandlers) {
-      if (handler(command as Record<string, unknown>)) return;
-    }
-    return;
-  }
-
   switch (command.type) {
     case "health":
       sendResponse(sender, command.id, command.type, true, {

@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET="${1:?Usage: compile-tools.sh <target-triple>}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TOOLS_DIR="$REPO_ROOT/desktop/src-tauri/resources/tools"
+
+GLOBAL_NPM_ROOT="$(npm root -g 2>/dev/null || true)"
+
+case "$TARGET" in
+  aarch64-apple-darwin)
+    BUN_TARGET="bun-darwin-arm64"
+    TOOL_EXT=""
+    AGENT_BROWSER_BINARY="agent-browser-darwin-arm64"
+    ;;
+  x86_64-apple-darwin)
+    BUN_TARGET="bun-darwin-x64"
+    TOOL_EXT=""
+    AGENT_BROWSER_BINARY="agent-browser-darwin-x64"
+    ;;
+  x86_64-pc-windows-msvc)
+    BUN_TARGET="bun-windows-x64"
+    TOOL_EXT=".exe"
+    AGENT_BROWSER_BINARY="agent-browser-win32-x64.exe"
+    ;;
+  *)
+    echo "❌ Unsupported target triple: $TARGET" >&2
+    exit 1
+    ;;
+esac
+
+resolve_file() {
+  local label="$1"
+  local env_name="$2"
+  shift 2
+
+  local explicit="${!env_name:-}"
+  if [[ -n "$explicit" ]]; then
+    if [[ -f "$explicit" ]]; then
+      printf '%s\n' "$explicit"
+      return 0
+    fi
+    echo "❌ $label from $env_name does not exist: $explicit" >&2
+    exit 1
+  fi
+
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "$candidate" ]] && [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "❌ Could not find $label. Set $env_name to override the path." >&2
+  exit 1
+}
+
+resolve_dir() {
+  local label="$1"
+  local env_name="$2"
+  shift 2
+
+  local explicit="${!env_name:-}"
+  if [[ -n "$explicit" ]]; then
+    if [[ -d "$explicit" ]]; then
+      printf '%s\n' "$explicit"
+      return 0
+    fi
+    echo "❌ $label from $env_name does not exist: $explicit" >&2
+    exit 1
+  fi
+
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "$candidate" ]] && [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "❌ Could not find $label. Set $env_name to override the path." >&2
+  exit 1
+}
+
+file_size() {
+  stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null || echo 0
+}
+
+pretty_size() {
+  local size="$1"
+  numfmt --to=iec "$size" 2>/dev/null || echo "${size}B"
+}
+
+build_bun_tool() {
+  local label="$1"
+  local entry="$2"
+  local output="$3"
+
+  echo "📦 Compiling $label"
+  echo "   entry: $entry"
+  bun build --compile "$entry" --target "$BUN_TARGET" --outfile "$output"
+  chmod +x "$output" 2>/dev/null || true
+
+  local size
+  size="$(file_size "$output")"
+  if [[ "$size" -lt 1024 ]]; then
+    echo "❌ $label output is too small: $output (${size}B)" >&2
+    exit 1
+  fi
+
+  echo "  ✅ $label → $(basename "$output") ($(pretty_size "$size"))"
+}
+
+copy_native_tool() {
+  local label="$1"
+  local source="$2"
+  local output="$3"
+
+  echo "📦 Copying $label"
+  echo "   source: $source"
+  cp "$source" "$output"
+  chmod +x "$output" 2>/dev/null || true
+
+  local size
+  size="$(file_size "$output")"
+  if [[ "$size" -lt 1024 ]]; then
+    echo "❌ $label output is too small: $output (${size}B)" >&2
+    exit 1
+  fi
+
+  echo "  ✅ $label → $(basename "$output") ($(pretty_size "$size"))"
+}
+
+mkdir -p "$TOOLS_DIR"
+rm -f \
+  "$TOOLS_DIR/ai-search" "$TOOLS_DIR/ai-search.exe" \
+  "$TOOLS_DIR/asset-gateway" "$TOOLS_DIR/asset-gateway.exe" \
+  "$TOOLS_DIR/agent-browser" "$TOOLS_DIR/agent-browser.exe"
+
+AI_SEARCH_ENTRY="$(resolve_file \
+  "ai-search entry" \
+  "AI_SEARCH_ENTRY" \
+  "$REPO_ROOT/node_modules/@doufunao123/ai-search/dist/index.js" \
+  "$GLOBAL_NPM_ROOT/@doufunao123/ai-search/dist/index.js" \
+  "/Users/fan/.npm-global/lib/node_modules/@doufunao123/ai-search/dist/index.js")"
+
+ASSET_GATEWAY_ENTRY="$(resolve_file \
+  "asset-gateway entry" \
+  "ASSET_GATEWAY_ENTRY" \
+  "$REPO_ROOT/node_modules/@doufunao123/asset-gateway/dist/index.js" \
+  "$GLOBAL_NPM_ROOT/@doufunao123/asset-gateway/dist/index.js" \
+  "/Users/fan/agent-skills/asset-gateway/npm/dist/index.js")"
+
+AGENT_BROWSER_PACKAGE_DIR="$(resolve_dir \
+  "agent-browser package directory" \
+  "AGENT_BROWSER_PACKAGE_DIR" \
+  "$REPO_ROOT/node_modules/agent-browser" \
+  "$GLOBAL_NPM_ROOT/agent-browser" \
+  "/Users/fan/.npm-global/lib/node_modules/agent-browser")"
+AGENT_BROWSER_SOURCE="$AGENT_BROWSER_PACKAGE_DIR/bin/$AGENT_BROWSER_BINARY"
+
+if [[ ! -f "$AGENT_BROWSER_SOURCE" ]]; then
+  echo "❌ agent-browser binary not found for $TARGET: $AGENT_BROWSER_SOURCE" >&2
+  exit 1
+fi
+
+echo "🔧 Compiling bundled CLI tools for $TARGET"
+echo ""
+
+build_bun_tool "ai-search" "$AI_SEARCH_ENTRY" "$TOOLS_DIR/ai-search$TOOL_EXT"
+echo ""
+build_bun_tool "asset-gateway" "$ASSET_GATEWAY_ENTRY" "$TOOLS_DIR/asset-gateway$TOOL_EXT"
+echo ""
+copy_native_tool "agent-browser" "$AGENT_BROWSER_SOURCE" "$TOOLS_DIR/agent-browser$TOOL_EXT"
+
+echo ""
+echo "✅ Bundled CLI tools are ready in $TOOLS_DIR"

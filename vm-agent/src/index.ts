@@ -7,7 +7,6 @@ import {
   cleanupStaleSessions,
   listAvailableSkills,
   agentEvents,
-  setTransportSender,
 } from "./agent.js";
 import { handleCommand, type RawCommand } from "./transport/handler.js";
 import type { TransportSender } from "./transport/types.js";
@@ -21,9 +20,6 @@ const sender: TransportSender = {
     process.stdout.write(`${JSON.stringify(payload)}\n`);
   },
 };
-
-// Keep a transport sender available for transport-level events/messages.
-setTransportSender(sender);
 
 // Forward cron result events to desktop via stdout transport
 agentEvents.on("cron_result", (event) => {
@@ -72,7 +68,6 @@ setInterval(() => {
 }, 600_000);
 
 function shutdown(code: number) {
-  setTransportSender(null);
   destroyAllSessions();
   process.exit(code);
 }

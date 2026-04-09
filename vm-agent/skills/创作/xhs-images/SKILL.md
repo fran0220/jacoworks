@@ -403,11 +403,11 @@ Reference: `references/config/watermark-guide.md`
 - Check available image generation skills
 - If multiple skills available, ask user preference
 
-**JAcoworks Integration**: Use the built-in `nano-banana-pro` skill for image generation:
+**JAcoworks Integration**: Use `asset-gateway` CLI for image generation:
 ```bash
-node {skillsBaseDir}/nano-banana-pro/scripts/generate-image.mjs --prompt "$(cat prompts/NN-type-slug.md)" --filename "NN-type-slug.png"
+asset-gateway generate image --prompt "$(cat prompts/NN-type-slug.md)" --size 1024x1024 --output-dir .
 ```
-For reference images (consistency chain), add `--input-image <path-to-image-01.png>`.
+For reference images (consistency chain), add `--input <path-to-image-01.png> --edit-mode restyle`.
 
 **Session Management**:
 If image generation skill supports `--sessionId`:

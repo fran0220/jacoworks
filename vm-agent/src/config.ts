@@ -10,7 +10,6 @@ export interface Config {
   proxyUrl: string;
   proxyKey: string;
   openaiApiKey: string;
-  mineruToken: string;
   /** Embedding API base URL (不含 /embeddings 后缀), 默认 https://api.openai.com/v1 */
   embeddingBaseUrl: string;
   /** Embedding API key, 默认复用 OPENAI_API_KEY */
@@ -36,7 +35,6 @@ export interface Config {
   heartbeatIntervalMs: number;
   heartbeatActiveHours?: { start: string; end: string };
   cronEnabled: boolean;
-  toolDenyList: string[];
   compactionReserveTokens: number;
   compactionSoftThresholdTokens: number;
   compactionKeepRecentTokens: number;
@@ -169,7 +167,6 @@ export function loadConfig(): Config {
     proxyUrl,
     proxyKey,
     openaiApiKey,
-    mineruToken: process.env.MINERU_TOKEN || "",
     embeddingBaseUrl,
     embeddingApiKey,
     embedTimeoutMs: parseInt(process.env.MEMORY_EMBED_TIMEOUT_MS || "8000", 10),
@@ -195,10 +192,6 @@ export function loadConfig(): Config {
     cronEnabled: process.env.CRON_ENABLED !== undefined
       ? process.env.CRON_ENABLED === "true"
       : isServer,
-    toolDenyList: (process.env.TOOL_DENY_LIST || "WebSearch,WebFetch,WebBrowse")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
     compactionReserveTokens: parseInt(process.env.COMPACTION_RESERVE_TOKENS || "32768", 10),
     compactionSoftThresholdTokens: parseInt(process.env.COMPACTION_SOFT_THRESHOLD_TOKENS || "6000", 10),
     compactionKeepRecentTokens: parseInt(process.env.COMPACTION_KEEP_RECENT_TOKENS || "40000", 10),

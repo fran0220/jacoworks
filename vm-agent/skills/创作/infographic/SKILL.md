@@ -237,9 +237,9 @@ Combine:
 3. Call with prompt file and output path
 4. On failure, auto-retry once
 
-**JAcoworks Integration**: Use the built-in `nano-banana-pro` skill for image generation:
+**JAcoworks Integration**: Use `asset-gateway` CLI for image generation:
 ```bash
-node {skillsBaseDir}/nano-banana-pro/scripts/generate-image.mjs --prompt "$(cat prompts/infographic.md)" --filename "infographic.png"
+asset-gateway generate image --prompt "$(cat prompts/infographic.md)" --size 1024x1024 --output-dir .
 ```
 
 ### Step 7: Output Summary

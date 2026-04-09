@@ -4,8 +4,11 @@
 
 ## 搜索
 
-- web_search: 快速互联网查询 (事实、API 文档、新闻)
-- 深度调研: 加载 web-search 技能 (多源并行搜索)
+- 优先通过 bash 调用 CLI 工具；搜索前先加载对应 skill，按 skill 里的命令和参数执行
+- 搜索/调研: 加载 `ai-search` skill，然后用 `ai-search "查询内容"`
+- 浏览器操作: 加载 browser / agent-browser skill，再通过 CLI 完成交互
+- 资产生成: 加载 asset-gateway skill，再通过 CLI 生成图片、视频、音频等
+- 文档处理: 优先走 skill 指导下的 bash / python 工作流
 
 ## 记忆
 

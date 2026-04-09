@@ -479,24 +479,31 @@ pub async fn start_agent(
 
         // Built-in skills: explicitly pass SKILLS_PATHS so the compiled binary
         // doesn't have to guess via import.meta.url (which breaks in bundled mode).
+        //
+        // In dev mode, use ONLY the monorepo source (vm-agent/skills/) to avoid
+        // stale files in target/debug/resources/skills/ (Tauri's incremental copy
+        // never removes deleted files from the output directory).
+        // In production, use only the bundled resources/skills/.
         {
             let mut skills_paths: Vec<String> = Vec::new();
 
-            // 1. Production: bundled in resources/skills/
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                let bundled = resource_dir.join("resources").join("skills");
-                if bundled.exists() {
-                    skills_paths.push(bundled.to_string_lossy().to_string());
-                }
-            }
-
-            // 2. Dev fallback: monorepo vm-agent/skills/
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let dev_skills = manifest_dir.join("../../vm-agent/skills");
-            if let Ok(canonical) = dunce::canonicalize(&dev_skills) {
-                if canonical.exists() && !skills_paths.iter().any(|p| PathBuf::from(p) == canonical)
-                {
-                    skills_paths.push(canonical.to_string_lossy().to_string());
+            let dev_available = dunce::canonicalize(&dev_skills)
+                .map(|p| p.exists())
+                .unwrap_or(false);
+
+            if dev_available {
+                // Dev mode: monorepo source is the single source of truth
+                let canonical = dunce::canonicalize(&dev_skills).unwrap();
+                skills_paths.push(canonical.to_string_lossy().to_string());
+            } else {
+                // Production: bundled in resources/skills/
+                if let Ok(resource_dir) = app.path().resource_dir() {
+                    let bundled = resource_dir.join("resources").join("skills");
+                    if bundled.exists() {
+                        skills_paths.push(bundled.to_string_lossy().to_string());
+                    }
                 }
             }
 
@@ -532,6 +539,15 @@ pub async fn start_agent(
             cmd.env("DOC_PACKAGES_DIR", doc_pkg_dir.to_string_lossy().as_ref());
         }
 
+        // Isolate Pi SDK agent directory to app_data/pi-agent/ so the sidecar
+        // does NOT read ~/.pi/agent/settings.json (which may contain user-installed
+        // pi-packages like greedysearch-pi that interfere with our CLI-based tools).
+        if let Ok(app_data) = app.path().app_data_dir() {
+            let pi_agent_dir = app_data.join("pi-agent");
+            let _ = std::fs::create_dir_all(&pi_agent_dir);
+            cmd.env("PI_CODING_AGENT_DIR", pi_agent_dir.to_string_lossy().as_ref());
+        }
+
         // Bundled fonts directory
         if let Ok(resource_dir) = app.path().resource_dir() {
             let fonts_dir = resource_dir.join("resources").join("fonts");
@@ -540,24 +556,34 @@ pub async fn start_agent(
             }
         }
 
-        // Prepend bundled runtimes to PATH — guaranteed available by build process.
+        // Prepend bundled tools and runtimes to PATH.
+        // Tools: resources/tools/ (bundled release) + src-tauri/resources/tools/ (dev fallback).
         // Python: all platforms (python-build-standalone).
         // Bash + Node: Windows only (MSYS2 bash + Bun).
+        let mut extra_paths: Vec<PathBuf> = Vec::new();
+        let mut push_extra_path = |path: PathBuf| {
+            if path.exists() && !extra_paths.iter().any(|existing| existing == &path) {
+                extra_paths.push(path);
+            }
+        };
+
         if let Ok(resource_dir) = app.path().resource_dir() {
-            let runtimes = resource_dir.join("resources").join("runtimes");
-            let mut extra_paths: Vec<PathBuf> = Vec::new();
+            let resources_dir = resource_dir.join("resources");
+            let runtimes = resources_dir.join("runtimes");
+
+            push_extra_path(resources_dir.join("tools"));
 
             // Python (all platforms): python-build-standalone uses bin/ on unix, flat on windows
             #[cfg(not(windows))]
-            extra_paths.push(runtimes.join("python").join("bin"));
+            push_extra_path(runtimes.join("python").join("bin"));
             #[cfg(windows)]
-            extra_paths.push(runtimes.join("python"));
+            push_extra_path(runtimes.join("python"));
 
             // Windows-only: bash (MSYS2) + node (Bun)
             #[cfg(windows)]
             {
-                extra_paths.push(runtimes.join("bash"));
-                extra_paths.push(runtimes.join("node"));
+                push_extra_path(runtimes.join("bash"));
+                push_extra_path(runtimes.join("node"));
 
                 // MSYS2 environment for bash
                 cmd.env("CHERE_INVOKING", "1");
@@ -566,41 +592,45 @@ pub async fn start_agent(
                 cmd.env("LANG", "C.UTF-8");
                 cmd.env("LC_ALL", "C.UTF-8");
             }
+        }
 
-            // macOS/Linux: Tauri .app bundles inherit a minimal PATH that often
-            // lacks the user's shell-profile paths (nvm, Homebrew, etc.).
-            // Probe the user's default shell to recover the full PATH.
-            #[cfg(not(windows))]
+        // Dev fallback so `cargo tauri dev` can find freshly compiled CLI tools
+        // from src-tauri/resources/tools without a packaged resource directory.
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if let Ok(canonical) = dunce::canonicalize(manifest_dir.join("resources").join("tools")) {
+            push_extra_path(canonical);
+        }
+
+        // macOS/Linux: Tauri .app bundles inherit a minimal PATH that often
+        // lacks the user's shell-profile paths (nvm, Homebrew, etc.).
+        // Probe the user's default shell to recover the full PATH.
+        #[cfg(not(windows))]
+        {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+            if let Ok(output) = Command::new(&shell)
+                .args(["-l", "-i", "-c", "echo __PATH_PROBE__\"$PATH\""])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .output()
             {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-                if let Ok(output) = Command::new(&shell)
-                    .args(["-l", "-i", "-c", "echo __PATH_PROBE__\"$PATH\""])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .output()
-                {
-                    if let Ok(stdout) = String::from_utf8(output.stdout) {
-                        if let Some(line) = stdout
-                            .lines()
-                            .find(|l| l.starts_with("__PATH_PROBE__"))
-                        {
-                            let shell_path = &line["__PATH_PROBE__".len()..];
-                            for p in std::env::split_paths(shell_path) {
-                                extra_paths.push(p);
-                            }
+                if let Ok(stdout) = String::from_utf8(output.stdout) {
+                    if let Some(line) = stdout.lines().find(|l| l.starts_with("__PATH_PROBE__")) {
+                        let shell_path = &line["__PATH_PROBE__".len()..];
+                        for p in std::env::split_paths(shell_path) {
+                            push_extra_path(p);
                         }
                     }
                 }
             }
+        }
 
-            let current_path = std::env::var("PATH").unwrap_or_default();
-            let existing: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
-            let mut all_paths = extra_paths;
-            all_paths.extend(existing);
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let existing: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
+        let mut all_paths = extra_paths;
+        all_paths.extend(existing);
 
-            if let Ok(new_path) = std::env::join_paths(&all_paths) {
-                cmd.env("PATH", &new_path);
-            }
+        if let Ok(new_path) = std::env::join_paths(&all_paths) {
+            cmd.env("PATH", &new_path);
         }
 
         if !memory_root.as_os_str().is_empty() {

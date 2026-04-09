@@ -60,9 +60,7 @@ function buildRuntimePrompt(opts: SystemPromptOptions): string {
 <skill_loading_rules>
 IMPORTANT: You have access to specialized skills listed in <available_skills>.
 BEFORE using any tool for a non-trivial task, check if a matching skill exists. If it does, you MUST read the skill file FIRST to get the correct workflow and parameters.
-- First time using generate_image? Read the image generation skill first.
-- First time using web_search? Read the web search skill first.
-- First time using read_document? Read the document processing skill first.
+- Search, browser automation, asset generation, or document processing usually happen through skills plus bash/CLI workflows. Read the matching skill first.
 - User asks to create slides, posters, infographics, or videos? Read the corresponding skill first.
 Do NOT skip skill loading just because you already know the tool's parameters. Skills contain critical workflow rules, prompt templates, and output conventions that you cannot infer from the tool definition alone.
 </skill_loading_rules>`);
@@ -106,7 +104,7 @@ CRITICAL ENCODING RULE: When creating scripts (.mjs, .js) that contain non-ASCII
   if (opts.memoryEnabled) {
     parts.push(`
 <context_management>
-Tool output (bash/file/document text) is temporary: older tool results are truncated and old history is compacted. Large read_document content is indexed to memory.
+Tool output (bash/file/CLI text) is temporary: older tool results are truncated and old history is compacted.
 Use memory_save after major steps to preserve key decisions, findings, file paths, and progress.
 Use memory_search to recall saved or indexed information instead of re-reading files.
 Do not rely on old tool outputs remaining visible.

@@ -1,7 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { join, resolve, dirname, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, relative } from "node:path";
 import {
   createAgentSession,
   SessionManager,
@@ -16,13 +15,7 @@ import type { ExtensionFactory, CreateAgentSessionResult, Skill } from "@marioze
 import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
-import { createImageGenExtension } from "./extensions/image-gen.js";
-import { createReadDocumentExtension } from "./extensions/read-document.js";
-import { createWebSearchExtension } from "./extensions/web-search.js";
 import { createVisualExtension } from "./extensions/visual.js";
-import { createRemoteFsExtension } from "./extensions/remote-fs.js";
-import { registerTransportResponseHandler } from "./transport/handler.js";
-import type { TransportSender } from "./transport/types.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
@@ -56,13 +49,6 @@ let heartbeatService: HeartbeatService | null = null;
 let cronService: CronService | null = null;
 let promptQueue: PromptQueue | null = null;
 export const agentEvents = new EventEmitter();
-
-// ─── Remote FS Transport (cloud mode only) ──────────
-
-let currentSender: TransportSender | null = null;
-export function setTransportSender(sender: TransportSender | null) {
-  currentSender = sender;
-}
 
 // ─── Restricted mode: no coding tools, skills still available ──
 
@@ -216,56 +202,6 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
     ],
   });
 
-  // 5. GLM — OpenAI 兼容协议
-  registry.registerProvider("proxy-glm", {
-    baseUrl: `${proxyUrl}/v1`,
-    apiKey: proxyKey,
-    api: "openai-completions",
-    models: [
-      {
-        id: "glm-5",
-        name: "GLM-5",
-        reasoning: false,
-        input: ["text", "image"],
-        contextWindow: 128000,
-        maxTokens: 16384,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
-  });
-}
-
-// ─── Document Processing Package Resolution ─────────
-
-function setupNodePath(): void {
-  const sep = process.platform === "win32" ? ";" : ":";
-  const nodePaths: string[] = [];
-
-  // 1. DOC_PACKAGES_DIR from the sidecar launcher (production extracted deps)
-  const docPkgDir = process.env.DOC_PACKAGES_DIR;
-  if (docPkgDir) {
-    const docNm = join(docPkgDir, "node_modules");
-    if (existsSync(docNm)) {
-      nodePaths.push(docNm);
-    }
-  }
-
-  // 2. Dev mode: vm-agent's own node_modules
-  const vmAgentRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const devNm = join(vmAgentRoot, "node_modules");
-  if (existsSync(devNm)) {
-    nodePaths.push(devNm);
-  }
-
-  // 3. Merge with existing NODE_PATH
-  if (process.env.NODE_PATH) {
-    nodePaths.push(...process.env.NODE_PATH.split(sep));
-  }
-
-  const uniquePaths = [...new Set(nodePaths)];
-  if (uniquePaths.length > 0) {
-    process.env.NODE_PATH = uniquePaths.join(sep);
-  }
 }
 
 // ─── Init & Session Pool ────────────────────────────
@@ -292,15 +228,11 @@ export function initAgent(cfg: Config) {
     initEmbedding(cfg.openaiApiKey, undefined, cfg.embedTimeoutMs);
   }
 
-  // 设置 NODE_PATH 让文档处理脚本能找到预装包
-  setupNodePath();
-
   log.info("agent initialized", {
     model: `${cfg.primaryProvider}/${cfg.primaryModel}`,
     proxy: cfg.proxyUrl,
     workspace: cfg.workspaceDir,
     memory_root: cfg.memoryRootDir,
-    node_path: process.env.NODE_PATH || "(not set)",
     embedding: isEmbeddingAvailable() ? `text-embedding-3-small → ${cfg.embeddingBaseUrl || "https://api.openai.com/v1"}` : "disabled",
   });
 
@@ -375,35 +307,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     extensionFactories.push(cronService.getExtensionFactory());
   }
 
-  // Image generation tool (available when proxy or fal.ai key is configured)
-  const falApiKey = process.env.FAL_API_KEY || "";
-  if (config.proxyKey || falApiKey) {
-    extensionFactories.push(
-      createImageGenExtension(config.proxyUrl, config.proxyKey, falApiKey, workspace),
-    );
-  }
-
-  // Document reading tool (docx, xlsx, csv, pdf, pptx)
-  if (config.proxyKey) {
-    extensionFactories.push(
-      createReadDocumentExtension(workspace, memRoot, memoryStoreConfig, process.env.MINERU_TOKEN || ""),
-    );
-  }
-
-  // Web search tool (Tavily primary, Grok fallback)
-  if (process.env.TAVILY_API_KEY || config.proxyKey) {
-    extensionFactories.push(
-      createWebSearchExtension(config.proxyUrl, config.proxyKey),
-    );
-  }
-
-  // Remote filesystem (cloud mode only — when transport sender is available)
-  if (config.mode === "server" && currentSender) {
-    extensionFactories.push(
-      createRemoteFsExtension(() => currentSender, registerTransportResponseHandler),
-    );
-  }
-
   // Python tool (available when python is on PATH or bundled in runtimes/)
   if (!restricted) {
     extensionFactories.push(createPythonExtension());
@@ -411,22 +314,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   // Visual rendering tool (always available)
   extensionFactories.push(createVisualExtension());
-
-  // Intercept read tool for binary documents.
-  // Binary docs → block with guidance to use read_document.
-  const BINARY_DOC_EXTS = /\.(docx|xlsx|xls|pdf|pptx|doc|ppt)$/i;
-  extensionFactories.push((pi) => {
-    pi.on("tool_call", async (event) => {
-      if (event.toolName === "read" && typeof event.input?.path === "string") {
-        if (BINARY_DOC_EXTS.test(event.input.path)) {
-          return {
-            block: true,
-            reason: `Cannot read binary file "${event.input.path}" with the read tool. Use the read_document tool instead.`,
-          };
-        }
-      }
-    });
-  });
 
   // ─── Context compression: trim old tool results to save tokens ───
   // Before each LLM call, compress old messages to reduce input tokens.
@@ -499,16 +386,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
       return { messages: compressed };
     });
   });
-
-  if (config.toolDenyList.length > 0) {
-    extensionFactories.push((pi) => {
-      pi.on("tool_call", async (event) => {
-        if (config.toolDenyList.includes(event.toolName)) {
-          return { block: true, reason: `Tool '${event.toolName}' is restricted` };
-        }
-      });
-    });
-  }
 
   const settingsManager = getSettingsManager(workspace);
 

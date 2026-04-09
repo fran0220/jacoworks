@@ -2,15 +2,20 @@
 name: 内容提取
 description: >
   URL 内容提取与转换。
-  Robust URL-to-Markdown extraction. Use when the user wants to
-  "read a webpage", "extract content from URL", "fetch this link",
-  or when you need to retrieve full content from a specific URL.
-  Handles anti-scraping detection and provides clean readable output.
+  Extracts the readable contents of a specific public URL with curl-based
+  fetching and cleanup. Use when the user already gave an exact link and wants
+  the page content, not for general web research or interactive browser tasks.
 ---
 
 # Content Extract — URL 内容提取
 
 把 URL → 可读 Markdown，带质量检测和降级策略。
+
+## 适用边界
+
+- 仅用于“已经有具体 URL，要读这篇内容”的场景。
+- **不要**用于通用网络调研、找资料、追最新信息；这类需求应优先使用 `ai-search`。
+- **不要**用于需要登录态、点击交互、截图、等待前端渲染的页面；这类需求应优先使用 `browser`。
 
 ## 工作流（Decision Tree）
 
@@ -66,7 +71,8 @@ curl -sL -m 30 -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 如果 curl 获取失败：
 1. 告知用户该页面无法直接获取
 2. 建议替代方案：
-   - 使用 web-search 搜索该页面的缓存版本
+   - 使用 `ai-search` 搜索该页面标题、站点名或缓存线索
+   - 使用 `browser` 打开页面（如果问题是登录态、动态渲染或交互拦截）
    - 请用户粘贴页面内容
    - 请用户提供截图（如果是图文内容）
 
