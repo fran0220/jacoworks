@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "JAcoworks",
-  "version": "1.8.5",
+  "version": "1.9.0",
   "identifier": "com.jacoworks.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -61,6 +61,7 @@
       "resources/doc-packages.tar.gz": "resources/doc-packages.tar.gz",
       "resources/pi-meta": "resources/pi-meta",
       "../../vm-agent/skills": "resources/skills",
+      "resources/tools": "resources/tools",
       "resources/runtimes": "resources/runtimes"
     }
   },
