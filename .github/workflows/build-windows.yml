@@ -195,6 +195,8 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           VERSION="${{ inputs.version }}"
+          # Strip 'v' prefix for DB lookup (DB stores "1.9.1", not "v1.9.1")
+          DB_VERSION="${VERSION#v}"
           BASE_URL="https://${COS_BUCKET}.cos.${COS_REGION}.myqcloud.com/releases/${VERSION}/windows-x86_64"
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o ConnectTimeout=30 ${SSH_USER}@${SSH_HOST}"
           DIR="artifacts/desktop-windows-x86_64"
@@ -212,14 +214,27 @@ jobs:
             SIG=""
             [ -f "${file}.sig" ] && SIG=$(cat "${file}.sig")
 
-            # Determine DB platform: updater bundle vs installer
+            # Determine DB platform: .nsis.zip or .exe with .sig → updater
             DB_PLATFORM="windows-x86_64"
-            case "$FILENAME" in *.nsis.zip) DB_PLATFORM="windows-x86_64-updater";; esac
+            case "$FILENAME" in
+              *.nsis.zip) DB_PLATFORM="windows-x86_64-updater";;
+              *.exe)
+                if [ -f "${file}.sig" ]; then
+                  # Also register as updater asset (Tauri v2 uses exe + sig for NSIS updater)
+                  SQL="${SQL}
+          INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
+            SELECT gen_random_uuid()::text, r.id, 'windows-x86_64-updater', '${DOWNLOAD_URL}', '${SIG}', ${FILESIZE}
+            FROM releases r WHERE r.version = '${DB_VERSION}'
+            ON CONFLICT (release_id, platform) DO UPDATE SET download_url = EXCLUDED.download_url, signature = EXCLUDED.signature, file_size = EXCLUDED.file_size;"
+                  echo "📦 windows-x86_64-updater → ${FILENAME} (${FILESIZE} bytes)"
+                fi
+                ;;
+            esac
 
             SQL="${SQL}
           INSERT INTO release_assets (id, release_id, platform, download_url, signature, file_size)
             SELECT gen_random_uuid()::text, r.id, '${DB_PLATFORM}', '${DOWNLOAD_URL}', '${SIG}', ${FILESIZE}
-            FROM releases r WHERE r.version = '${VERSION}'
+            FROM releases r WHERE r.version = '${DB_VERSION}'
             ON CONFLICT (release_id, platform) DO UPDATE SET download_url = EXCLUDED.download_url, signature = EXCLUDED.signature, file_size = EXCLUDED.file_size;"
 
             echo "📦 ${DB_PLATFORM} → ${FILENAME} (${FILESIZE} bytes)"
