@@ -94,6 +94,14 @@ func main() {
 				llm.JimengAPIURL = setting.Value
 			case "jimeng_api_key":
 				llm.JimengAPIKey = setting.Value
+			case "asset_gateway_token":
+				llm.AssetGatewayToken = setting.Value
+			case "asset_gateway_url":
+				llm.AssetGatewayURL = setting.Value
+			case "ai_search_gateway_url":
+				llm.AISearchGatewayURL = setting.Value
+			case "ai_search_token":
+				llm.AISearchToken = setting.Value
 			case "primary_model":
 				llm.PrimaryModel = setting.Value
 			case "primary_provider":
@@ -598,9 +606,13 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"embedding_api_key":  llm.EmbeddingAPIKey,
 			"fal_api_key":        llm.FalAPIKey,
 			"mineru_token":       llm.MineruToken,
-			"jimeng_api_url":     llm.JimengAPIURL,
-			"jimeng_api_key":     llm.JimengAPIKey,
-			"primary_model":      llm.PrimaryModel,
+			"jimeng_api_url":          llm.JimengAPIURL,
+			"jimeng_api_key":          llm.JimengAPIKey,
+			"asset_gateway_token":     llm.AssetGatewayToken,
+			"asset_gateway_url":       llm.AssetGatewayURL,
+			"ai_search_gateway_url":   llm.AISearchGatewayURL,
+			"ai_search_token":         llm.AISearchToken,
+			"primary_model":           llm.PrimaryModel,
 			"primary_provider":   llm.PrimaryProvider,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
@@ -643,9 +655,13 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"embedding_api_key":    true,
 		"fal_api_key":          true,
 		"mineru_token":         true,
-		"jimeng_api_url":       true,
-		"jimeng_api_key":       true,
-		"feishu_client_id":     true,
+		"jimeng_api_url":          true,
+		"jimeng_api_key":          true,
+		"asset_gateway_token":     true,
+		"asset_gateway_url":       true,
+		"ai_search_gateway_url":   true,
+		"ai_search_token":         true,
+		"feishu_client_id":        true,
 		"feishu_client_secret": true,
 		"admin_token":          true,
 		"github_token":         true,
@@ -709,6 +725,18 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		}
 		if v, ok := req.Settings["jimeng_api_key"]; ok {
 			llm.JimengAPIKey = v
+		}
+		if v, ok := req.Settings["asset_gateway_token"]; ok {
+			llm.AssetGatewayToken = v
+		}
+		if v, ok := req.Settings["asset_gateway_url"]; ok {
+			llm.AssetGatewayURL = v
+		}
+		if v, ok := req.Settings["ai_search_gateway_url"]; ok {
+			llm.AISearchGatewayURL = v
+		}
+		if v, ok := req.Settings["ai_search_token"]; ok {
+			llm.AISearchToken = v
 		}
 		if v, ok := req.Settings["primary_model"]; ok {
 			llm.PrimaryModel = v

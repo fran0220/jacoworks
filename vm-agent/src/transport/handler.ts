@@ -19,9 +19,15 @@ interface RpcCommandBase {
   type: string;
 }
 
+interface ImageAttachment {
+  data: string;
+  media_type: string;
+}
+
 interface PromptCommand extends RpcCommandBase {
   type: "prompt";
   message: string;
+  images?: ImageAttachment[];
   model?: string;
   session_id?: string;
   user_id?: string;
@@ -197,13 +203,22 @@ async function handlePrompt(config: Config, sender: TransportSender, command: Pr
       }
     });
 
-    const options = session.isStreaming
-      ? { streamingBehavior: command.streaming_behavior || "followUp" as const }
+    // Build prompt options: images + streaming behavior
+    const promptImages = command.images?.length
+      ? command.images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.media_type }))
       : undefined;
+
+    const options: Record<string, unknown> = {};
+    if (session.isStreaming) {
+      options.streamingBehavior = command.streaming_behavior || "followUp";
+    }
+    if (promptImages) {
+      options.images = promptImages;
+    }
 
     // Sanitize message and use retry logic
     const sanitizedMessage = sanitizePromptMessage(command.message);
-    promptWithRetry(session, sanitizedMessage, options)
+    promptWithRetry(session, sanitizedMessage, Object.keys(options).length > 0 ? options : undefined)
       .then(() => finish())
       .catch((err) => {
         finish(err instanceof Error ? err.message : "prompt failed");

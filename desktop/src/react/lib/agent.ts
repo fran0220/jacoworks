@@ -1,10 +1,16 @@
 import type { AgentTransport } from "./agent-transport";
 
+export interface ImageAttachment {
+  data: string;
+  media_type: string;
+}
+
 export interface PromptPayload {
   session_id: string;
   user_id?: string;
   model?: string;
   message: string;
+  images?: ImageAttachment[];
   workspace?: string;
   restricted?: boolean;
   streaming_behavior?: "steer" | "followUp";

@@ -81,6 +81,10 @@ export function useAgentBootstrap(authenticated: boolean) {
       if (agentConfig.mineru_token) envVars.MINERU_TOKEN = agentConfig.mineru_token;
       if (agentConfig.jimeng_api_url) envVars.JIMENG_API_URL = agentConfig.jimeng_api_url;
       if (agentConfig.jimeng_api_key) envVars.JIMENG_API_KEY = agentConfig.jimeng_api_key;
+      if (agentConfig.asset_gateway_token) envVars.ASSET_GATEWAY_TOKEN = agentConfig.asset_gateway_token;
+      if (agentConfig.asset_gateway_url) envVars.ASSET_GATEWAY_URL = agentConfig.asset_gateway_url;
+      if (agentConfig.ai_search_gateway_url) envVars.AI_SEARCH_GATEWAY_URL = agentConfig.ai_search_gateway_url;
+      if (agentConfig.ai_search_token) envVars.AI_SEARCH_TOKEN = agentConfig.ai_search_token;
       if (agentConfig.primary_model) {
         if (agentConfig.primary_model.includes("/")) {
           const [provider, model] = agentConfig.primary_model.split("/", 2);

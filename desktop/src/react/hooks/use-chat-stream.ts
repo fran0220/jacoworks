@@ -4,7 +4,7 @@ import {
   requestTitleGeneration,
   startAgentStream,
 } from "../lib/agent";
-import type { AgentRpcEvent } from "../lib/agent";
+import type { AgentRpcEvent, ImageAttachment } from "../lib/agent";
 import type { AgentTransport } from "../lib/agent-transport";
 import { getUser } from "../lib/auth";
 import { getSettings } from "../lib/config";
@@ -55,14 +55,67 @@ async function debouncedSyncMemory() {
   }
 }
 
-function buildPrompt(text: string, files: AttachedFile[]): string {
-  if (files.length === 0) return text;
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
 
-  const fileList = files
-    .map((f) => `- ${f.path} (${formatSize(f.size)})`)
-    .join("\n");
+function extOf(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
 
-  return `${text}\n\n[附加文件 — 已保存到工作目录，请用 read 或 read_document 工具查看]\n${fileList}`;
+function mimeForExt(ext: string): string {
+  const map: Record<string, string> = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+    gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
+  };
+  return map[ext] || "image/png";
+}
+
+async function buildPromptWithImages(
+  text: string,
+  files: AttachedFile[],
+  workspacePath: string,
+): Promise<{ message: string; images: ImageAttachment[] }> {
+  if (files.length === 0) return { message: text, images: [] };
+
+  const images: ImageAttachment[] = [];
+  const nonImageFiles: AttachedFile[] = [];
+
+  for (const f of files) {
+    const ext = extOf(f.name);
+    if (IMAGE_EXTENSIONS.has(ext) && f.size <= MAX_IMAGE_SIZE) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const dataUri: string = await invoke("read_file_base64", {
+          path: f.path,
+          workspace: workspacePath || null,
+          maxMb: 20,
+        });
+        // dataUri = "data:image/png;base64,xxxx" — extract base64 and mime
+        const commaIdx = dataUri.indexOf(",");
+        const base64 = commaIdx >= 0 ? dataUri.slice(commaIdx + 1) : dataUri;
+        const mime = commaIdx >= 0 ? dataUri.slice(5, dataUri.indexOf(";")) : mimeForExt(ext);
+        images.push({ data: base64, media_type: mime });
+      } catch {
+        nonImageFiles.push(f);
+      }
+    } else {
+      nonImageFiles.push(f);
+    }
+  }
+
+  let message = text;
+  if (nonImageFiles.length > 0) {
+    const fileList = nonImageFiles
+      .map((f) => `- ${f.path} (${formatSize(f.size)})`)
+      .join("\n");
+    message += `\n\n[附加文件 — 已保存到工作目录，请用 read 或 read_document 工具查看]\n${fileList}`;
+  }
+  if (images.length > 0 && !text.trim()) {
+    message = "请查看并分析这张图片。";
+  }
+
+  return { message, images };
 }
 
 function isUntitledTitle(title: string): boolean {
@@ -580,12 +633,15 @@ export function useChatStream({
       const currentUser = getUser();
       const appSettings = getSettings();
       try {
+        const ws = sessionSnap.workspacePath || appSettings.defaultWorkspace || "";
+        const { message: promptText, images } = await buildPromptWithImages(text, files, ws);
         const response = await startAgentStream(transport, {
           session_id: sessionSnap.id,
           user_id: currentUser?.id || undefined,
           model: sessionSnap.model,
-          message: buildPrompt(text, files),
-          workspace: sessionSnap.workspacePath || undefined,
+          message: promptText,
+          ...(images.length > 0 ? { images } : {}),
+          workspace: ws || undefined,
           restricted: false,
           thinking_level: appSettings.thinkingLevel || undefined,
           anonymous: sessionSnap.anonymous || undefined,

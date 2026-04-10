@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Download } from "lucide-react";
 import hljs from "../lib/hljs-setup";
 import { toolArgsSummary } from "../lib/tool-utils";
 import type { AssistantPart, AttachedFile } from "../types";
@@ -260,15 +261,14 @@ function VisualWidget({ data }: { data: string }) {
   if (!parsed.html) return null;
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [exporting, setExporting] = useState(false);
 
   const handleLoad = () => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    // Resize immediately + after CDN scripts load
     resizeIframe(iframe);
     setTimeout(() => resizeIframe(iframe), 300);
     setTimeout(() => resizeIframe(iframe), 1000);
-    // Observe ongoing changes (animations, lazy content)
     try {
       const doc = iframe.contentDocument;
       if (doc) {
@@ -277,9 +277,52 @@ function VisualWidget({ data }: { data: string }) {
     } catch { /* ignore */ }
   };
 
+  const handleExportImage = useCallback(async () => {
+    const iframe = iframeRef.current;
+    if (!iframe || exporting) return;
+    setExporting(true);
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(doc.documentElement, {
+        backgroundColor: "#FAF7F4",
+        scale: 2,
+        useCORS: true,
+      });
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/png"),
+      );
+      if (!blob) return;
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${parsed.title || "visual"}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("[visual-export] failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, parsed.title]);
+
   return (
     <div className="visual-widget">
-      {parsed.title && <div className="visual-widget-title">{parsed.title}</div>}
+      <div className="visual-widget-header">
+        {parsed.title && <div className="visual-widget-title">{parsed.title}</div>}
+        <button
+          className="visual-widget-export"
+          onClick={handleExportImage}
+          disabled={exporting}
+          title="导出为图片"
+        >
+          <Download size={14} />
+        </button>
+      </div>
       <iframe
         ref={iframeRef}
         className="visual-widget-frame"
@@ -393,17 +436,8 @@ export default function AssistantContent({ parts, streaming, workspacePath, onSe
         }
 
         if (part.kind === "visual") {
-          return (
-            <div key={`visual-${i}`} className="visual-widget">
-              {part.title && <div className="visual-widget-title">{part.title}</div>}
-              <iframe
-                className="visual-widget-frame"
-                sandbox="allow-scripts"
-                srcDoc={part.html}
-                title={part.title || "Visual"}
-              />
-            </div>
-          );
+          const visualData = JSON.stringify({ title: part.title, html: part.html });
+          return <VisualWidget key={`visual-${i}`} data={visualData} />;
         }
 
         if (part.kind === "status") {

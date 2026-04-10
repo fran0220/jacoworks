@@ -33,5 +33,9 @@ INSERT INTO system_settings (key, description) VALUES
     ('primary_model', '云端容器默认模型 (如 claude-sonnet-4-6)'),
     ('primary_provider', '云端容器默认 Provider (如 proxy-claude)'),
     ('posthog_api_key', 'PostHog API 密钥 (错误追踪 + 分析)'),
-    ('posthog_endpoint', 'PostHog 端点地址 (默认 https://us.i.posthog.com)')
+    ('posthog_endpoint', 'PostHog 端点地址 (默认 https://us.i.posthog.com)'),
+    ('asset_gateway_token', 'Asset Gateway 认证 Token (资产生成 CLI)'),
+    ('asset_gateway_url', 'Asset Gateway 服务地址 (资产生成 CLI)'),
+    ('ai_search_gateway_url', 'AI Search 网关地址 (搜索 CLI)'),
+    ('ai_search_token', 'AI Search 认证 Token (搜索 CLI)')
 ON CONFLICT (key) DO NOTHING;

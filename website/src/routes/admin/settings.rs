@@ -62,6 +62,8 @@ fn is_secret_key(key: &str) -> bool {
             | "fal_api_key"
             | "mineru_token"
             | "jimeng_api_key"
+            | "asset_gateway_token"
+            | "ai_search_token"
             | "feishu_client_secret"
             | "admin_token"
             | "github_token"
@@ -89,6 +91,10 @@ pub struct UpdateSettingsForm {
     mineru_token: Option<String>,
     jimeng_api_url: Option<String>,
     jimeng_api_key: Option<String>,
+    asset_gateway_token: Option<String>,
+    asset_gateway_url: Option<String>,
+    ai_search_gateway_url: Option<String>,
+    ai_search_token: Option<String>,
     feishu_client_id: Option<String>,
     feishu_client_secret: Option<String>,
     admin_token: Option<String>,
@@ -139,6 +145,18 @@ pub async fn update(
             settings.insert("jimeng_api_url".to_string(), v);
         }
     }
+    if let Some(v) = form.asset_gateway_url {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            settings.insert("asset_gateway_url".to_string(), v);
+        }
+    }
+    if let Some(v) = form.ai_search_gateway_url {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            settings.insert("ai_search_gateway_url".to_string(), v);
+        }
+    }
     if let Some(v) = form.github_repo {
         let v = v.trim().to_string();
         if !v.is_empty() {
@@ -168,6 +186,8 @@ pub async fn update(
         ("fal_api_key", form.fal_api_key),
         ("mineru_token", form.mineru_token),
         ("jimeng_api_key", form.jimeng_api_key),
+        ("asset_gateway_token", form.asset_gateway_token),
+        ("ai_search_token", form.ai_search_token),
         ("feishu_client_secret", form.feishu_client_secret),
         ("admin_token", form.admin_token),
         ("github_token", form.github_token),

@@ -62,8 +62,10 @@ type LLMConfig struct {
 	MineruToken       string `yaml:"mineru_token"`
 	JimengAPIURL      string `yaml:"jimeng_api_url"`
 	JimengAPIKey      string `yaml:"jimeng_api_key"`
-	AssetGatewayToken string `yaml:"asset_gateway_token"`
-	AssetGatewayURL   string `yaml:"asset_gateway_url"`
+	AssetGatewayToken   string `yaml:"asset_gateway_token"`
+	AssetGatewayURL     string `yaml:"asset_gateway_url"`
+	AISearchGatewayURL  string `yaml:"ai_search_gateway_url"`
+	AISearchToken       string `yaml:"ai_search_token"`
 	FeishuAppID       string `yaml:"feishu_app_id"`
 	FeishuAppSecret   string `yaml:"feishu_app_secret"`
 	PrimaryModel      string `yaml:"primary_model"`
@@ -252,6 +254,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_LLM_ASSET_GATEWAY_URL"); v != "" {
 		cfg.LLM.AssetGatewayURL = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_AI_SEARCH_GATEWAY_URL"); v != "" {
+		cfg.LLM.AISearchGatewayURL = v
+	}
+	if v := os.Getenv("GATEWAY_LLM_AI_SEARCH_TOKEN"); v != "" {
+		cfg.LLM.AISearchToken = v
 	}
 	if v := os.Getenv("GATEWAY_LLM_PRIMARY_MODEL"); v != "" {
 		cfg.LLM.PrimaryModel = v

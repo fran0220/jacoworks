@@ -227,6 +227,10 @@ export async function fetchAgentConfig(): Promise<{
   mineru_token?: string;
   jimeng_api_url?: string;
   jimeng_api_key?: string;
+  asset_gateway_token?: string;
+  asset_gateway_url?: string;
+  ai_search_gateway_url?: string;
+  ai_search_token?: string;
   primary_model?: string;
   primary_provider?: string;
   models?: Array<{ id: string; provider: string; label: string }>;

@@ -4,7 +4,7 @@
 
 .PHONY: help dev dev-gateway dev-website dev-desktop \
         build build-gateway build-website build-desktop \
-        compile-agent prepare-win-deps \
+        compile-agent compile-tools prepare-win-deps \
         deploy deploy-jingao deploy-gateway deploy-website push-skills deploy-sync \
         check check-gateway check-website check-desktop \
         db-migrate clean \
@@ -59,10 +59,15 @@ build-website: ## 构建 Website (release)
 	cd website && cargo build --release
 	@echo "✅ website/target/release/jacoworks-website"
 
-compile-agent: ## 编译 sidecar + 打包 release 资源
+compile-agent: ## 编译 sidecar + CLI tools + 打包 release 资源
 	@TARGET=$$(rustc -vV | grep host | cut -d' ' -f2) && \
 	echo "🔧 Building for target: $$TARGET" && \
 	bash desktop/src-tauri/scripts/prepare-release.sh "$$TARGET"
+
+compile-tools: ## 编译 bundled CLI tools
+	@TARGET=$$(rustc -vV | grep host | cut -d' ' -f2) && \
+	echo "🔧 Compiling CLI tools for target: $$TARGET" && \
+	bash deploy/scripts/compile-tools.sh "$$TARGET"
 
 prepare-win-deps: ## 下载 Windows 构建依赖
 	bash desktop/src-tauri/scripts/prepare-win-deps.sh

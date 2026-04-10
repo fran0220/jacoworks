@@ -12,6 +12,9 @@
 # Skills archive built from vm-agent at build time
 /resources/skills.tar.gz
 
+# Bundled CLI tools (compiled by deploy/scripts/compile-tools.sh)
+/resources/tools/
+
 # Windows runtime dependencies (populated by prepare-win-deps.sh)
 /resources/runtimes/bash/*
 /resources/runtimes/python/*
