@@ -71,11 +71,11 @@ FILE_COUNT=$(echo "$PAYLOAD" | node -e "const d=require('fs').readFileSync('/dev
 echo "   Found $FILE_COUNT skill files"
 echo "🚀 Uploading to ${GATEWAY_URL}/api/skills/upload ..."
 
-HTTP_CODE=$(curl -s -o /tmp/push-skills-response.json -w "%{http_code}" \
+HTTP_CODE=$(echo "$PAYLOAD" | curl -s -o /tmp/push-skills-response.json -w "%{http_code}" \
   -X POST "${GATEWAY_URL}/api/skills/upload" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${TOKEN}" \
-  -d "$PAYLOAD")
+  --data-binary @-)
 
 RESPONSE=$(cat /tmp/push-skills-response.json 2>/dev/null || echo "{}")
 rm -f /tmp/push-skills-response.json
