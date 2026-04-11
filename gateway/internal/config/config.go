@@ -11,8 +11,10 @@ import (
 )
 
 type Config struct {
-	llmMu  sync.RWMutex `yaml:"-"`
-	Server ServerConfig `yaml:"server"`
+	llmMu             sync.RWMutex `yaml:"-"`
+	cliToolsMu        sync.RWMutex `yaml:"-"`
+	cliToolsManifest  string       `yaml:"-"`
+	Server            ServerConfig `yaml:"server"`
 	Auth   AuthConfig   `yaml:"auth"`
 	// Keep the legacy key for config-file compatibility during the Pi migration.
 	PiVM         PiVMConfig      `yaml:"openclaw"`
@@ -298,4 +300,16 @@ func (c *Config) UpdateLLM(llm LLMConfig) {
 	c.llmMu.Lock()
 	defer c.llmMu.Unlock()
 	c.LLM = llm
+}
+
+func (c *Config) GetCliToolsManifest() string {
+	c.cliToolsMu.RLock()
+	defer c.cliToolsMu.RUnlock()
+	return c.cliToolsManifest
+}
+
+func (c *Config) SetCliToolsManifest(manifest string) {
+	c.cliToolsMu.Lock()
+	defer c.cliToolsMu.Unlock()
+	c.cliToolsManifest = manifest
 }

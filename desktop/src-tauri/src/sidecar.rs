@@ -567,6 +567,11 @@ pub async fn start_agent(
             }
         };
 
+        // Updatable tools dir (app_data/tools/) takes priority over bundled.
+        if let Ok(app_data) = app.path().app_data_dir() {
+            push_extra_path(app_data.join("tools"));
+        }
+
         if let Ok(resource_dir) = app.path().resource_dir() {
             let resources_dir = resource_dir.join("resources");
             let runtimes = resources_dir.join("runtimes");
@@ -997,4 +1002,97 @@ pub fn get_feedback_context(app: AppHandle, tail_lines: Option<usize>) -> Result
         os_info,
         log_tail,
     })
+}
+
+// ───── CLI tool hot-update ────────────────────────────────────
+
+fn updatable_tools_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("tools"))
+        .map_err(|e| format!("Failed to resolve app data directory: {}", e))
+}
+
+#[tauri::command]
+pub fn get_local_tools_manifest(app: AppHandle) -> Result<String, String> {
+    let dir = updatable_tools_dir(&app)?;
+    let manifest_path = dir.join("manifest.json");
+    match fs::read_to_string(&manifest_path) {
+        Ok(content) => Ok(content),
+        Err(_) => Ok("{}".to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn save_local_tools_manifest(app: AppHandle, manifest: String) -> Result<(), String> {
+    let dir = updatable_tools_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let manifest_path = dir.join("manifest.json");
+    fs::write(&manifest_path, manifest).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn download_cli_tool(
+    app: AppHandle,
+    name: String,
+    url: String,
+    expected_sha256: String,
+) -> Result<(), String> {
+    use sha2::{Sha256, Digest};
+
+    let dir = updatable_tools_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    let dest = dir.join(format!("{}{}", name, ext));
+    let tmp = dir.join(format!(".{}.tmp", name));
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Download failed: HTTP {}", resp.status()));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let hash = hex::encode(hasher.finalize());
+
+    if hash != expected_sha256 {
+        return Err(format!(
+            "SHA256 mismatch for {}: expected {}, got {}",
+            name, expected_sha256, hash
+        ));
+    }
+
+    fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+    }
+
+    fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_platform_key() -> String {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    match (os, arch) {
+        ("macos", "aarch64") => "darwin-aarch64".to_string(),
+        ("macos", "x86_64") => "darwin-x86_64".to_string(),
+        ("windows", "x86_64") => "windows-x86_64".to_string(),
+        _ => format!("{}-{}", os, arch),
+    }
 }

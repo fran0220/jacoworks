@@ -215,6 +215,12 @@ export function logout() {
   clearSession();
 }
 
+export interface ToolManifestEntry {
+  name: string;
+  version: string;
+  platforms: Record<string, { url: string; sha256: string }>;
+}
+
 export async function fetchAgentConfig(): Promise<{
   llm_proxy_url: string;
   llm_proxy_key: string;
@@ -234,6 +240,7 @@ export async function fetchAgentConfig(): Promise<{
   primary_model?: string;
   primary_provider?: string;
   models?: Array<{ id: string; provider: string; label: string }>;
+  tools_manifest?: ToolManifestEntry[];
 }> {
   const response = await authFetch("/api/agent/config", { method: "GET" });
   if (response.status !== 200) {

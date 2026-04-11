@@ -63,40 +63,32 @@ Expected artifacts per platform:
 
 ### Step 4: Build Windows (win-build VM)
 
-The VM is at 192.168.122.98 (NAT), accessed via `local` (100.97.254.31) SSH jump host.
+The VM is at 192.168.122.177 (NAT), accessed via `local` (100.97.254.31) SSH jump host.
 User: `builder`, password: `build2026`.
 
+**One-step build** (recommended): The VM has a `C:\build\build-release.ps1` script that handles
+git pull, sidecar compilation, resource preparation, and Tauri build in one shot:
+
 ```bash
-# 4a. Transfer sidecar to VM
-scp desktop/src-tauri/binaries/vm-agent-x86_64-pc-windows-msvc.exe local:/tmp/
-ssh local 'sshpass -p "build2026" scp -o StrictHostKeyChecking=no \
-  /tmp/vm-agent-x86_64-pc-windows-msvc.exe \
-  builder@192.168.122.98:"C:/build/jacoworks/desktop/src-tauri/binaries/"'
+# 4a. Run the one-step build on VM
+ssh local 'sshpass -p "build2026" ssh -o StrictHostKeyChecking=no builder@192.168.122.177 \
+  "powershell -ExecutionPolicy Bypass -File C:\\build\\build-release.ps1"'
 
-# 4b. Git pull + npm ci on VM
-ssh local 'sshpass -p "build2026" ssh -o StrictHostKeyChecking=no builder@192.168.122.98 \
-  "cd C:\\build\\jacoworks && git checkout -- . && git pull && cd desktop && npm ci"'
-
-# 4c. Build NSIS + updater (signing key via PowerShell env injection)
-source deploy/.env.release
-ssh local "sshpass -p 'build2026' ssh -o StrictHostKeyChecking=no builder@192.168.122.98 \
-  \"powershell -Command \\\"\\\$env:TAURI_SIGNING_PRIVATE_KEY='${TAURI_SIGNING_PRIVATE_KEY}'; \
-  \\\$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD='${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}'; \
-  cd C:\\\\build\\\\jacoworks\\\\desktop; cargo tauri build --bundles nsis,updater\\\"\""
-
-# 4d. Pull artifacts back
-mkdir -p dist-release/<version>/windows-x86_64
+# 4b. Pull artifacts back
+VERSION=<version>
+mkdir -p dist-release/${VERSION}/windows-x86_64
 ssh local 'sshpass -p "build2026" scp -o StrictHostKeyChecking=no \
-  builder@192.168.122.98:"C:/build/jacoworks/desktop/src-tauri/target/release/bundle/nsis/JAcoworks_*_x64-setup.exe" /tmp/'
+  builder@192.168.122.177:"C:/build/jacoworks/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/JAcoworks_*_x64-setup.exe" /tmp/'
 ssh local 'sshpass -p "build2026" scp -o StrictHostKeyChecking=no \
-  builder@192.168.122.98:"C:/build/jacoworks/desktop/src-tauri/target/release/bundle/nsis/JAcoworks_*_x64-setup.exe.sig" /tmp/'
-scp local:/tmp/JAcoworks_*_x64-setup.exe dist-release/<version>/windows-x86_64/
-scp local:/tmp/JAcoworks_*_x64-setup.exe.sig dist-release/<version>/windows-x86_64/
+  builder@192.168.122.177:"C:/build/jacoworks/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/JAcoworks_*_x64-setup.exe.sig" /tmp/'
+scp local:/tmp/JAcoworks_*_x64-setup.exe dist-release/${VERSION}/windows-x86_64/
+scp local:/tmp/JAcoworks_*_x64-setup.exe.sig dist-release/${VERSION}/windows-x86_64/
 ```
 
-**Critical**: The Windows VM does NOT have `TAURI_SIGNING_PRIVATE_KEY` in its environment.
-You MUST inject it via PowerShell `$env:` as shown above. Using `set` in cmd.exe will fail
-because the key is base64 with special characters that get mangled.
+**Signing**: Keys are stored at `C:\build\tauri-signing.b64` and `C:\build\tauri-signing-pass.txt`.
+The build script reads them automatically via `Get-Content`.
+
+**VM tools**: Git 2.47.1, Rust 1.94.1, Node.js 22.16.0, Bun 1.2.13, VS Build Tools 2022, NSIS 3.10, tauri-cli 2.10.1.
 
 ### Step 5: Upload COS + Register DB + Git Tag
 
@@ -158,4 +150,4 @@ make release V=X.Y.Z           # All-in-one (bump + macOS build + upload, NO Win
 | Tauri config | `desktop/src-tauri/tauri.conf.json` |
 | Build artifacts | `dist-release/<version>/` |
 | COS bucket | `jingao-1350796151` (ap-beijing) |
-| Win-build VM | `192.168.122.98` via `local` (100.97.254.31) |
+| Win-build VM | `192.168.122.177` via `local` (100.97.254.31) |

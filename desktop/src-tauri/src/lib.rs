@@ -1191,6 +1191,10 @@ pub fn run() {
             db::db_get_dirty_sessions,
             db::db_mark_synced,
             db::db_mark_syncing,
+            sidecar::get_local_tools_manifest,
+            sidecar::save_local_tools_manifest,
+            sidecar::download_cli_tool,
+            sidecar::get_platform_key,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,6 +5,7 @@ import type { AgentTransport } from "../lib/agent-transport";
 import { ensureDefaultWorkspace, getSettings, setServerModels } from "../lib/config";
 import { LocalSidecarTransport } from "../lib/local-sidecar-transport";
 import { setSkills } from "../lib/skills";
+import { checkAndUpdateTools } from "../lib/tool-updater";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -65,6 +66,11 @@ export function useAgentBootstrap(authenticated: boolean) {
       if (agentConfig.models && agentConfig.models.length > 0) {
         setServerModels(agentConfig.models, agentConfig.primary_model, agentConfig.primary_provider);
       }
+
+      // Fire-and-forget: update CLI tools in background (takes effect next launch)
+      checkAndUpdateTools(agentConfig.tools_manifest).catch((err) =>
+        console.warn("[agent-boot] CLI tool update failed:", err),
+      );
       const settings = getSettings();
       const envVars: Record<string, string> = {
         LLM_PROXY_URL: agentConfig.llm_proxy_url,

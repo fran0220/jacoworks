@@ -122,6 +122,8 @@ func main() {
 				cfg.PostHog.Endpoint = setting.Value
 			case "oc_gateway_url":
 				cfg.OcGatewayURL = setting.Value
+			case "cli_tools_manifest":
+				cfg.SetCliToolsManifest(setting.Value)
 			}
 		}
 		cfg.UpdateLLM(llm)
@@ -596,6 +598,14 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 		llm := cfg.GetLLM()
+
+		var toolsManifest interface{}
+		if raw := cfg.GetCliToolsManifest(); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &toolsManifest); err != nil {
+				toolsManifest = nil
+			}
+		}
+
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"llm_proxy_url":      llm.ProxyURL,
 			"llm_proxy_key":      llm.ProxyKey,
@@ -614,6 +624,7 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"ai_search_token":         llm.AISearchToken,
 			"primary_model":           llm.PrimaryModel,
 			"primary_provider":   llm.PrimaryProvider,
+			"tools_manifest":    toolsManifest,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
 				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
@@ -670,6 +681,7 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 		"primary_provider":     true,
 		"posthog_api_key":      true,
 		"posthog_endpoint":     true,
+		"cli_tools_manifest":   true,
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -762,6 +774,10 @@ func updateSettingsHandler(s *store.Store, cfg *config.Config, al *audit.Logger,
 			cfg.GitHub.Repo = v
 		}
 		ghClient.Update(cfg.GitHub.Token, cfg.GitHub.Repo)
+
+		if v, ok := req.Settings["cli_tools_manifest"]; ok {
+			cfg.SetCliToolsManifest(v)
+		}
 
 		// Hot-reload Feishu Bot credentials
 		feishuBot.UpdateCredentials(cfg.Auth.FeishuClientID, cfg.Auth.FeishuClientSecret)

@@ -90,7 +90,7 @@ PostgreSQL 位于 jingao `127.0.0.1:5432/jacoworks`。当前桌面端 / gateway 
 | 项目 | 值 |
 |------|-----|
 | VM 名称 | `win-build` (KVM on `local` `100.97.254.31`) |
-| VM IP | `192.168.122.98` |
+| VM IP | `192.168.122.177` |
 | OS | Windows 11 LTSC |
 | 用户 | `builder / build2026` |
 | 工具 | Git, Rust, Node.js 22, Bun, VS Build Tools, NSIS |
