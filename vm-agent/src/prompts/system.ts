@@ -105,10 +105,13 @@ CRITICAL ENCODING RULE: When creating scripts (.mjs, .js) that contain non-ASCII
     parts.push(`
 <context_management>
 Tool output (bash/file/CLI text) is temporary: older tool results are truncated and old history is compacted.
-Use memory_save after major steps to preserve key decisions, findings, file paths, and progress.
+Use memory(action="add") after major steps to preserve key decisions, findings, file paths, and progress.
+Use memory(action="replace") to update existing entries when information changes.
+Use memory(action="remove") to delete outdated entries.
+Memory has a ~3000 character budget — when approaching the limit, consolidate with replace rather than adding.
 Use memory_search to recall saved or indexed information instead of re-reading files.
 Do not rely on old tool outputs remaining visible.
-Treat tool output as working memory; memory_save is your persistent notebook.
+Treat tool output as working memory; memory is your persistent notebook.
 </context_management>`);
   }
 

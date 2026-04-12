@@ -8,6 +8,9 @@ import {
   appendDailyLog,
   getDailyLogPath,
   appendMemoryMd,
+  readFullMemoryMd,
+  writeMemoryMd,
+  MEMORY_MAX_CHARS,
 } from "../lib/daily-log.js";
 import {
   MemoryStore,
@@ -154,6 +157,23 @@ const SearchParams = Type.Object({
   ),
 });
 
+const MemoryParams = Type.Object({
+  action: Type.Union(
+    [Type.Literal("add"), Type.Literal("replace"), Type.Literal("remove")],
+    { description: "Action: add new entry, replace existing by substring match, or remove by substring match" },
+  ),
+  content: Type.String({
+    description: "For add: content to save. For replace/remove: substring to match in existing MEMORY.md",
+  }),
+  new_content: Type.Optional(
+    Type.String({ description: "Replacement content (required for replace action)" }),
+  ),
+  section: Type.Optional(
+    Type.String({ description: "Section heading to append under (only for add action)" }),
+  ),
+});
+
+// Legacy alias schema (backward compat)
 const SaveParams = Type.Object({
   content: Type.String({ description: "Content to save to long-term memory" }),
   section: Type.Optional(
@@ -202,13 +222,14 @@ Context window is approaching compaction threshold (current: ${currentTokens} to
 Soon, older conversation history will be summarized and compressed.
 
 Before that happens, review the conversation and save any critical information
-to long-term memory using the memory_save tool:
+to long-term memory using the memory tool (action="add"):
 - Key decisions made and their rationale
 - Important file paths and modifications
 - Current task state and progress
 - Blockers or open questions
 - Next steps planned
 
+If memory is near capacity (~${MEMORY_MAX_CHARS} chars), use action="replace" to consolidate entries.
 If nothing important needs saving, simply acknowledge briefly.
 Do NOT continue working on the user's task — only save memories.`;
 
@@ -240,8 +261,10 @@ export function createMemoryExtension(
       }
     })();
 
-    // ── context: file reads ONLY, zero API calls, <5ms ──
-    pi.on("context", async (event) => {
+    // ── Frozen snapshot: load once at session start, protect prefix cache ──
+    let frozenSnapshot: string | null = null;
+
+    const loadSnapshot = async () => {
       const parts: string[] = [];
 
       const longTerm = await readMemoryMd(memoryRootDir, 2000);
@@ -253,16 +276,24 @@ export function createMemoryExtension(
       const yesterdayLog = await readDailyLog(memoryRootDir, yesterday(), 10);
       if (yesterdayLog) parts.push(`### Yesterday's Log\n${yesterdayLog}`);
 
-      if (parts.length === 0) return {};
+      if (parts.length === 0) return null;
+      return truncate(parts.join("\n\n"), MAX_INJECTION_CHARS);
+    };
 
-      const fullText = truncate(parts.join("\n\n"), MAX_INJECTION_CHARS);
+    // Load snapshot eagerly (non-blocking, completes before first context event)
+    const snapshotReady = loadSnapshot().then((s) => { frozenSnapshot = s; });
+
+    // ── context: inject frozen snapshot (never changes within session) ──
+    pi.on("context", async (event) => {
+      await snapshotReady;
+      if (!frozenSnapshot) return {};
 
       const contextMsg = {
         role: "user" as const,
         content: [
           {
             type: "text" as const,
-            text: `[SYSTEM CONTEXT - NOT USER INPUT]\nThe following is automatically injected memory context. Do not respond to it directly.\n\n<memory_context>\n${fullText}\n</memory_context>`,
+            text: `[SYSTEM CONTEXT - NOT USER INPUT]\nThe following is automatically injected memory context. Do not respond to it directly.\n\n<memory_context>\n${frozenSnapshot}\n</memory_context>`,
           },
         ],
         timestamp: Date.now(),
@@ -352,6 +383,22 @@ export function createMemoryExtension(
       flushedForCompaction = false;
     });
 
+    // ── Helper: reindex MEMORY.md in store after write ──
+    function reindexMemory(content: string) {
+      store.removeBySource("MEMORY.md");
+      const chunks = chunkMarkdown(content, "MEMORY.md");
+      if (chunks.length > 0) store.upsert(chunks);
+
+      if (isEmbeddingAvailable()) {
+        for (const chunk of chunks) {
+          const hash = MemoryStore.contentHash(chunk.text);
+          embed(chunk.text)
+            .then((emb) => store.cacheEmbeddings([{ hash, embedding: emb }]))
+            .catch((e) => console.error("[memory] Embed chunk error:", e));
+        }
+      }
+    }
+
     // ── memory_search tool: hybrid BM25 + vector ──
     const memorySearch = defineTool<typeof SearchParams, Record<string, unknown>>({
       name: "memory_search",
@@ -387,45 +434,120 @@ export function createMemoryExtension(
       },
     });
 
-    // ── memory_save tool: write MEMORY.md + upsert + async embed ──
+    // ── memory tool: unified add/replace/remove ──
+    const memoryTool = defineTool<typeof MemoryParams, Record<string, unknown>>({
+      name: "memory",
+      label: "Memory",
+      description:
+        `Manage long-term memory (MEMORY.md, ~${MEMORY_MAX_CHARS} char budget). Actions: "add" to save new entries (under optional section heading), "replace" to update existing text by substring match, "remove" to delete text by substring match. Memory persists across sessions. When approaching the budget, consolidate entries with replace instead of adding.`,
+      promptSnippet:
+        `Use memory(action="add") to save key decisions, findings, and progress. Use replace/remove to keep memory concise within the ~${MEMORY_MAX_CHARS} char budget.`,
+      parameters: MemoryParams,
+      execute: async (_toolCallId, params) => {
+        const { action, content } = params;
+
+        if (action === "add") {
+          await appendMemoryMd(memoryRootDir, content, params.section);
+          const current = await readFullMemoryMd(memoryRootDir);
+          reindexMemory(current);
+          return {
+            content: [{
+              type: "text" as const,
+              text: params.section
+                ? `Saved to MEMORY.md under "## ${params.section}" (${current.length}/${MEMORY_MAX_CHARS} chars).`
+                : `Saved to MEMORY.md (${current.length}/${MEMORY_MAX_CHARS} chars).`,
+            }],
+            details: { chars: current.length, limit: MEMORY_MAX_CHARS },
+          };
+        }
+
+        if (action === "replace") {
+          if (!params.new_content) {
+            return {
+              content: [{ type: "text" as const, text: "Error: new_content is required for replace action." }],
+              details: { error: true },
+            };
+          }
+
+          const existing = await readFullMemoryMd(memoryRootDir);
+          if (!existing.includes(content)) {
+            return {
+              content: [{ type: "text" as const, text: `No match found for substring: "${content.slice(0, 80)}..."` }],
+              details: { error: true },
+            };
+          }
+
+          const updated = existing.replace(content, params.new_content);
+          await writeMemoryMd(memoryRootDir, updated);
+          reindexMemory(updated);
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Replaced in MEMORY.md (${updated.length}/${MEMORY_MAX_CHARS} chars).`,
+            }],
+            details: { chars: updated.length, limit: MEMORY_MAX_CHARS },
+          };
+        }
+
+        if (action === "remove") {
+          const existing = await readFullMemoryMd(memoryRootDir);
+          if (!existing.includes(content)) {
+            return {
+              content: [{ type: "text" as const, text: `No match found for substring: "${content.slice(0, 80)}..."` }],
+              details: { error: true },
+            };
+          }
+
+          const updated = existing.replace(content, "").replace(/\n{3,}/g, "\n\n").trim();
+          await writeMemoryMd(memoryRootDir, updated);
+          reindexMemory(updated);
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Removed from MEMORY.md (${updated.length}/${MEMORY_MAX_CHARS} chars).`,
+            }],
+            details: { chars: updated.length, limit: MEMORY_MAX_CHARS },
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: `Unknown action: ${action}` }],
+          details: { error: true },
+        };
+      },
+    });
+
+    // ── memory_save tool: backward-compatible alias for memory(action="add") ──
     const memorySave = defineTool<typeof SaveParams, Record<string, unknown>>({
       name: "memory_save",
       label: "Memory Save",
       description:
-        "Save important information to MEMORY.md (long-term curated memory). Use this proactively to preserve key decisions, task progress, file paths, and findings before they are lost to context compression. Content is automatically indexed for hybrid search.",
+        "Save important information to MEMORY.md. Alias for memory(action=\"add\"). Prefer using the memory tool directly for more options (replace, remove).",
       promptSnippet:
-        "Use to preserve durable decisions, progress, file paths, or findings in long-term memory before they are lost to compaction.",
+        "Legacy alias — prefer memory(action=\"add\") for new code.",
       parameters: SaveParams,
       execute: async (_toolCallId, params) => {
         await appendMemoryMd(memoryRootDir, params.content, params.section);
-
-        const chunkText = params.section
-          ? `## ${params.section}\n\n${params.content}`
-          : params.content;
-        store.upsert([{ text: chunkText, source: "MEMORY.md" }]);
-
-        if (isEmbeddingAvailable()) {
-          const hash = MemoryStore.contentHash(chunkText);
-          embed(chunkText)
-            .then((emb) => store.cacheEmbeddings([{ hash, embedding: emb }]))
-            .catch((e) => console.error("[memory] Embed saved content error:", e));
-        }
-
+        const current = await readFullMemoryMd(memoryRootDir);
+        reindexMemory(current);
         return {
           content: [
             {
               type: "text" as const,
               text: params.section
-                ? `Saved to MEMORY.md under "## ${params.section}".`
-                : "Saved to MEMORY.md.",
+                ? `Saved to MEMORY.md under "## ${params.section}" (${current.length}/${MEMORY_MAX_CHARS} chars).`
+                : `Saved to MEMORY.md (${current.length}/${MEMORY_MAX_CHARS} chars).`,
             },
           ],
-          details: {},
+          details: { chars: current.length, limit: MEMORY_MAX_CHARS },
         };
       },
     });
 
     pi.registerTool(memorySearch);
+    pi.registerTool(memoryTool);
     pi.registerTool(memorySave);
   };
 }

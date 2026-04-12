@@ -41,7 +41,6 @@ export interface SearchResult {
 }
 
 export interface HybridSearchOptions {
-  mmrLambda?: number;
   decayWindowDays?: number;
 }
 
@@ -58,7 +57,6 @@ interface ScoredCandidate extends SearchResult {
 }
 
 const MS_PER_DAY = 86_400_000;
-const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_DECAY_WINDOW_DAYS = 30;
 
 // ─── Helpers ────────────────────────────────────────
@@ -258,41 +256,7 @@ export class MemoryStore {
     return baseScore * (0.7 + 0.3 * decayFactor);
   }
 
-  private selectWithMmr(
-    scored: ScoredCandidate[],
-    topK: number,
-    lambda: number,
-  ): SearchResult[] {
-    const selected: ScoredCandidate[] = [];
-    const remaining = [...scored];
-
-    while (selected.length < topK && remaining.length > 0) {
-      let bestIndex = 0;
-      let bestMmrScore = -Infinity;
-
-      for (let i = 0; i < remaining.length; i++) {
-        const candidate = remaining[i];
-        const maxSimilarity = selected.length
-          ? Math.max(
-              ...selected.map((picked) =>
-                jaccardSimilarity(candidate.text, picked.text),
-              ),
-            )
-          : 0;
-        const mmrScore = lambda * candidate.score - (1 - lambda) * maxSimilarity;
-        if (mmrScore > bestMmrScore) {
-          bestMmrScore = mmrScore;
-          bestIndex = i;
-        }
-      }
-
-      selected.push(remaining.splice(bestIndex, 1)[0]);
-    }
-
-    return selected.map(({ text, source, score }) => ({ text, source, score }));
-  }
-
-  /** Hybrid search: BM25 candidates → optional vector reranking + time decay + MMR */
+  /** Hybrid search: BM25 candidates → optional vector reranking + time decay → top-K */
   async hybridSearch(
     query: string,
     topK = 5,
@@ -306,7 +270,6 @@ export class MemoryStore {
     const rawScores = candidates.map((c) => Math.max(-c.rank, 0.001));
     const maxScore = Math.max(...rawScores);
     const now = Date.now();
-    const mmrLambda = Math.min(1, Math.max(0, options.mmrLambda ?? DEFAULT_MMR_LAMBDA));
     const decayWindowDays = Math.max(
       1,
       options.decayWindowDays ?? DEFAULT_DECAY_WINDOW_DAYS,
@@ -362,7 +325,7 @@ export class MemoryStore {
     }
 
     scored.sort((a, b) => b.score - a.score);
-    return this.selectWithMmr(scored, topK, mmrLambda);
+    return scored.slice(0, topK).map(({ text, source, score }) => ({ text, source, score }));
   }
 
   /** Read cached embeddings for given hashes */

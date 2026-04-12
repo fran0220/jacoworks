@@ -13,7 +13,10 @@
 ## 记忆
 
 - memory_search: 语义搜索过往记忆
-- memory_save: 保存重要信息 (用户偏好、项目约定、关键决策)
+- memory(action="add"): 保存重要信息 (用户偏好、项目约定、关键决策)
+- memory(action="replace"): 更新已有记忆条目 (子串匹配)
+- memory(action="remove"): 删除过时记忆条目 (子串匹配)
+- 记忆预算约 3000 字符，接近上限时优先合并/替换而非追加
 
 ## 定时任务
 

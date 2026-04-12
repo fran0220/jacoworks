@@ -1,0 +1,246 @@
+/* ===== Export Dialog ===== */
+
+.export-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  background: var(--bg-backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fade-in var(--duration-fast) var(--ease-standard);
+}
+
+.export-dialog {
+  width: 420px;
+  max-width: calc(100vw - var(--space-11) * 2);
+  max-height: calc(100vh - var(--space-15));
+  background: var(--bg-secondary);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: cd-enter var(--duration-normal) var(--ease-emphasized);
+}
+
+/* ── Header ── */
+
+.export-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-6) var(--space-7);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.export-title {
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+
+.export-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.export-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ── Preview ── */
+
+.export-preview {
+  padding: var(--space-6) var(--space-7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  max-height: 240px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-light);
+  overflow: hidden;
+}
+
+.export-preview-loading {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.export-preview-img {
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: var(--radius);
+  object-fit: contain;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* ── Options ── */
+
+.export-options {
+  padding: var(--space-6) var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.export-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.export-label {
+  flex-shrink: 0;
+  width: 44px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+}
+
+/* ── Segmented Control ── */
+
+.export-segmented {
+  display: flex;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius);
+  padding: 2px;
+  gap: 2px;
+}
+
+.export-seg-btn {
+  padding: var(--space-2) var(--space-5);
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.export-seg-btn:hover {
+  color: var(--text-primary);
+}
+
+.export-seg-btn.active {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* ── Path Input ── */
+
+.export-path-group {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.export-path-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--duration-fast);
+}
+
+.export-path-input:focus {
+  border-color: var(--accent);
+}
+
+.export-path-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.export-path-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ── Actions ── */
+
+.export-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-7);
+  border-top: 1px solid var(--border-light);
+}
+
+.export-btn {
+  padding: var(--space-3) var(--space-7);
+  border: none;
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.export-btn-cancel {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.export-btn-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.export-btn-confirm {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.export-btn-confirm:hover {
+  background: var(--accent-hover);
+}
+
+.export-btn-confirm:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (max-width: 480px) {
+  .export-dialog {
+    width: 95vw;
+    max-width: none;
+  }
+}

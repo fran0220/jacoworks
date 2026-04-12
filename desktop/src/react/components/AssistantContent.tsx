@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import hljs from "../lib/hljs-setup";
 import { toolArgsSummary } from "../lib/tool-utils";
 import type { AssistantPart, AttachedFile } from "../types";
+import ExportDialog from "./ExportDialog";
 import ImageResultCard from "./ImageResultCard";
 import Markdown from "./Markdown";
 import ToolStatus from "./ToolStatus";
@@ -261,7 +262,7 @@ function VisualWidget({ data }: { data: string }) {
   if (!parsed.html) return null;
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [exporting, setExporting] = useState(false);
+  const [showExport, setShowExport] = useState(false);
 
   const handleLoad = () => {
     const iframe = iframeRef.current;
@@ -277,47 +278,13 @@ function VisualWidget({ data }: { data: string }) {
     } catch { /* ignore */ }
   };
 
-  const handleExportImage = useCallback(async () => {
-    const iframe = iframeRef.current;
-    if (!iframe || exporting) return;
-    setExporting(true);
-    try {
-      const doc = iframe.contentDocument;
-      if (!doc) return;
-      const { default: html2canvas } = await import("html2canvas");
-      const canvas = await html2canvas(doc.documentElement, {
-        backgroundColor: "#FAF7F4",
-        scale: 2,
-        useCORS: true,
-      });
-      const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, "image/png"),
-      );
-      if (!blob) return;
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${parsed.title || "visual"}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("[visual-export] failed:", err);
-    } finally {
-      setExporting(false);
-    }
-  }, [exporting, parsed.title]);
-
   return (
     <div className="visual-widget">
       <div className="visual-widget-header">
         {parsed.title && <div className="visual-widget-title">{parsed.title}</div>}
         <button
           className="visual-widget-export"
-          onClick={handleExportImage}
-          disabled={exporting}
+          onClick={() => setShowExport(true)}
           title="导出为图片"
         >
           <Download size={14} />
@@ -331,6 +298,13 @@ function VisualWidget({ data }: { data: string }) {
         title={parsed.title || "Visual"}
         onLoad={handleLoad}
       />
+      {showExport && (
+        <ExportDialog
+          iframeRef={iframeRef}
+          defaultTitle={parsed.title || "visual"}
+          onClose={() => setShowExport(false)}
+        />
+      )}
     </div>
   );
 }
