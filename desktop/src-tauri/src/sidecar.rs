@@ -458,11 +458,11 @@ pub async fn start_agent(
             c.current_dir(&bin_dir);
 
             // PI_PACKAGE_DIR: resource dir contains pi-meta/package.json
+            // Always set even if directory doesn't exist yet (e.g., during upgrade);
+            // vm-agent will create a fallback package.json if missing.
             if let Ok(resource_dir) = app.path().resource_dir() {
                 let pi_meta = resource_dir.join("resources").join("pi-meta");
-                if pi_meta.exists() {
-                    c.env("PI_PACKAGE_DIR", pi_meta.to_string_lossy().as_ref());
-                }
+                c.env("PI_PACKAGE_DIR", pi_meta.to_string_lossy().as_ref());
             }
             (c, bin_dir)
         } else {

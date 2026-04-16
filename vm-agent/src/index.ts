@@ -1,3 +1,25 @@
+// Bootstrap: ensure PI_PACKAGE_DIR/package.json exists before Pi SDK loads.
+// Pi SDK reads package.json at module-evaluation time (top-level readFileSync),
+// so this MUST run before any Pi SDK import.
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+{
+  const piDir = process.env.PI_PACKAGE_DIR;
+  if (piDir) {
+    const pkgPath = join(piDir, "package.json");
+    if (!existsSync(pkgPath)) {
+      try {
+        mkdirSync(piDir, { recursive: true });
+        writeFileSync(pkgPath, JSON.stringify({
+          name: "@mariozechner/pi-coding-agent",
+          version: "0.0.0",
+          piConfig: { name: "pi", configDir: ".pi" },
+        }));
+      } catch { /* best-effort */ }
+    }
+  }
+}
+
 import { createInterface } from "node:readline";
 import { loadConfig } from "./config.js";
 import {
