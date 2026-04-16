@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDragDrop } from "../hooks/use-drag-drop";
 import { useClickOutside } from "../hooks/use-click-outside";
-import { getModelOptions, getSettings } from "../lib/config";
+import { getSettings, type ModelOption } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder, isDefaultSyncDir } from "../lib/cowork";
@@ -39,6 +39,7 @@ export default function Composer({
   streamingStartedAt,
   workspacePath,
   model,
+  modelOptions,
   disabled,
   isAnonymous,
   onWorkspaceChange,
@@ -50,6 +51,7 @@ export default function Composer({
   streamingStartedAt?: number | null;
   workspacePath: string;
   model: string;
+  modelOptions: readonly ModelOption[];
   disabled?: boolean;
   isAnonymous?: boolean;
   onWorkspaceChange: (workspacePath: string) => void;
@@ -311,10 +313,10 @@ export default function Composer({
 
         <div className="composer-toolbar-right">
           <CustomSelect
-            options={getModelOptions()}
+            options={modelOptions}
             value={model}
             onChange={onModelChange}
-            disabled={isStreaming}
+            disabled={isStreaming || modelOptions.length === 0}
             position="above"
           />
           {isStreaming ? (

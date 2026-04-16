@@ -278,10 +278,10 @@ async fn render_settings_page(
             label: "Sonnet 4.6".into(),
         },
         ModelView {
-            id: "claude-opus-4-6".into(),
+            id: "claude-opus-4-7".into(),
             provider: "Claude".into(),
             provider_id: "proxy-claude".into(),
-            label: "Opus 4.6".into(),
+            label: "Opus 4.7".into(),
         },
         ModelView {
             id: "claude-haiku-4-5".into(),
@@ -312,12 +312,6 @@ async fn render_settings_page(
             provider: "Gemini".into(),
             provider_id: "proxy-gemini".into(),
             label: "Gemini 3 Flash".into(),
-        },
-        ModelView {
-            id: "grok-4.20-beta".into(),
-            provider: "Grok".into(),
-            provider_id: "proxy-grok".into(),
-            label: "Grok 4.20".into(),
         },
         ModelView {
             id: "grok-4.1-fast".into(),

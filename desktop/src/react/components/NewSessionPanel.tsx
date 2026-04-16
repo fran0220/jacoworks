@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDragDrop } from "../hooks/use-drag-drop";
 import { useClickOutside } from "../hooks/use-click-outside";
-import { getEffectiveDefaultModel, getModelOptions, getSettings } from "../lib/config";
+import { getEffectiveDefaultModel, getSettings, type ModelOption } from "../lib/config";
 import CustomSelect from "./CustomSelect";
 import SkillMenu from "./SkillMenu";
 import { folderName, selectFolder } from "../lib/cowork";
@@ -25,10 +25,14 @@ import type { AttachedFile, ChatSession } from "../types";
 
 export default function NewSessionPanel({
   onSessionCreated,
+  modelOptions,
+  serverDefaultModel,
   initialMessage,
   onConsumeInitial,
 }: {
   onSessionCreated: (session: ChatSession, firstMessage: string, files: AttachedFile[]) => void;
+  modelOptions: readonly ModelOption[];
+  serverDefaultModel: string;
   initialMessage?: string | null;
   onConsumeInitial?: () => void;
 }) {
@@ -36,7 +40,9 @@ export default function NewSessionPanel({
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [readingCount, setReadingCount] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [model, setModel] = useState(() => getEffectiveDefaultModel(getSettings()));
+  const [model, setModel] = useState(() =>
+    getEffectiveDefaultModel(getSettings(), { modelOptions: [...modelOptions], serverDefaultModel }),
+  );
   const [workspacePath, setWorkspacePath] = useState("");
   const [anonymous, setAnonymous] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -63,6 +69,15 @@ export default function NewSessionPanel({
       });
     }
   }, [initialMessage, onConsumeInitial]);
+
+  useEffect(() => {
+    setModel((current) => {
+      if (current && modelOptions.some((option) => option.value === current)) {
+        return current;
+      }
+      return getEffectiveDefaultModel(getSettings(), { modelOptions: [...modelOptions], serverDefaultModel });
+    });
+  }, [modelOptions, serverDefaultModel]);
 
   const canSend = (task.trim().length > 0 || files.length > 0) && !loading;
 
@@ -337,10 +352,10 @@ export default function NewSessionPanel({
 
           <div className="ns-toolbar-right">
             <CustomSelect
-              options={getModelOptions()}
+              options={modelOptions}
               value={model}
               onChange={setModel}
-              disabled={loading}
+              disabled={loading || modelOptions.length === 0}
               position="above"
             />
             <button

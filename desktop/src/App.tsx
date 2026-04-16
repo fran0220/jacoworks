@@ -42,7 +42,7 @@ export default function App() {
   const [unreadSessions, setUnreadSessions] = useState<Set<string>>(() => new Set());
 
   const { isMobileLike, isSidebarOpen, setIsSidebarOpen } = useResponsiveSidebar();
-  const { bootstrapDone, bootstrapError, retryBootstrap, transport } = useAgentBootstrap(authenticated);
+  const { bootstrapDone, bootstrapError, retryBootstrap, transport, gatewayModelState } = useAgentBootstrap(authenticated);
 
   // One-time memory sync on app ready (after auth + local agent ready)
   const memorySyncDoneRef = useRef(false);
@@ -268,6 +268,7 @@ export default function App() {
               <ChatView
                 key={currentSession.id}
                 session={currentSession}
+                modelOptions={gatewayModelState.modelOptions}
                 pendingMessage={pendingMessage}
                 pendingFiles={pendingFiles}
                 clearPending={() => { setPendingMessage(null); setPendingFiles([]); }}
@@ -277,6 +278,8 @@ export default function App() {
             ) : (
               <NewSessionPanel
                 onSessionCreated={handleSessionCreated}
+                modelOptions={gatewayModelState.modelOptions}
+                serverDefaultModel={gatewayModelState.serverDefaultModel}
                 initialMessage={pendingMessage}
                 onConsumeInitial={() => setPendingMessage(null)}
               />
@@ -332,6 +335,8 @@ export default function App() {
               if (!d) setShowRpcLog(false);
             }}
             initialTab={settingsInitialTab}
+            modelOptions={gatewayModelState.modelOptions}
+            serverDefaultModel={gatewayModelState.serverDefaultModel}
             feedbackPrefill={feedbackPrefill}
             onCreateSkill={() => {
               setShowSettings(false);

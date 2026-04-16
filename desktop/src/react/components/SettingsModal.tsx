@@ -25,7 +25,15 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { selectFolder } from "../lib/cowork";
-import { getSettings, updateSettings, GATEWAY_URL, getModelOptions, getServerDefaultModel, THINKING_LEVELS, type AppSettings } from "../lib/config";
+import {
+  getEffectiveDefaultModel,
+  getSettings,
+  GATEWAY_URL,
+  THINKING_LEVELS,
+  updateSettings,
+  type AppSettings,
+  type ModelOption,
+} from "../lib/config";
 import { getToken } from "../lib/auth";
 import { getMemoryStats as fetchMemoryStats, clearAllMemory } from "../lib/memory-sync";
 import { httpFetch } from "../lib/transport";
@@ -49,6 +57,8 @@ export interface SettingsModalProps {
   /** 关闭设置并跳转新会话，发送 GitHub 安装指令 */
   onInstallSkill?: (url: string) => void;
   initialTab?: Tab;
+  modelOptions: readonly ModelOption[];
+  serverDefaultModel: string;
   feedbackPrefill?: FeedbackDraft | null;
 }
 
@@ -194,15 +204,20 @@ function GeneralTab() {
 
 // ─── Tab: Model ─────────────────────────────────────────
 
-function ModelTab() {
+function ModelTab({
+  modelOptions,
+  serverDefaultModel,
+}: {
+  modelOptions: readonly ModelOption[];
+  serverDefaultModel: string;
+}) {
   const [settings, setSettings] = useState(getSettings);
   const [restartHint, setRestartHint] = useState(false);
-  const modelOptions = getModelOptions();
 
   const effectiveModel = settings.defaultModelPinned && settings.defaultModel
     ? settings.defaultModel
-    : getServerDefaultModel();
-  const followLabel = modelOptions.find((item) => item.value === getServerDefaultModel())?.label || getServerDefaultModel();
+    : getEffectiveDefaultModel(settings, { modelOptions: [...modelOptions], serverDefaultModel });
+  const followLabel = modelOptions.find((item) => item.value === serverDefaultModel)?.label || serverDefaultModel || "未配置";
 
   const handleChange = (patch: Partial<AppSettings>) => {
     const updated = { ...settings, ...patch };
@@ -260,6 +275,7 @@ function ModelTab() {
                 options={modelOptions}
                 value={effectiveModel}
                 onChange={(v) => handleChange({ defaultModelPinned: true, defaultModel: v })}
+                disabled={modelOptions.length === 0}
               />
             </div>
           </div>
@@ -902,7 +918,15 @@ function SkillsTab({
 
 // ─── Main Modal ─────────────────────────────────────────
 
-export default function SettingsModal({ onClose, onCreateSkill, onInstallSkill, initialTab, feedbackPrefill }: SettingsModalProps) {
+export default function SettingsModal({
+  onClose,
+  onCreateSkill,
+  onInstallSkill,
+  initialTab,
+  modelOptions,
+  serverDefaultModel,
+  feedbackPrefill,
+}: SettingsModalProps) {
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
 
   useEffect(() => {
@@ -939,7 +963,9 @@ export default function SettingsModal({ onClose, onCreateSkill, onInstallSkill, 
 
           <div className="settings-content">
             {tab === "general" && <GeneralTab />}
-            {tab === "model" && <ModelTab />}
+            {tab === "model" && (
+              <ModelTab modelOptions={modelOptions} serverDefaultModel={serverDefaultModel} />
+            )}
             {tab === "memory" && <MemoryTab />}
             {tab === "skills" && <SkillsTab onCreateSkill={onCreateSkill} onInstallSkill={onInstallSkill} />}
             {tab === "feedback" && <FeedbackTab initialDraft={feedbackPrefill ?? undefined} />}

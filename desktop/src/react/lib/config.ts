@@ -4,45 +4,45 @@ export const GATEWAY_URL =
 export const COWORK_WS_URL =
   import.meta.env.VITE_COWORK_WS_URL || "wss://jacoapi.jingao.club";
 
-export const DEFAULT_MODEL = "proxy-claude/claude-opus-4-6";
+const LEGACY_FOLLOW_GATEWAY_MODEL = "proxy-claude/claude-opus-4-6";
 
-export const MODEL_OPTIONS = [
-  { value: "proxy-claude/claude-sonnet-4-6", label: "Sonnet 4.6" },
-  { value: "proxy-claude/claude-opus-4-6", label: "Opus 4.6" },
-  { value: "proxy-gpt/gpt-5.3-codex", label: "GPT-5.3 Codex" },
-  { value: "proxy-gpt/gpt-5.4", label: "GPT-5.4" },
-  { value: "proxy-gemini/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-  { value: "proxy-gemini/gemini-3-flash-preview", label: "Gemini 3 Flash" },
-  { value: "proxy-glm/glm-5", label: "GLM-5" },
-] as const;
+export interface ModelOption {
+  value: string;
+  label: string;
+}
 
-// ───── Dynamic model store (populated from gateway) ────────────
+export interface GatewayModelState {
+  modelOptions: ModelOption[];
+  serverDefaultModel: string;
+}
 
-let _serverModels: Array<{ value: string; label: string }> | null = null;
-let _serverDefaultModel: string | null = null;
+export const EMPTY_GATEWAY_MODEL_STATE: GatewayModelState = {
+  modelOptions: [],
+  serverDefaultModel: "",
+};
 
-export function setServerModels(
-  models: Array<{ id: string; provider: string; label: string }>,
-  primaryModel?: string,
-  primaryProvider?: string,
-) {
-  _serverModels = models.map((m) => ({
-    value: `${m.provider}/${m.id}`,
-    label: m.label,
+export function deriveGatewayModelState(input: {
+  models?: Array<{ id: string; provider: string; label: string }>;
+  primaryModel?: string;
+  primaryProvider?: string;
+}): GatewayModelState {
+  const modelOptions = (input.models ?? []).map((model) => ({
+    value: `${model.provider}/${model.id}`,
+    label: model.label,
   }));
-  if (primaryModel && primaryProvider) {
-    _serverDefaultModel = `${primaryProvider}/${primaryModel}`;
-  } else if (primaryModel) {
-    _serverDefaultModel = primaryModel;
+
+  let serverDefaultModel = "";
+  if (input.primaryModel && input.primaryProvider) {
+    serverDefaultModel = `${input.primaryProvider}/${input.primaryModel}`;
+  } else if (input.primaryModel) {
+    serverDefaultModel = input.primaryModel;
   }
-}
 
-export function getModelOptions(): ReadonlyArray<{ value: string; label: string }> {
-  return _serverModels ?? MODEL_OPTIONS;
-}
+  if (!serverDefaultModel && modelOptions.length > 0) {
+    serverDefaultModel = modelOptions[0].value;
+  }
 
-export function getServerDefaultModel(): string {
-  return _serverDefaultModel ?? DEFAULT_MODEL;
+  return { modelOptions, serverDefaultModel };
 }
 
 export const THINKING_LEVELS = [
@@ -86,10 +86,10 @@ export function getSettings(): AppSettings {
     const merged: AppSettings = { ...DEFAULT_SETTINGS, ...parsed };
 
     // Backward compatibility for versions that only stored defaultModel.
-    // Legacy default (`DEFAULT_MODEL`) means "follow gateway" rather than a pinned override.
+    // The old desktop hardcoded Claude Opus 4.6 as its implicit "follow gateway" value.
     if (typeof parsed.defaultModelPinned !== "boolean") {
       const legacyModel = typeof parsed.defaultModel === "string" ? parsed.defaultModel.trim() : "";
-      if (legacyModel && legacyModel !== DEFAULT_MODEL) {
+      if (legacyModel && legacyModel !== LEGACY_FOLLOW_GATEWAY_MODEL) {
         merged.defaultModel = legacyModel;
         merged.defaultModelPinned = true;
       } else {
@@ -112,11 +112,14 @@ export function updateSettings(settings: AppSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
-export function getEffectiveDefaultModel(settings: AppSettings = getSettings()): string {
+export function getEffectiveDefaultModel(
+  settings: AppSettings = getSettings(),
+  gatewayModelState: GatewayModelState = EMPTY_GATEWAY_MODEL_STATE,
+): string {
   if (settings.defaultModelPinned && settings.defaultModel.trim()) {
     return settings.defaultModel;
   }
-  return getServerDefaultModel();
+  return gatewayModelState.serverDefaultModel || gatewayModelState.modelOptions[0]?.value || "";
 }
 
 // ───── Default workspace bootstrap (同步根目录) ─────────────────

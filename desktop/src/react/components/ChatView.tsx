@@ -2,7 +2,7 @@ import { ChevronDown } from "lucide-react";
 import { useCallback } from "react";
 import { useChatStream } from "../hooks/use-chat-stream";
 import type { AgentTransport } from "../lib/agent-transport";
-import { getModelOptions } from "../lib/config";
+import type { ModelOption } from "../lib/config";
 import type { AttachedFile, ChatSession } from "../types";
 import AgentStatusBar from "./AgentStatusBar";
 import AssistantContent from "./AssistantContent";
@@ -13,6 +13,7 @@ import StreamingCursor from "./StreamingCursor";
 
 export default function ChatView({
   session,
+  modelOptions,
   pendingMessage,
   pendingFiles,
   clearPending,
@@ -20,6 +21,7 @@ export default function ChatView({
   transport,
 }: {
   session: ChatSession;
+  modelOptions: readonly ModelOption[];
   pendingMessage: string | null;
   pendingFiles: AttachedFile[];
   clearPending: () => void;
@@ -70,11 +72,11 @@ export default function ChatView({
 
   const handleSwitchModel = useCallback(() => {
     const currentModel = sessionState.model;
-    const options = getModelOptions();
-    const currentIdx = options.findIndex(m => m.value === currentModel);
-    const next = options[(currentIdx + 1) % options.length];
+    if (modelOptions.length === 0) return;
+    const currentIdx = modelOptions.findIndex(m => m.value === currentModel);
+    const next = modelOptions[(currentIdx + 1 + modelOptions.length) % modelOptions.length];
     updateModel(next.value);
-  }, [sessionState.model, updateModel]);
+  }, [modelOptions, sessionState.model, updateModel]);
 
   return (
     <div className={`chat-view${session.anonymous ? " anonymous" : ""}`}>
@@ -125,6 +127,7 @@ export default function ChatView({
         streamingStartedAt={streamingStartedAt}
         workspacePath={sessionState.workspacePath}
         model={sessionState.model}
+        modelOptions={modelOptions}
         disabled={!isAgentReady}
         isAnonymous={!!session.anonymous}
         onWorkspaceChange={updateWorkspacePath}

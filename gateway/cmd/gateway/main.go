@@ -627,7 +627,7 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"tools_manifest":    toolsManifest,
 			"models": []map[string]string{
 				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
-				{"id": "claude-opus-4-6", "provider": "proxy-claude", "label": "Opus 4.6"},
+				{"id": "claude-opus-4-7", "provider": "proxy-claude", "label": "Opus 4.7"},
 				{"id": "claude-haiku-4-5", "provider": "proxy-claude", "label": "Haiku 4.5"},
 				{"id": "gpt-5.3-codex", "provider": "proxy-gpt", "label": "GPT-5.3 Codex"},
 				{"id": "gpt-5.4", "provider": "proxy-gpt", "label": "GPT-5.4"},

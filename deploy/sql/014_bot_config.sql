@@ -17,7 +17,7 @@ INSERT INTO llm_models (provider_key, model_id, display_name, context_window, ma
 VALUES
     ('proxy', 'gpt-5.4', 'GPT 5.4', 128000, 16384, false, 0),
     ('proxy', 'claude-sonnet-4-6', 'Sonnet 4.6', 200000, 16384, false, 1),
-    ('proxy', 'claude-opus-4-6', 'Opus 4.6', 200000, 32000, true, 2),
+    ('proxy', 'claude-opus-4-7', 'Opus 4.7', 200000, 32000, true, 2),
     ('proxy', 'grok-4.1-fast', 'Grok 4.1 Fast', 131072, 16384, false, 3),
     ('proxy', 'gemini-3.1-pro-preview', 'Gemini 3.1 Pro', 1000000, 8192, false, 4)
 ON CONFLICT (provider_key, model_id) DO NOTHING;

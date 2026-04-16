@@ -2,7 +2,13 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchAgentConfig } from "../lib/auth";
 import type { AgentTransport } from "../lib/agent-transport";
-import { ensureDefaultWorkspace, getSettings, setServerModels } from "../lib/config";
+import {
+  deriveGatewayModelState,
+  EMPTY_GATEWAY_MODEL_STATE,
+  ensureDefaultWorkspace,
+  getSettings,
+  type GatewayModelState,
+} from "../lib/config";
 import { LocalSidecarTransport } from "../lib/local-sidecar-transport";
 import { setSkills } from "../lib/skills";
 import { checkAndUpdateTools } from "../lib/tool-updater";
@@ -27,6 +33,7 @@ export function useAgentBootstrap(authenticated: boolean) {
   const [bootstrapDone, setBootstrapDone] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [transport, setTransport] = useState<AgentTransport | null>(null);
+  const [gatewayModelState, setGatewayModelState] = useState<GatewayModelState>(EMPTY_GATEWAY_MODEL_STATE);
   const transportRef = useRef<AgentTransport | null>(null);
   const isTauriEnv = useMemo(() => isTauri(), []);
 
@@ -40,6 +47,7 @@ export function useAgentBootstrap(authenticated: boolean) {
     if (!authenticated) {
       setBootstrapDone(false);
       setBootstrapError(null);
+      setGatewayModelState(EMPTY_GATEWAY_MODEL_STATE);
       clearTransport();
       return;
     }
@@ -49,6 +57,7 @@ export function useAgentBootstrap(authenticated: boolean) {
     if (!isTauriEnv) {
       setBootstrapDone(false);
       setBootstrapError("当前版本仅支持 Tauri 运行时");
+      setGatewayModelState(EMPTY_GATEWAY_MODEL_STATE);
       clearTransport();
       return;
     }
@@ -63,9 +72,11 @@ export function useAgentBootstrap(authenticated: boolean) {
       await ensureDefaultWorkspace();
 
       const agentConfig = await fetchAgentConfig();
-      if (agentConfig.models && agentConfig.models.length > 0) {
-        setServerModels(agentConfig.models, agentConfig.primary_model, agentConfig.primary_provider);
-      }
+      setGatewayModelState(deriveGatewayModelState({
+        models: agentConfig.models,
+        primaryModel: agentConfig.primary_model,
+        primaryProvider: agentConfig.primary_provider,
+      }));
 
       // Fire-and-forget: update CLI tools in background (takes effect next launch)
       checkAndUpdateTools(agentConfig.tools_manifest).catch((err) =>
@@ -162,6 +173,7 @@ export function useAgentBootstrap(authenticated: boolean) {
     bootstrapDone,
     bootstrapError,
     transport,
+    gatewayModelState,
     retryBootstrap: () => setBootstrapNonce((value) => value + 1),
   };
 }

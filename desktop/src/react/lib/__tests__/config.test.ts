@@ -52,13 +52,22 @@ describe("config", () => {
     expect(config.GATEWAY_URL).toBe("http://localhost:8847");
   });
 
-  test("DEFAULT_MODEL parses into provider/model", async () => {
+  test("derives gateway models from agent config payload", async () => {
     const config = await loadConfig();
-    const [provider, model] = config.DEFAULT_MODEL.split("/");
+    const state = config.deriveGatewayModelState({
+      models: [
+        { id: "gpt-5.4", provider: "proxy-gpt", label: "GPT-5.4" },
+        { id: "claude-opus-4-7", provider: "proxy-claude", label: "Opus 4.7" },
+      ],
+      primaryModel: "gpt-5.4",
+      primaryProvider: "proxy-gpt",
+    });
 
-    expect(provider).toBe("proxy-claude");
-    expect(model.length).toBeGreaterThan(0);
-    expect(config.MODEL_OPTIONS.some((option) => option.value === config.DEFAULT_MODEL)).toBe(true);
+    expect(state.serverDefaultModel).toBe("proxy-gpt/gpt-5.4");
+    expect(state.modelOptions).toEqual([
+      { value: "proxy-gpt/gpt-5.4", label: "GPT-5.4" },
+      { value: "proxy-claude/claude-opus-4-7", label: "Opus 4.7" },
+    ]);
   });
 
   test("falls back to defaults when env or storage is invalid", async () => {
@@ -79,7 +88,12 @@ describe("config", () => {
       thinkingLevel: "medium",
       debugLogEnabled: false,
     });
-    expect(config.getEffectiveDefaultModel(config.getSettings())).toBe(config.DEFAULT_MODEL);
+    expect(
+      config.getEffectiveDefaultModel(config.getSettings(), {
+        modelOptions: [{ value: "proxy-gpt/gpt-5.4", label: "GPT-5.4" }],
+        serverDefaultModel: "proxy-gpt/gpt-5.4",
+      }),
+    ).toBe("proxy-gpt/gpt-5.4");
   });
 
   test("legacy default model migrates to follow gateway mode", async () => {
@@ -97,7 +111,12 @@ describe("config", () => {
     const settings = config.getSettings();
     expect(settings.defaultModelPinned).toBe(false);
     expect(settings.defaultModel).toBe("");
-    expect(config.getEffectiveDefaultModel(settings)).toBe(config.DEFAULT_MODEL);
+    expect(
+      config.getEffectiveDefaultModel(settings, {
+        modelOptions: [{ value: "proxy-gpt/gpt-5.4", label: "GPT-5.4" }],
+        serverDefaultModel: "proxy-gpt/gpt-5.4",
+      }),
+    ).toBe("proxy-gpt/gpt-5.4");
   });
 
   test("legacy custom default model migrates to pinned mode", async () => {
