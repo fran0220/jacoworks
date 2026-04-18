@@ -176,7 +176,7 @@ export function loadConfig(): Config {
     workspaceDir: process.env.WORKSPACE_DIR || process.cwd(),
     agentHomeDir: process.env.AGENT_HOME_DIR || defaultAppDataDir(),
     memoryRootDir: process.env.MEMORY_ROOT_DIR || defaultMemoryRootDir(),
-    primaryModel: process.env.PRIMARY_MODEL || "claude-opus-4-6",
+    primaryModel: process.env.PRIMARY_MODEL || "claude-opus-4-7",
     primaryProvider: process.env.PRIMARY_PROVIDER || "proxy-claude",
     memoryEnabled: process.env.MEMORY_ENABLED !== "false",
     skillsPaths: resolveSkillsPaths(process.env.SKILLS_PATHS),

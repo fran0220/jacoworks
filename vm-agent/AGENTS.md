@@ -31,13 +31,19 @@ src/
   lib/logger.ts                结构化 JSON 日志 (stderr, level/msg/ts/trace_id/session_id/user_id, LOG_LEVEL 过滤)
   lib/embedding.ts             OpenAI Embedding API 客户端 (text-embedding-3-small)
   lib/memory-store.ts          SQLite + FTS5 记忆存储 (BM25 + CJK 分词 + 向量 rerank + 迁移)
+  lib/office-runtime.ts        LibreOffice 运行时检测 + 按需下载管理 (soffice 转换/公式重算)
   lib/{daily-log,prompt-queue}.ts
   services/__tests__/cron.test.ts  Cron 单元测试 (20 cases)
   __tests__/rpc.test.ts        E2E RPC 测试
   __tests__/cron.e2e.test.ts   Cron E2E 测试 (真实 LLM 验证 cron_manage 工具)
   __tests__/helpers/            测试辅助 (gateway-config.ts — 自动获取 LLM 配置)
   lib/__tests__/               单元测试 (memory-store, daily-log)
-skills/                        内置技能包 (创作/办公/工具/开发), 通过 push-skills 上传到 Gateway, 容器 provision 时推送
+skills/                        内置技能包, 通过 push-skills 上传到 Gateway
+  docx/                        Anthropic 官方 Word 文档 skill (docx npm + OOXML 编辑 + pandoc)
+  xlsx/                        Anthropic 官方 Excel skill (openpyxl + pandas + LibreOffice 公式重算)
+  pdf/                         Anthropic 官方 PDF skill (pypdf + pdfplumber + reportlab)
+  pptx/                        Anthropic 官方 PPT skill (pptxgenjs + markitdown + LibreOffice)
+  创作/ 办公/ 工具/             原有技能包
 ```
 
 ## 自定义工具 (Extensions)
@@ -76,7 +82,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), �
 
 | Provider | 模型 |
 |----------|------|
-| `proxy-claude` (anthropic) | claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5 |
+| `proxy-claude` (anthropic) | claude-sonnet-4-6, claude-opus-4-7, claude-haiku-4-5 |
 | `proxy-gpt` (openai) | gpt-5.3-codex, gpt-5.4 |
 | `proxy-gemini` (openai) | gemini-3.1-pro-preview, gemini-3-flash-preview |
 | `proxy-grok` (openai) | grok-4.1-fast |
@@ -93,7 +99,7 @@ skills/                        内置技能包 (创作/办公/工具/开发), �
 - `WORKSPACE_DIR` — 默认 cwd (可被请求级 workspace 覆盖)
 - `AGENT_HOME_DIR` — Agent 人格/配置主目录 (默认 `~/Library/Application Support/JAcoworks/`), 存放 SOUL.md, AGENTS.md, cron-jobs.json, memory/, skills/
 - `MEMORY_ROOT_DIR` — 记忆根目录 (默认 `agentHomeDir/memory`)
-- `PRIMARY_MODEL=claude-opus-4-6` / `PRIMARY_PROVIDER=proxy-claude`
+- `PRIMARY_MODEL=claude-opus-4-7` / `PRIMARY_PROVIDER=proxy-claude`
 - `MEMORY_ENABLED=true` / `HEARTBEAT_ENABLED=false` / `CRON_ENABLED=false`
 - `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` — 向量 embedding (可选)
 - `MEMORY_EMBED_TIMEOUT_MS=8000` / `MEMORY_EMBED_CACHE_MAX=10000`

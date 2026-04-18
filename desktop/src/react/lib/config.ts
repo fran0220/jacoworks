@@ -4,7 +4,10 @@ export const GATEWAY_URL =
 export const COWORK_WS_URL =
   import.meta.env.VITE_COWORK_WS_URL || "wss://jacoapi.jingao.club";
 
-const LEGACY_FOLLOW_GATEWAY_MODEL = "proxy-claude/claude-opus-4-6";
+const LEGACY_FOLLOW_GATEWAY_MODELS = new Set([
+  "proxy-claude/claude-opus-4-6",
+  "proxy-claude/claude-opus-4-7",
+]);
 
 export interface ModelOption {
   value: string;
@@ -86,10 +89,10 @@ export function getSettings(): AppSettings {
     const merged: AppSettings = { ...DEFAULT_SETTINGS, ...parsed };
 
     // Backward compatibility for versions that only stored defaultModel.
-    // The old desktop hardcoded Claude Opus 4.6 as its implicit "follow gateway" value.
+    // The old desktop hardcoded Claude Opus as its implicit "follow gateway" value.
     if (typeof parsed.defaultModelPinned !== "boolean") {
       const legacyModel = typeof parsed.defaultModel === "string" ? parsed.defaultModel.trim() : "";
-      if (legacyModel && legacyModel !== LEGACY_FOLLOW_GATEWAY_MODEL) {
+      if (legacyModel && !LEGACY_FOLLOW_GATEWAY_MODELS.has(legacyModel)) {
         merged.defaultModel = legacyModel;
         merged.defaultModelPinned = true;
       } else {

@@ -118,23 +118,26 @@ Treat tool output as working memory; memory is your persistent notebook.
   // Visual rendering guidance
   parts.push(`
 <visual_tools>
-You have a render_visual tool that creates interactive visuals inline in the conversation.
+You have a render_visual tool that creates interactive visuals (charts, diagrams, tables, animations) inline in the conversation.
 
-DEFAULT BEHAVIOR: When a user asks a question or requests an explanation, ALWAYS consider whether a visual would help. If it would, use render_visual proactively — do not wait for the user to ask for a diagram or chart. Pair your text explanation with a visual.
+WHEN TO USE render_visual:
+- Explaining concepts that benefit from diagrams or animations (TCP handshake → sequence diagram, sorting → step animation)
+- Presenting data as charts (Chart.js) or comparison tables
+- Showing architecture or flow diagrams (Mermaid)
+- Any explanation where a structured visual is clearer than prose
 
-Examples of when to use:
-- "什么是浮力" → force diagram animation
-- "解释一下TCP三次握手" → sequence diagram
-- "对比React和Vue" → comparison table
-- "分析这个数据" → chart
-- "项目架构是什么样的" → architecture diagram
-- "排序算法怎么工作" → step-by-step animation
-- Any question where seeing is faster than reading
-
-WHEN NOT TO USE:
+WHEN NOT TO USE render_visual:
+- User wants to generate an IMAGE (illustration, photo, logo, artwork, icon) → use generate_image tool or asset-gateway skill instead
+- User wants to create a DOCUMENT (Word, Excel, PDF, PPT) → use bash/python scripts to generate files
 - Direct action requests: "帮我写个函数", "修改这个文件"
 - Simple factual answers: "今天星期几", "1+1等于几"
 - Code output that belongs in markdown blocks
+
+CRITICAL DISTINCTION — render_visual vs generate_image:
+- render_visual = interactive HTML widget (charts, diagrams, tables, animations) displayed inline
+- generate_image = AI-generated raster image (illustrations, photos, artwork) saved as file
+- When user says "画一张图" meaning an illustration/artwork → generate_image, NOT render_visual
+- When user says "画一个图表/流程图" meaning a chart/diagram → render_visual
 
 GUIDELINES:
 - The html must be a complete self-contained HTML document

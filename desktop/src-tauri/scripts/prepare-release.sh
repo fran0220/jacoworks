@@ -256,13 +256,20 @@ fi
   fi
   # Check if pip is available before attempting installs
   if $PIP_CMD --version >/dev/null 2>&1; then
+    # Core packages: PPTX creation, PDF ops, image processing
+    CORE_PKGS="python-pptx PyMuPDF"
+    # Office skill packages: Anthropic-style document generation
+    OFFICE_PKGS="openpyxl pandas reportlab pypdf pdfplumber"
+    ALL_PKGS="$CORE_PKGS $OFFICE_PKGS"
     MISSING=""
-    $PIP_CMD show python-pptx >/dev/null 2>&1 || MISSING="python-pptx"
-    $PIP_CMD show PyMuPDF >/dev/null 2>&1 || MISSING="$MISSING PyMuPDF"
+    for pkg in $ALL_PKGS; do
+      $PIP_CMD show "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+    done
+    MISSING="${MISSING# }"  # trim leading space
     if [[ -n "$MISSING" ]]; then
-      echo "📦 Installing missing Python deps:$MISSING"
+      echo "📦 Installing missing Python deps: $MISSING"
       $PIP_CMD install --no-cache-dir --quiet $MISSING 2>&1 | tail -3 || {
-        echo "  ⚠️  pip install failed (slide-deck PPTX/PDF features may be unavailable)"
+        echo "  ⚠️  pip install failed (document generation features may be unavailable)"
       }
       find "$PYTHON_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     else

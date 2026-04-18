@@ -110,12 +110,12 @@ function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       {
-        id: "claude-opus-4-6",
-        name: "Claude Opus 4.6",
+        id: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
         reasoning: true,
         input: ["text", "image"],
         contextWindow: 200000,
-        maxTokens: 16384,
+        maxTokens: 32000,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       {
@@ -460,8 +460,8 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
 /**
  * 解析请求中的 model 字段，支持格式：
- *   "proxy-claude/claude-opus-4-6"    → provider: proxy-claude, id: claude-opus-4-6
- *   "claude-opus-4-6"                 → 自动匹配 provider
+ *   "proxy-claude/claude-opus-4-7"    → provider: proxy-claude, id: claude-opus-4-7
+ *   "claude-opus-4-7"                 → 自动匹配 provider
  *   "gpt-5.4"                          → 自动匹配 proxy-gpt
  */
 export function resolveModel(modelStr?: string) {
