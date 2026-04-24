@@ -16,7 +16,8 @@ import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
 import { createVisualExtension } from "./extensions/visual.js";
-import { createMediaGenExtension } from "./extensions/media-gen.js";
+import { createImageGenExtension } from "./extensions/image-gen.js";
+import { createVideoGenExtension } from "./extensions/video-gen.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
@@ -269,12 +270,11 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   // Visual rendering tool (always available)
   extensionFactories.push(createVisualExtension());
 
-  // Asset generation tools (image, video, etc.) — requires ASSET_GATEWAY_TOKEN or LLM_PROXY_KEY
+  // Image generation / editing — requires ASSET_GATEWAY_TOKEN or LLM_PROXY_KEY
   const assetToken = process.env.ASSET_GATEWAY_TOKEN || config.proxyKey;
   if (assetToken) {
-    extensionFactories.push(
-      createMediaGenExtension(assetToken, process.env.ASSET_GATEWAY_URL),
-    );
+    extensionFactories.push(createImageGenExtension(assetToken, process.env.ASSET_GATEWAY_URL));
+    extensionFactories.push(createVideoGenExtension(assetToken, process.env.ASSET_GATEWAY_URL));
   }
 
   // Web search tool — requires AI_SEARCH_TOKEN or LLM_PROXY_KEY
