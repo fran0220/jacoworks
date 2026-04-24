@@ -29,6 +29,7 @@
     "@sinclair/typebox": "^0.34.0",
     "dayjs": "^1.11.19",
     "docx": "^9.6.0",
+    "origin-search": "^0.1.0",
     "pdf-lib": "^1.17.1",
     "pptxgenjs": "^4.0.1",
     "yaml": "^2.8.2"

@@ -17,6 +17,7 @@ import type { Config } from "./config.js";
 import { createMemoryExtension } from "./extensions/memory.js";
 import { createVisualExtension } from "./extensions/visual.js";
 import { createAssetForgeExtension } from "./extensions/asset-forge.js";
+import { createWebSearchExtension } from "./extensions/web-search.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
@@ -273,6 +274,14 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   if (assetToken) {
     extensionFactories.push(
       createAssetForgeExtension(assetToken, process.env.ASSET_GATEWAY_URL),
+    );
+  }
+
+  // Web search tool — requires AI_SEARCH_TOKEN or LLM_PROXY_KEY
+  const searchToken = process.env.AI_SEARCH_TOKEN || config.proxyKey;
+  if (searchToken) {
+    extensionFactories.push(
+      createWebSearchExtension(searchToken, process.env.AI_SEARCH_GATEWAY_URL),
     );
   }
 
