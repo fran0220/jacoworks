@@ -102,6 +102,7 @@ export function useAgentBootstrap(authenticated: boolean) {
       if (agentConfig.asset_gateway_url) envVars.ASSET_GATEWAY_URL = agentConfig.asset_gateway_url;
       if (agentConfig.ai_search_gateway_url) envVars.AI_SEARCH_GATEWAY_URL = agentConfig.ai_search_gateway_url;
       if (agentConfig.ai_search_token) envVars.AI_SEARCH_TOKEN = agentConfig.ai_search_token;
+      if (agentConfig.models?.length) envVars.LLM_MODELS_JSON = JSON.stringify(agentConfig.models);
       if (agentConfig.primary_model) {
         if (agentConfig.primary_model.includes("/")) {
           const [provider, model] = agentConfig.primary_model.split("/", 2);

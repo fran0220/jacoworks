@@ -27,23 +27,32 @@ const MAX_UNDO = 20;
 const BADGE_LABELS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳";
 
 interface ImageResultCardProps {
-  filePath: string;
+  imageUrl?: string;
+  filePath?: string;
   workspacePath?: string;
   onSendAnnotation?: (text: string, files: AttachedFile[]) => void;
 }
 
 export default function ImageResultCard({
+  imageUrl,
   filePath,
   workspacePath,
   onSendAnnotation,
 }: ImageResultCardProps) {
-  const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [imgSrc, setImgSrc] = useState<string | null>(imageUrl || null);
   const [error, setError] = useState(false);
   const [annotating, setAnnotating] = useState(false);
 
-  const fileName = filePath.split(/[\\/]/).pop() || filePath;
+  const fileName = filePath?.split(/[\\/]/).pop() || imageUrl?.split("/").pop() || "generated";
 
   useEffect(() => {
+    // If we have a direct URL, use it immediately
+    if (imageUrl) {
+      setImgSrc(imageUrl);
+      return;
+    }
+    // Fallback: load from local file
+    if (!filePath) return;
     let cancelled = false;
     invoke<string>("read_file_base64", {
       path: filePath,
@@ -58,13 +67,17 @@ export default function ImageResultCard({
     return () => {
       cancelled = true;
     };
-  }, [filePath, workspacePath]);
+  }, [imageUrl, filePath, workspacePath]);
 
   const handleOpen = useCallback(() => {
-    window.dispatchEvent(
-      new CustomEvent("preview-file", { detail: { path: filePath } }),
-    );
-  }, [filePath]);
+    if (filePath) {
+      window.dispatchEvent(
+        new CustomEvent("preview-file", { detail: { path: filePath } }),
+      );
+    } else if (imageUrl) {
+      window.open(imageUrl, "_blank");
+    }
+  }, [filePath, imageUrl]);
 
   if (error) return <div className="image-result-loading">无法加载图片</div>;
   if (!imgSrc) return <div className="image-result-loading">加载中…</div>;
@@ -111,7 +124,7 @@ function AnnotationMode({
   onSend,
 }: {
   imgSrc: string;
-  filePath: string;
+  filePath?: string;
   workspacePath?: string;
   onCancel: () => void;
   onSend?: (text: string, files: AttachedFile[]) => void;
@@ -435,7 +448,7 @@ function AnnotationMode({
       const instruction = parts.length > 0 ? parts.join("；") : "按照图上标注修改";
 
       onSend(
-        `直接调用 generate_image(prompt="${instruction}", input_image="${annotPath}", filename="generated-${ts}.png")，不要读取文件，不要查找文件，直接执行。`,
+        `直接调用 generate_image(prompt="${instruction}", input_image="${annotPath}", edit_mode="edit")，不要读取文件，不要查找文件，直接执行。`,
         [],
       );
       onCancel();

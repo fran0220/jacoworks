@@ -199,6 +199,23 @@ function ToolFileCard({ filePath, fileKind, workspacePath }: { filePath: string;
   );
 }
 
+/* ---- Video result card ---- */
+
+function VideoResultCard({ url }: { url: string }) {
+  return (
+    <div className="image-result-card">
+      <video
+        className="image-result-img"
+        src={url}
+        controls
+        preload="metadata"
+        style={{ maxHeight: 400, borderRadius: "var(--radius-md)" }}
+      />
+      <div className="image-result-filename">{url.split("/").pop() || "video"}</div>
+    </div>
+  );
+}
+
 /* ---- Elapsed timer for running tools ---- */
 
 function ToolElapsed() {
@@ -396,10 +413,12 @@ export default function AssistantContent({ parts, streaming, workspacePath, onSe
                   </div>
                 )}
               </div>
-              {part.filePath && (
+              {(part.imageUrl || part.filePath) && (
                 part.fileKind === "image"
-                  ? <ImageResultCard filePath={part.filePath} workspacePath={workspacePath} onSendAnnotation={onSendAnnotation} />
-                  : <ToolFileCard filePath={part.filePath} fileKind={part.fileKind} workspacePath={workspacePath} />
+                  ? <ImageResultCard imageUrl={part.imageUrl} filePath={part.filePath} workspacePath={workspacePath} onSendAnnotation={onSendAnnotation} />
+                  : part.fileKind === "video" && part.imageUrl
+                    ? <VideoResultCard url={part.imageUrl} />
+                    : part.filePath && <ToolFileCard filePath={part.filePath} fileKind={part.fileKind} workspacePath={workspacePath} />
               )}
             </div>
           );

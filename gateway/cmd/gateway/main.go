@@ -192,7 +192,7 @@ func main() {
 	mux.Handle("DELETE /api/sessions/{id}", authMiddleware.Authenticate(http.HandlerFunc(deleteSessionHandler(s))))
 
 	// Authenticated: agent config
-	mux.Handle("GET /api/agent/config", authMiddleware.Authenticate(http.HandlerFunc(agentConfigHandler(cfg))))
+	mux.Handle("GET /api/agent/config", authMiddleware.Authenticate(http.HandlerFunc(agentConfigHandler(cfg, s))))
 
 	// Authenticated: memory sync & management
 	mux.Handle("POST /api/memory/sync", authMiddleware.Authenticate(http.HandlerFunc(memorySyncHandler(s))))
@@ -590,7 +590,7 @@ func containerStatusHandler(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
+func agentConfigHandler(cfg *config.Config, s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
 		if user == nil {
@@ -604,6 +604,36 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			if err := json.Unmarshal([]byte(raw), &toolsManifest); err != nil {
 				toolsManifest = nil
 			}
+		}
+
+		// Build models from DB
+		var models []map[string]interface{}
+		providers, _ := s.ListProviders(r.Context())
+		dbModels, _ := s.ListModels(r.Context())
+
+		providerAPITypes := make(map[string]string)
+		for _, p := range providers {
+			if p.Enabled {
+				providerAPITypes[p.Key] = p.APIType
+			}
+		}
+
+		for _, m := range dbModels {
+			if !m.Enabled {
+				continue
+			}
+			if _, ok := providerAPITypes[m.ProviderKey]; !ok {
+				continue
+			}
+			models = append(models, map[string]interface{}{
+				"id":             m.ModelID,
+				"provider":       m.ProviderKey,
+				"label":          m.DisplayName,
+				"context_window": m.ContextWindow,
+				"max_tokens":     m.MaxTokens,
+				"reasoning":      m.Reasoning,
+				"api_type":       providerAPITypes[m.ProviderKey],
+			})
 		}
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -625,17 +655,7 @@ func agentConfigHandler(cfg *config.Config) http.HandlerFunc {
 			"primary_model":           llm.PrimaryModel,
 			"primary_provider":   llm.PrimaryProvider,
 			"tools_manifest":    toolsManifest,
-			"models": []map[string]string{
-				{"id": "claude-sonnet-4-6", "provider": "proxy-claude", "label": "Sonnet 4.6"},
-				{"id": "claude-opus-4-7", "provider": "proxy-claude", "label": "Opus 4.7"},
-				{"id": "claude-haiku-4-5", "provider": "proxy-claude", "label": "Haiku 4.5"},
-				{"id": "gpt-5.3-codex", "provider": "proxy-gpt", "label": "GPT-5.3 Codex"},
-				{"id": "gpt-5.4", "provider": "proxy-gpt", "label": "GPT-5.4"},
-				{"id": "gemini-3.1-pro-preview", "provider": "proxy-gemini", "label": "Gemini 3.1 Pro"},
-				{"id": "gemini-3-flash-preview", "provider": "proxy-gemini", "label": "Gemini 3 Flash"},
-				{"id": "grok-4.1-fast", "provider": "proxy-grok", "label": "Grok 4.1 Fast"},
-				{"id": "glm-5", "provider": "proxy-glm", "label": "GLM-5"},
-			},
+			"models":            models,
 		})
 	}
 }

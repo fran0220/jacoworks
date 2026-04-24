@@ -19,7 +19,7 @@ export interface FileRef {
 export type AssistantPart =
   | { kind: "markdown"; text: string }
   | { kind: "thinking"; text: string }
-  | { kind: "tool"; id: string; name: string; status: "running" | "completed" | "error"; args?: string; result?: string; filePath?: string; fileKind?: string; visualData?: string }
+  | { kind: "tool"; id: string; name: string; status: "running" | "completed" | "error"; args?: string; result?: string; filePath?: string; fileKind?: string; visualData?: string; imageUrl?: string }
   | { kind: "visual"; id: string; visualType: string; title?: string; html: string }
   | { kind: "status"; text: string };
 

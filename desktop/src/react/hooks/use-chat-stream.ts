@@ -497,9 +497,17 @@ export function useChatStream({
                       "mp4", "mp3", "wav", "mov",
                       "html", "zip",
                     ]);
-                    if (toolName === "generate_image") {
+                    if (toolName === "generate_image" || toolName === "generate_video") {
                       try {
                         const parsed = typeof event.result === "string" ? JSON.parse(event.result) : event.result;
+                        // SDK-based tool returns URL in details.url
+                        const url = parsed?.details?.url;
+                        if (url) {
+                          block.imageUrl = url;
+                          const mediaType = parsed?.details?.mediaType;
+                          block.fileKind = mediaType === "video" ? "video" : "image";
+                        }
+                        // Fallback: legacy local file path
                         const p = parsed?.details?.path || parsed?.path;
                         if (p) block.filePath = p;
                       } catch {

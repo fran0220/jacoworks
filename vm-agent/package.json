@@ -24,6 +24,7 @@
     "compile:all": "npm run compile:linux-x64 && npm run compile:server:linux-arm64"
   },
   "dependencies": {
+    "@doufunao123/assetforge-sdk": "^0.3.0",
     "@mariozechner/pi-coding-agent": "^0.65.0",
     "@sinclair/typebox": "^0.34.0",
     "dayjs": "^1.11.19",

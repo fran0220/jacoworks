@@ -16,6 +16,7 @@ import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
 import { createVisualExtension } from "./extensions/visual.js";
+import { createAssetForgeExtension } from "./extensions/asset-forge.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
@@ -86,122 +87,74 @@ function getSettingsManager(workspace: string): SettingsManager {
   return sm;
 }
 
-// ─── LLM 中转站模型注册 ────────────────────────────
-// 中转站 http://67.230.182.59:8317 支持 4 种原生协议：
-//   Claude  → POST /v1/messages           (anthropic-messages)
-//   GPT     → POST /v1/chat/completions   (openai-completions)
-//   Gemini  → POST /v1/chat/completions   (openai-completions, 兼容模式)
-//   Grok    → POST /v1/chat/completions   (openai-completions)
+// ─── LLM 模型动态注册 ────────────────────────────
+// 模型列表由 Gateway /api/agent/config 下发，Desktop 通过 LLM_MODELS_JSON 环境变量传入。
+// 不再硬编码模型列表，加减模型只需在管理后台 llm_providers / llm_models 表操作。
 
-function registerProxyModels(registry: ModelRegistry, proxyUrl: string, proxyKey: string) {
-  // 1. Claude — Anthropic 原生协议
-  registry.registerProvider("proxy-claude", {
-    baseUrl: proxyUrl,         // POST /v1/messages
-    apiKey: proxyKey,
-    api: "anthropic-messages",
-    models: [
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 200000,
-        maxTokens: 16384,
+interface DynamicModelEntry {
+  id: string;
+  provider: string;
+  label: string;
+  context_window: number;
+  max_tokens: number;
+  reasoning: boolean;
+  api_type: string;
+}
+
+function registerDynamicModels(registry: ModelRegistry, proxyUrl: string, proxyKey: string) {
+  const raw = process.env.LLM_MODELS_JSON;
+  if (!raw) {
+    log.error("LLM_MODELS_JSON not set — no models available. Check gateway /api/agent/config");
+    return;
+  }
+
+  let entries: DynamicModelEntry[];
+  try {
+    entries = JSON.parse(raw);
+  } catch (err) {
+    log.error("failed to parse LLM_MODELS_JSON", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    log.error("LLM_MODELS_JSON is empty — no models available");
+    return;
+  }
+
+  // Group by provider
+  const groups = new Map<string, DynamicModelEntry[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.provider) || [];
+    group.push(entry);
+    groups.set(entry.provider, group);
+  }
+
+  let totalModels = 0;
+  for (const [providerKey, models] of groups) {
+    const isAnthropic = models[0].api_type === "anthropic";
+    registry.registerProvider(providerKey, {
+      baseUrl: isAnthropic ? proxyUrl : `${proxyUrl}/v1`,
+      apiKey: proxyKey,
+      api: isAnthropic ? "anthropic-messages" : "openai-completions",
+      models: models.map((m) => ({
+        id: m.id,
+        name: m.label,
+        reasoning: m.reasoning,
+        input: ["text", "image"] as ("text" | "image")[],
+        contextWindow: m.context_window,
+        maxTokens: m.max_tokens,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      {
-        id: "claude-opus-4-7",
-        name: "Claude Opus 4.7",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 200000,
-        maxTokens: 32000,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      {
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        reasoning: false,
-        input: ["text", "image"],
-        contextWindow: 200000,
-        maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
+      })),
+    });
+    totalModels += models.length;
+  }
+
+  log.info("dynamic models registered", {
+    providers: groups.size,
+    models: totalModels,
   });
-
-  // 2. GPT — OpenAI 原生协议
-  registry.registerProvider("proxy-gpt", {
-    baseUrl: `${proxyUrl}/v1`,  // POST /v1/chat/completions
-    apiKey: proxyKey,
-    api: "openai-completions",
-    models: [
-      {
-        id: "gpt-5.3-codex",
-        name: "GPT-5.3 Codex",
-        reasoning: true,
-        input: ["text"],
-        contextWindow: 128000,
-        maxTokens: 16384,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 128000,
-        maxTokens: 16384,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
-  });
-
-  // 3. Gemini — OpenAI 兼容协议 (中转站支持)
-  registry.registerProvider("proxy-gemini", {
-    baseUrl: `${proxyUrl}/v1`,
-    apiKey: proxyKey,
-    api: "openai-completions",
-    models: [
-      {
-        id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1000000,
-        maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      {
-        id: "gemini-3-flash-preview",
-        name: "Gemini 3 Flash",
-        reasoning: false,
-        input: ["text", "image"],
-        contextWindow: 1000000,
-        maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
-  });
-
-  // 4. Grok — OpenAI 兼容协议
-  registry.registerProvider("proxy-grok", {
-    baseUrl: `${proxyUrl}/v1`,
-    apiKey: proxyKey,
-    api: "openai-completions",
-    models: [
-      {
-        id: "grok-4.1-fast",
-        name: "Grok 4.1 Fast",
-        reasoning: false,
-        input: ["text"],
-        contextWindow: 128000,
-        maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
-  });
-
 }
 
 // ─── Init & Session Pool ────────────────────────────
@@ -212,8 +165,8 @@ export function initAgent(cfg: Config) {
   authStorage = AuthStorage.inMemory();
   modelRegistry = ModelRegistry.inMemory(authStorage);
 
-  // 注册中转站所有模型
-  registerProxyModels(modelRegistry, cfg.proxyUrl, cfg.proxyKey);
+  // 模型列表由 Gateway 下发，通过 LLM_MODELS_JSON 环境变量传入
+  registerDynamicModels(modelRegistry, cfg.proxyUrl, cfg.proxyKey);
 
   // Seed agent home directory with default bootstrap files (non-fatal)
   seedAgentHome(cfg.agentHomeDir).catch((err) => {
@@ -314,6 +267,14 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   // Visual rendering tool (always available)
   extensionFactories.push(createVisualExtension());
+
+  // Asset generation tools (image, video, etc.) — requires ASSET_GATEWAY_TOKEN or LLM_PROXY_KEY
+  const assetToken = process.env.ASSET_GATEWAY_TOKEN || config.proxyKey;
+  if (assetToken) {
+    extensionFactories.push(
+      createAssetForgeExtension(assetToken, process.env.ASSET_GATEWAY_URL),
+    );
+  }
 
   // ─── Context compression: trim old tool results to save tokens ───
   // Before each LLM call, compress old messages to reduce input tokens.

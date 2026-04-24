@@ -147,12 +147,8 @@ AI_SEARCH_ENTRY="$(resolve_file \
   "$GLOBAL_NPM_ROOT/@doufunao123/ai-search/dist/index.js" \
   "/Users/fan/.npm-global/lib/node_modules/@doufunao123/ai-search/dist/index.js")"
 
-ASSET_GATEWAY_ENTRY="$(resolve_file \
-  "asset-gateway entry" \
-  "ASSET_GATEWAY_ENTRY" \
-  "$REPO_ROOT/node_modules/@doufunao123/asset-gateway/dist/index.js" \
-  "$GLOBAL_NPM_ROOT/@doufunao123/asset-gateway/dist/index.js" \
-  "/Users/fan/agent-skills/asset-gateway/npm/dist/index.js")"
+# asset-gateway CLI is no longer compiled — replaced by @doufunao123/assetforge-sdk
+# integrated directly into vm-agent as generate_image / generate_video extensions.
 
 AGENT_BROWSER_PACKAGE_DIR="$(resolve_dir \
   "agent-browser package directory" \
@@ -172,8 +168,6 @@ echo ""
 
 build_bun_tool "ai-search" "$AI_SEARCH_ENTRY" "$TOOLS_DIR/ai-search$TOOL_EXT"
 echo ""
-build_bun_tool "asset-gateway" "$ASSET_GATEWAY_ENTRY" "$TOOLS_DIR/asset-gateway$TOOL_EXT"
-echo ""
 copy_native_tool "agent-browser" "$AGENT_BROWSER_SOURCE" "$TOOLS_DIR/agent-browser$TOOL_EXT"
 
 # ─── macOS code signing (required for notarization) ──────────────
@@ -182,7 +176,7 @@ case "$TARGET" in
   *apple-darwin*)
     SIGN_ID="${APPLE_SIGNING_IDENTITY:-Developer ID Application: fan Z (9UUWCMKMDH)}"
     echo "🔏 Signing CLI tools with: $SIGN_ID"
-    for tool in "$TOOLS_DIR"/ai-search "$TOOLS_DIR"/asset-gateway "$TOOLS_DIR"/agent-browser; do
+    for tool in "$TOOLS_DIR"/ai-search "$TOOLS_DIR"/agent-browser; do
       if [[ -f "$tool" ]]; then
         codesign --force --options runtime --timestamp \
           --sign "$SIGN_ID" "$tool" 2>/dev/null && \
