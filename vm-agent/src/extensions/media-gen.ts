@@ -28,7 +28,7 @@ const GenerateImageParams = Type.Object({
 
 // ─── Extension Factory ──────────────────────────────
 
-export function createAssetForgeExtension(apiKey: string, baseUrl?: string): ExtensionFactory {
+export function createMediaGenExtension(apiKey: string, baseUrl?: string): ExtensionFactory {
   const forge = new AssetForge({
     apiKey,
     baseUrl: baseUrl || "https://asset.origingame.dev",

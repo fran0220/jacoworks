@@ -16,7 +16,7 @@ import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
 import { createVisualExtension } from "./extensions/visual.js";
-import { createAssetForgeExtension } from "./extensions/asset-forge.js";
+import { createMediaGenExtension } from "./extensions/media-gen.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
@@ -273,7 +273,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
   const assetToken = process.env.ASSET_GATEWAY_TOKEN || config.proxyKey;
   if (assetToken) {
     extensionFactories.push(
-      createAssetForgeExtension(assetToken, process.env.ASSET_GATEWAY_URL),
+      createMediaGenExtension(assetToken, process.env.ASSET_GATEWAY_URL),
     );
   }
 
