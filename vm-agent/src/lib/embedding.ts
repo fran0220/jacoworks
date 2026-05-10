@@ -19,7 +19,7 @@ interface EmbeddingResponse {
 
 let _apiKey = "";
 let _baseUrl = "https://api.openai.com/v1";
-let _timeoutMs = 8000;
+let _timeoutMs = 5000;
 
 export function initEmbedding(apiKey: string, baseUrl?: string, timeoutMs?: number) {
   _apiKey = apiKey;

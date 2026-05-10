@@ -1,0 +1,3 @@
+[submodule "vm-agent/skills/cheat"]
+	path = vm-agent/skills/cheat
+	url = https://github.com/XBuilderLAB/cheat-on-content.git

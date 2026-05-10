@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { Type, type Static } from "@sinclair/typebox";
-import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import { Type, type Static } from "typebox";
+import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 300_000;

@@ -11,7 +11,7 @@ import { join } from "node:path";
       try {
         mkdirSync(piDir, { recursive: true });
         writeFileSync(pkgPath, JSON.stringify({
-          name: "@mariozechner/pi-coding-agent",
+          name: "@earendil-works/pi-coding-agent",
           version: "0.0.0",
           piConfig: { name: "pi", configDir: ".pi" },
         }));

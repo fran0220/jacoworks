@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { Type } from "@sinclair/typebox";
-import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { AssetForge } from "@doufunao123/assetforge-sdk";
 import type { ImageOptions } from "@doufunao123/assetforge-sdk";
 import { log } from "../lib/logger.js";

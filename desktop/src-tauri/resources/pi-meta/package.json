@@ -1,6 +1,6 @@
 {
-  "name": "@mariozechner/pi-coding-agent",
-  "version": "0.54.2",
+  "name": "@earendil-works/pi-coding-agent",
+  "version": "0.74.0",
   "piConfig": {
     "name": "pi",
     "configDir": ".pi"

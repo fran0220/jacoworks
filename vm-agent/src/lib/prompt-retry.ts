@@ -7,7 +7,7 @@
  * - Session state corruption
  */
 
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { log } from "./logger.js";
 
 interface RetryOptions {

@@ -1,5 +1,5 @@
-import { Type } from "@sinclair/typebox";
-import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { SearchClient } from "origin-search";
 import type { SearchOptions } from "origin-search";
 import { log } from "../lib/logger.js";

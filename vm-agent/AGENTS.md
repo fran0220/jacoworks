@@ -1,6 +1,8 @@
 # vm-agent — 本地 Sidecar / 云端 Agent 内核
 
-> Pi SDK + RPC。可运行于桌面端本地 sidecar (stdin/stdout) 或 Docker 容器 (server 模式)。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。生产部署位于 oracle (`100.94.98.106`, ARM64)，当前仅供桌面端链路使用，webchat/oc-gateway 不接入 vm-agent。
+> Pi SDK (`@earendil-works/pi-coding-agent` 0.74+) + RPC。可运行于桌面端本地 sidecar (stdin/stdout) 或 Docker 容器 (server 模式)。5 Provider (claude/gpt/gemini/grok/glm) + per-user 隔离。生产部署位于 oracle (`100.94.98.106`, ARM64)，当前仅供桌面端链路使用，webchat/oc-gateway 不接入 vm-agent。
+
+> **Pi SDK 包名注意**：2026-05 起官方包从 `@mariozechner/pi-*` 迁移到 `@earendil-works/pi-*`（earendil-works/pi-mono 仓库）。TypeBox 也从 `@sinclair/typebox` 0.34 迁移到独立包 `typebox` 1.x（同作者 sinclair）。Bun 编译二进制需要 `PI_PACKAGE_DIR` 指向含 `package.json` 的目录（桌面端通过 `desktop/src-tauri/resources/pi-meta/package.json` 提供，版本号需与 SDK 同步）。
 
 ## 架构边界
 
@@ -43,8 +45,27 @@ skills/                        内置技能包, 通过 push-skills 上传到 Gat
   xlsx/                        Anthropic 官方 Excel skill (openpyxl + pandas + LibreOffice 公式重算)
   pdf/                         Anthropic 官方 PDF skill (pypdf + pdfplumber + reportlab)
   pptx/                        Anthropic 官方 PPT skill (pptxgenjs + markitdown + LibreOffice)
+  cheat/                        XBuilderLAB/cheat-on-content 集成 (git submodule, 13 子 skill + 模板/参考资料)
   创作/ 办公/ 工具/             原有技能包
 ```
+
+## cheat-on-content 集成
+
+`extensions/cheat.ts` 把 cheat-on-content 的 3 个 bash hook 用 Pi SDK 0.74 原生 extension API 实现，跨平台无 bash 依赖：
+
+| 原 hook | Pi SDK 事件 | 行为 |
+|---------|-------------|------|
+| `prediction-immutability.sh` (PreToolUse Edit\|Write) | `pi.on("tool_call")` 返回 `{ block, reason }` | 拦截命中 `predictions/*.md` 的 `## 预测` / `## Prediction` 段（含 v1/v2 版本变体）的 edit；拦截已存在 prediction 文件的 write；新建 prediction / 编辑 ## 复盘 段 / 非 prediction 路径全部放行 |
+| `session-start.sh` | `pi.on("context")` 注入 user 消息 | 每次 LLM 调用前注入状态报告（buffer 颜色 / 待复盘 / Top 3 候选 / 校准样本 / Confidence） |
+| `log-event.sh` (PostToolUse) | `pi.on("tool_result")` | 异步追加 JSONL 到 `<workspace>/.cheat-cache/usage.jsonl`，错误吞掉不阻塞 |
+
+**额外工具**: `llm_audit` 替代 cheat-bump 原本依赖的 `mcp__llm-chat__chat`，走小猫网关默认 `claude-opus-4-7` 跨模型审计 rubric 升级。
+
+**激活门**: 三个 hook 都在运行时 stat 一次 `<workspace>/.cheat-state.json`；不存在则全部 no-op。这样未启用 cheat 的用户完全无感。
+
+**逃生口**: `CHEAT_BYPASS_IMMUTABILITY=1` 跳过 prediction immutability 拦截（用于调试或紧急修正）。
+
+**Skill 包**: `vm-agent/skills/cheat/` 是 `XBuilderLAB/cheat-on-content` 的 git submodule，13 个 sub-skill (cheat-init / cheat-score / cheat-predict / ...) 通过 `make push-skills` 上传到 gateway，桌面端拉取后 LLM 按触发词路由。原仓的 `hooks/*.sh` 上传后只是死文本，实际生效的是 TS extension。
 
 ## 自定义工具 (Extensions)
 
@@ -54,6 +75,7 @@ skills/                        内置技能包, 通过 push-skills 上传到 Gat
 | `generate_image` | `extensions/image-gen.ts` | `LLM_PROXY_KEY` 或 `FAL_API_KEY` | 文生图 + 图片编辑 |
 | `read_document` | `extensions/read-document.ts` | `LLM_PROXY_KEY` | 文档读取 + 扫描件 OCR |
 | `web_search` | `extensions/web-search.ts` | `LLM_PROXY_KEY` 或 `TAVILY_API_KEY` | 网络搜索 (Grok → Tavily fallback) |
+| `llm_audit` + 3 hooks | `extensions/cheat.ts` | workspace 含 `.cheat-state.json` | cheat-on-content 集成（预测段 immutability / 状态注入 / 用量日志 / 跨模型审计） |
 | `remote_read/write/list/stat` | `extensions/remote-fs.ts` | 云端/server 模式 (transport sender 可用) | WebSocket 文件通道, 按需读写桌面端本地文件 |
 | `bash` | Pi SDK `createCodingTools()` (内置) | 始终可用 | 跨平台命令执行 (macOS/Linux 原生 `bash`; Windows 需安装 Git for Windows 提供 `bash` + `grep/sed/awk/curl`) |
 | `cron_manage` | `services/cron.ts` | 始终注册 | 定时任务管理 (sidecar→Gateway 代理, server→本地执行) |

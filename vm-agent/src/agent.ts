@@ -8,10 +8,9 @@ import {
   ModelRegistry,
   DefaultResourceLoader,
   SettingsManager,
-  createCodingTools,
   loadSkillsFromDir,
-} from "@mariozechner/pi-coding-agent";
-import type { ExtensionFactory, CreateAgentSessionResult, Skill } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import type { ExtensionFactory, CreateAgentSessionResult, Skill } from "@earendil-works/pi-coding-agent";
 import type { Config } from "./config.js";
 
 import { createMemoryExtension } from "./extensions/memory.js";
@@ -19,6 +18,7 @@ import { createVisualExtension } from "./extensions/visual.js";
 import { createImageGenExtension } from "./extensions/image-gen.js";
 import { createVideoGenExtension } from "./extensions/video-gen.js";
 import { createWebSearchExtension } from "./extensions/web-search.js";
+import { createCheatExtension } from "./extensions/cheat.js";
 import { initEmbedding, isEmbeddingAvailable } from "./lib/embedding.js";
 import { buildSystemPrompt, seedAgentHome } from "./prompts/system.js";
 import { createHeartbeatService, type HeartbeatService } from "./services/heartbeat.js";
@@ -235,7 +235,6 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     );
   }
 
-  const codingTools = createCodingTools(workspace);
   const memRoot = userMemoryRootDir(opts?.userId);
   const memoryStoreConfig: MemoryStoreConfig = {
     embedCacheMax: config.embedCacheMax,
@@ -283,6 +282,12 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     extensionFactories.push(
       createWebSearchExtension(searchToken, process.env.AI_SEARCH_GATEWAY_URL),
     );
+  }
+
+  // cheat-on-content extension (always registered; activates only when
+  // .cheat-state.json exists in the session workspace).
+  if (config.proxyUrl && config.proxyKey) {
+    extensionFactories.push(createCheatExtension(workspace, config.proxyUrl, config.proxyKey));
   }
 
   // ─── Context compression: trim old tool results to save tokens ───
@@ -382,13 +387,14 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: workspace,
+    agentDir: config.agentHomeDir,
     settingsManager,
     extensionFactories,
     additionalSkillPaths: [
       ...config.skillsPaths.filter((p) => existsSync(p)),
       ...(existsSync(config.userSkillsDir) ? [config.userSkillsDir] : []),
     ],
-    appendSystemPrompt: systemPrompt,
+    appendSystemPrompt: [systemPrompt],
     noThemes: true,
     noPromptTemplates: true,
     // Enforce per-file char limit on Pi SDK's AGENTS.md loading to prevent prompt bloat
@@ -409,7 +415,7 @@ export async function getSession(sessionId: string, opts?: SessionOptions) {
     modelRegistry,
     model,
     thinkingLevel: model.reasoning ? "medium" : "off",
-    tools: opts?.restricted ? [] : codingTools,
+    tools: opts?.restricted ? [] : undefined,
     resourceLoader,
     settingsManager,
     cwd: workspace,

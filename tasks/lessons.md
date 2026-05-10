@@ -1,5 +1,47 @@
 # Lessons Learned
 
+## 2026-05-10: cheat-on-content 集成（bash hooks → Pi SDK 0.74 原生 extension）
+
+**触发**: 把 `XBuilderLAB/cheat-on-content` 的 3 个 bash hook 端口到 vm-agent，跨平台不依赖 bash。
+
+**关键差异（必查）**:
+1. **Pi 0.74 内置工具的 schema ≠ Claude Code 的 schema**：
+   - `edit`: `{ path: string; edits: Array<{ oldText, newText }> }` — `path`（不是 `file_path`），`edits[]` 数组（不是单个 `old_string`/`new_string`）
+   - `write`: `{ path: string; content: string }` — `path`（不是 `file_path`）
+   - 原 cheat 仓的 jq 路径 `.tool_input.file_path` / `.tool_input.old_string` 不能直接套用，必须按 pi 的 schema 重写
+2. **`tool_execution_end` 没有 `args`/`input`**：要在工具执行后拿到入参，用 `pi.on("tool_result")`（含 `event.input`）或在 `tool_execution_start` 缓存 args。`ToolExecutionEndEvent` 只有 `{ toolCallId, toolName, result, isError }`
+3. **`tool_call` 拦截契约**：handler 返回 `{ block: true, reason: "..." }` 阻止执行；返回 `undefined` 或 `{}` 放行；`event.input` 是 mutable，原地改可改写参数（mutation 后不会重新校验 schema）
+4. **激活门用运行时 stat 而不是 factory 时检查**：cheat extension 注册时不知道用户会不会跑 `/cheat-init`，每个 hook 自己 `existsSync(.cheat-state.json)` 才能响应中途 init
+
+**架构选型**:
+- skills 包用 git submodule（`vm-agent/skills/cheat/`）拉 cheat-on-content，让 `make push-skills` 自动带上；TS extension 单独维护
+- bash hook 上传到 gateway 也无害（只是死文本），实际生效的是 TS extension
+- 跨模型审计原本依赖 `mcp__llm-chat__chat`，端口成 `llm_audit` 工具走小猫网关，避免引入 MCP 依赖
+
+**测试覆盖**: 用 mock pi.ExtensionAPI（捕获 handlers，再 fire 合成事件）写纯单元测试，14 case 覆盖激活门 / 拦截 / 放行 / 注入 / 日志 / bypass / 工具注册，免 LLM 免网络。
+
+---
+
+## 2026-05-10: Pi SDK 0.65 → 0.74 升级（含 npm scope 改名）
+
+**触发**: 用户要求顺便把 Pi SDK 升级到最新（`@earendil-works/pi-coding-agent` 0.74.0）。
+
+**关键变更点（必查清单）**:
+1. **npm scope 改名**: `@mariozechner/pi-*` → `@earendil-works/pi-*`（仓库 `badlogic/pi-mono` → `earendil-works/pi-mono`）。所有 `from "@mariozechner/..."` 必须替换。
+2. **TypeBox 改包**: `@sinclair/typebox` 0.34 → 独立包 `typebox` 1.x（同作者）。`Type` / `Static` API 兼容，只换 import 即可。
+3. **`createAgentSession` API 变化**:
+   - `tools?: Tool[]` → `tools?: string[]`（allowlist 名字）；自定义工具改用 `customTools?: ToolDefinition[]`；built-in tools (read/bash/edit/write) 默认自动启用，不再需要传 `createCodingTools()`
+   - 受限模式：`tools: []`（空 allowlist）；正常模式：省略 `tools`
+4. **`DefaultResourceLoader` 必填字段新增**:
+   - `agentDir: string` 现在是 required
+   - `appendSystemPrompt` 类型从 `string` → `string[]`
+5. **Bun compile 二进制必须配 `PI_PACKAGE_DIR`**: pi 在运行时 `readFileSync(getPackageJsonPath())`，bun 二进制时回退到 `dirname(process.execPath)/package.json`。桌面端通过 `desktop/src-tauri/resources/pi-meta/package.json` 提供，**版本号要跟着 SDK 升**（之前残留 0.54.2，本次同步到 0.74.0）。
+
+**测试覆盖原则**: 升级后**优先看非 LLM 测试**（启动/health/list_skills/list_sessions/typecheck/单元）确认 SDK 兼容；LLM 调用失败可能是网络（curl 56）而非 SDK 问题——别误判成回归。
+
+**踩过的坑**: 第一次 `bun build --compile` 后 sidecar 起不来，报 `dist/package.json ENOENT`。原因是 pi 0.74 的 `getPackageDir()` 在 bun 二进制下要求 exe 同级目录有 `package.json`，已有的 `pi-meta/package.json` 机制就是为此设计的。
+
+
 ## 2026-04-16: 模型切换先验错误 + React 模块全局不是可观察状态
 
 **触发**: 用户先纠正“默认模型不是 Opus，而是 GPT-5.4”，随后又指出“客户端看不到新模型”。

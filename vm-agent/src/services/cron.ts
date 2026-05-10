@@ -1,9 +1,9 @@
 import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { Type, type Static } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { defineTool, type ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import { Type, type Static } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 // ─── Cron Expression Parser ─────────────────────────
 
