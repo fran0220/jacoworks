@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -158,10 +159,9 @@ const SearchParams = Type.Object({
 });
 
 const MemoryParams = Type.Object({
-  action: Type.Union(
-    [Type.Literal("add"), Type.Literal("replace"), Type.Literal("remove")],
-    { description: "Action: add new entry, replace existing by substring match, or remove by substring match" },
-  ),
+  action: StringEnum(["add", "replace", "remove"] as const, {
+    description: "Action: add new entry, replace existing by substring match, or remove by substring match",
+  }),
   content: Type.String({
     description: "For add: content to save. For replace/remove: substring to match in existing MEMORY.md",
   }),

@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { Type } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { AssetForge } from "@doufunao123/assetforge-sdk";
-import type { ImageOptions } from "@doufunao123/assetforge-sdk";
+import { AssetForge } from "@origingame/origin-asset";
+import type { ImageOptions } from "@origingame/origin-asset";
 import { log } from "../lib/logger.js";
 
 const GenerateImageParams = Type.Object({
@@ -11,12 +12,9 @@ const GenerateImageParams = Type.Object({
   input_image: Type.Optional(Type.String({
     description: "URL or local file path of the source image for editing. URLs from previous generate_image results can be passed directly.",
   })),
-  edit_mode: Type.Optional(Type.Union([
-    Type.Literal("edit"),
-    Type.Literal("inpaint"),
-    Type.Literal("restyle"),
-    Type.Literal("expand"),
-  ], { description: "Editing mode when input_image is provided. Defaults to 'edit'." })),
+  edit_mode: Type.Optional(StringEnum(["edit", "inpaint", "restyle", "expand"] as const, {
+    description: "Editing mode when input_image is provided. Defaults to 'edit'.",
+  })),
   size: Type.Optional(Type.String({ description: "Output size, e.g. '1024x1024', '1536x1024'" })),
   transparent: Type.Optional(Type.Boolean({ description: "Generate with transparent background (PNG)" })),
   reference_images: Type.Optional(Type.Array(Type.String(), {
@@ -39,6 +37,8 @@ export function createImageGenExtension(apiKey: string, baseUrl?: string): Exten
         "For new images: provide a prompt describing the desired image.\n" +
         "For editing: also provide input_image (URL from a previous result, or a local file path) and optionally edit_mode.\n\n" +
         "Returns a URL that can be displayed inline and reused as input_image for further edits.",
+      promptSnippet:
+        "Generate or edit raster images (illustrations, photos, icons, artwork) and return a reusable image URL.",
       parameters: GenerateImageParams,
       execute: async (_toolCallId, params) => {
         const startMs = Date.now();
@@ -47,7 +47,7 @@ export function createImageGenExtension(apiKey: string, baseUrl?: string): Exten
           const opts: ImageOptions = {};
           if (params.size) opts.size = params.size;
           if (params.transparent !== undefined) opts.transparent = params.transparent;
-          if (params.reference_images?.length) opts.referenceImages = params.reference_images;
+          if (params.reference_images?.length) opts.reference_images = params.reference_images;
 
           if (params.input_image) {
             const isUrl = params.input_image.startsWith("http://") || params.input_image.startsWith("https://");
@@ -59,7 +59,7 @@ export function createImageGenExtension(apiKey: string, baseUrl?: string): Exten
               const uploaded = await forge.upload({ data: fileData, filename: basename(params.input_image) });
               opts.input = uploaded.url;
             }
-            opts.editMode = params.edit_mode || "edit";
+            opts.edit_mode = params.edit_mode || "edit";
           }
 
           const result = await forge.image(params.prompt, opts);

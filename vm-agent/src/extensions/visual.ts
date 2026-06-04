@@ -1,15 +1,13 @@
 import { Type } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 // ─── Parameter Schema ───────────────────────────────
 
 const RenderVisualParams = Type.Object({
-  type: Type.Union([
-    Type.Literal("chart"),
-    Type.Literal("diagram"),
-    Type.Literal("table"),
-    Type.Literal("custom"),
-  ], { description: "Visual type: chart (Chart.js), diagram (Mermaid), table, or custom HTML" }),
+  type: StringEnum(["chart", "diagram", "table", "custom"] as const, {
+    description: "Visual type: chart (Chart.js), diagram (Mermaid), table, or custom HTML",
+  }),
   title: Type.Optional(Type.String({ description: "Visual title displayed above the widget" })),
   html: Type.Optional(Type.String({ description: "REQUIRED. Complete HTML content including inline CSS and JS. For chart type: include Chart.js CDN and canvas setup. For diagram type: include Mermaid CDN and div setup. Must be a self-contained HTML document." })),
 });

@@ -141,7 +141,7 @@ rm -f \
   "$TOOLS_DIR/agent-browser" "$TOOLS_DIR/agent-browser.exe"
 
 # ai-search and asset-gateway CLIs are no longer compiled —
-# replaced by origin-search and @doufunao123/assetforge-sdk
+# replaced by origin-search and @origingame/origin-asset
 # integrated directly into vm-agent as web_search / generate_image / generate_video extensions.
 
 AGENT_BROWSER_PACKAGE_DIR="$(resolve_dir \

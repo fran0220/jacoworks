@@ -24,14 +24,15 @@
     "compile:all": "npm run compile:linux-x64 && npm run compile:server:linux-arm64"
   },
   "dependencies": {
-    "@doufunao123/assetforge-sdk": "^0.3.0",
-    "@earendil-works/pi-coding-agent": "^0.74.0",
-    "typebox": "^1.1.24",
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@origingame/origin-asset": "^0.12.0",
     "dayjs": "^1.11.19",
     "docx": "^9.6.0",
     "origin-search": "^0.1.0",
     "pdf-lib": "^1.17.1",
     "pptxgenjs": "^4.0.1",
+    "typebox": "^1.1.24",
     "yaml": "^2.8.2"
   },
   "devDependencies": {

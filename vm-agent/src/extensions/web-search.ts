@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { SearchClient } from "origin-search";
 import type { SearchOptions } from "origin-search";
@@ -8,10 +9,9 @@ import { log } from "../lib/logger.js";
 
 const WebSearchParams = Type.Object({
   query: Type.String({ description: "Search query in natural language" }),
-  mode: Type.Optional(Type.Union([
-    Type.Literal("fast"),
-    Type.Literal("answer"),
-  ], { description: "Search mode. 'fast' (default) returns raw results; 'answer' returns an AI-synthesized summary." })),
+  mode: Type.Optional(StringEnum(["fast", "answer"] as const, {
+    description: "Search mode. 'fast' (default) returns raw results; 'answer' returns an AI-synthesized summary.",
+  })),
   num: Type.Optional(Type.Number({ description: "Number of results to return (default: 5)" })),
 });
 
@@ -31,6 +31,8 @@ export function createWebSearchExtension(apiKey: string, baseUrl?: string): Exte
         "Use mode='fast' (default) for quick factual lookups.\n" +
         "Use mode='answer' when you need a synthesized summary.\n" +
         "Do NOT use mode='deep' — it is slow and rarely needed.",
+      promptSnippet:
+        "Search the web for fresh information or documentation when local knowledge may be outdated.",
       parameters: WebSearchParams,
       execute: async (_toolCallId, params) => {
         const startMs = Date.now();

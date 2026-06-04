@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { Type } from "typebox";
 import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { AssetForge } from "@doufunao123/assetforge-sdk";
-import type { VideoRequestInput } from "@doufunao123/assetforge-sdk";
+import { AssetForge } from "@origingame/origin-asset";
+import type { VideoRequestInput } from "@origingame/origin-asset";
 import { log } from "../lib/logger.js";
 
 const GenerateVideoParams = Type.Object({
@@ -29,6 +29,8 @@ export function createVideoGenExtension(apiKey: string, baseUrl?: string): Exten
         "For text-to-video: provide a prompt describing the desired motion.\n" +
         "For image-to-video: also provide input_image (URL from a generate_image result, or a local file path).\n\n" +
         "Returns a URL to the generated video.",
+      promptSnippet:
+        "Generate a video from text, or animate a source image URL/file and return a reusable video URL.",
       parameters: GenerateVideoParams,
       execute: async (_toolCallId, params) => {
         const startMs = Date.now();
@@ -40,12 +42,12 @@ export function createVideoGenExtension(apiKey: string, baseUrl?: string): Exten
           if (params.input_image) {
             const isUrl = params.input_image.startsWith("http://") || params.input_image.startsWith("https://");
             if (isUrl) {
-              opts.input = params.input_image;
+              opts.reference_images = [params.input_image];
             } else {
               log.info("uploading local image for video", { path: params.input_image });
               const fileData = readFileSync(params.input_image);
               const uploaded = await forge.upload({ data: fileData, filename: basename(params.input_image) });
-              opts.input = uploaded.url;
+              opts.reference_images = uploaded.url ? [uploaded.url] : [];
             }
           }
 
